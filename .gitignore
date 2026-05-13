@@ -1,0 +1,37 @@
+# =============================================================================
+# AI-aware additions (managed by claude-starter)
+# =============================================================================
+
+# Claude private workspace — sensitive scratch, untriaged data.
+# Claude can read it; git never sees it.
+.ai_context/private/
+
+# Local-only Claude context — per-machine notes that should not be shared.
+# e.g., state.local.md or knowledge/api-spec.local.md
+.ai_context/**/*.local.md
+
+# Claude session caches (if any tool drops these)
+.claude/cache/
+
+# =============================================================================
+# Standard ignores (append your language/framework's ignores below)
+# =============================================================================
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Append your language-specific ignores (node_modules/, __pycache__/, target/,
+# build/, dist/, etc.) here, or use `gh repo create --gitignore <lang>` to
+# generate one.
