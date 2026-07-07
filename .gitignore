@@ -13,6 +13,10 @@
 # Claude session caches (if any tool drops these)
 .claude/cache/
 
+# Local-only Claude Code settings (machine-specific permissions etc.)
+# .claude/settings.json IS tracked on purpose — it carries shared hooks.
+.claude/settings.local.json
+
 # =============================================================================
 # Standard ignores (append your language/framework's ignores below)
 # =============================================================================

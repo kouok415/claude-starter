@@ -1,4 +1,4 @@
-<!-- schema: v1 -->
+<!-- schema: v2 -->
 <!--
 purpose: Registry of .ai_context/ — what's here, when to read, when to write.
 mutability: edit when adding or removing files; otherwise stable.
@@ -20,7 +20,12 @@ own rules in a top-of-file HTML-comment preamble — read it before writing.
 1. `INDEX.md` — this file.
 2. `state.md` — current project snapshot.
 
-**Then read on-demand based on what the user asks:**
+In projects spawned from claude-starter v2 this is mechanized: a SessionStart
+hook (`.claude/hooks/session-start.sh`) injects both files automatically — on
+startup, resume, `/clear`, and after compaction. If hooks are disabled, do it
+manually.
+
+**Then read on-demand based on the situation:**
 
 | If the situation is... | Read |
 |---|---|
@@ -34,6 +39,12 @@ own rules in a top-of-file HTML-comment preamble — read it before writing.
 **Do not auto-read** `journal/` or `knowledge/` files unless triggered. They
 exist for retrieval, not for warmup.
 
+**Procedural knowledge routes itself:** when a `knowledge/` file describes
+*how to do something* (a runbook, a coding pattern, a release checklist),
+prefer promoting it to a skill under `.claude/skills/<name>/SKILL.md` with a
+trigger description — skills load on demand without anyone remembering this
+table. Keep *factual* reference (API contracts, glossaries) in `knowledge/`.
+
 ---
 
 ## Writing protocol
@@ -43,11 +54,12 @@ exist for retrieval, not for warmup.
 | `state.md` | overwrite-friendly; reflects *now* only |
 | `decisions.md` | append-only; never edit existing entries |
 | `knowledge/*.md` | accumulate; edit factual updates, don't rewrite history |
-| `journal/*.md` | append-only per file; new file per event |
+| `journal/*.md` | append-only per file; new file per event; first line = one-sentence summary |
 | `private/*` | free-form; gitignored |
 
 Before writing to any file, read its top preamble for format and `do-not`
-rules.
+rules. At the end of a significant session, run `/wrap` (or update `state.md`
+by hand) — a reading protocol without write-back is only half the loop.
 
 ---
 
@@ -73,19 +85,40 @@ rules.
 
 ---
 
+## Mechanisms
+
+Where possible, the rules above are enforced mechanically (v2 projects):
+
+| Mechanism | Enforces |
+|---|---|
+| `.claude/hooks/session-start.sh` | reading protocol; warns on stale `state.md` (S3) and >5 KB (S7) |
+| `/wrap` skill (`.claude/skills/wrap/`) | write-back of state / ADRs / journal |
+| `.claude/hooks/post-edit.sh` + `lint.sh` | instant lint feedback after every edit |
+| `.pre-commit-config.yaml` | H1 secret scan (gitleaks) + S7 size cap at commit time |
+| `.claude/settings.json` permissions | denies reading `.env*` and key files (H1) |
+
+Prose is the spec; mechanisms are the guarantee. If you change a rule,
+change its mechanism too.
+
+---
+
 ## File registry
 
 | Path | Mutability | Purpose |
 |---|---|---|
 | `INDEX.md` | edit on add/remove | This registry |
-| `state.md` | overwrite | Current snapshot: in-progress work, constraints, recent context |
+| `state.md` | overwrite | Current snapshot: in-progress work, next steps, constraints |
 | `decisions.md` | append-only | ADR log of design decisions |
 | `knowledge/api-spec.md` | accumulate | API contracts (create when project has APIs) |
 | `knowledge/conventions.md` | accumulate | Code patterns, naming, layout (create as patterns emerge) |
 | `knowledge/glossary.md` | accumulate | Domain terms (create when domain has jargon) |
-| `journal/YYYY-MM-DD-*.md` | append-only per file | Per-event records: debates, retros, post-mortems, analysis findings |
+| `journal/YYYY-MM-DD-*.md` | append-only per file | Per-event records: debates, retros, post-mortems, findings |
 | `private/*` | free-form | Sensitive scratch, gitignored, not committed |
 
 **Files in `knowledge/` are created on-demand**, not upfront. Don't create
 empty stubs. Add a file when you have real content for it, and add a row to
 this registry.
+
+**Teams with concurrent ADR writers:** the single `decisions.md` will merge-
+conflict; switch to `decisions/NNN-<slug>.md` (one file per ADR) and note the
+switch here.

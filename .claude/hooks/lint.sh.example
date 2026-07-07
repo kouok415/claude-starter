@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#
+# lint.sh.example — copy to lint.sh (and chmod +x) after your language init
+# to enable instant lint feedback on every edit Claude makes.
+#
+#   cp .claude/hooks/lint.sh.example .claude/hooks/lint.sh
+#   chmod +x .claude/hooks/lint.sh
+#
+# $1 = the file Claude just edited (may be empty — then either lint the
+# whole project with a FAST command, or exit 0).
+# Exit non-zero with errors on stdout/stderr; Claude sees them and fixes.
+# Keep it fast (<2s) — this runs after every edit.
+
+set -euo pipefail
+file="${1:-}"
+
+case "$file" in
+  # *.py)        exec uv run ruff check "$file" ;;
+  # *.ts|*.tsx)  exec bunx eslint "$file" ;;
+  # *.go)        exec gofmt -l "$file" ;;
+  # *.rs)        exec cargo clippy --quiet ;;
+  # *.sh)        exec shellcheck "$file" ;;
+  *) exit 0 ;;
+esac

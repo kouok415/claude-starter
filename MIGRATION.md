@@ -1,38 +1,106 @@
-# Migration: from multi-agent-dev-team to claude-starter
+# Migration guide
 
-If you have projects using the previous PM/BE/FE/QA + ECC + Discord layout,
-this guide walks through migrating them to the new architecture.
+Two migrations live here:
+
+- **[A. claude-starter v1 → v2](#a-claude-starter-v1--v2)** — projects
+  spawned from this template before the mechanisms layer existed.
+- **[B. multi-agent-dev-team → claude-starter](#b-from-multi-agent-dev-team-to-claude-starter)**
+  — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
 
 ---
 
-## What changed, and why
+## A. claude-starter v1 → v2
+
+### What changed in v2, and why
+
+| v1 | v2 | Reason |
+|---|---|---|
+| Reading protocol was prose in 4 places | `SessionStart` hook injects INDEX+state (incl. after compaction); protocol text lives in `INDEX.md` only | Prose rules decay in long sessions; hooks don't |
+| Write-back "as work progresses" | `/wrap` skill + `Next steps` section in `state.md` | Sessions end abruptly; write-back needs a trigger |
+| H1 (no secrets) / S7 (5 KB cap) unenforced | pre-commit (gitleaks + size check) + `settings.json` read-deny on `.env*` | Rules that matter get mechanisms |
+| `.claudeignore` | removed | Claude Code never read it — decorative |
+| One `CLAUDE.md.template` | `templates/CLAUDE.md.{code,research,analysis}` with **Verify** + **Definition of done** | The DoD contract is the single biggest agentic-quality lever; kinds fit non-code work |
+| Template infra copied into every spawned project | `start_project.sh` removes infra + generates a real project README | GitHub templates have no `.templateignore`; cleanup is the spawner's job |
+| `global-claude/` had to sit next to this repo | vendored at `global/CLAUDE.md`; bootstrap shows diff + backs up before updating | Fresh-machine bootstrap used to fail; Layer 1 had no upgrade path |
+| Global rules: pause every ~10 tool calls, etc. | risk-based autonomy rules (see `global/CLAUDE.md` v2) | Old guardrails were written for weaker models and now cost capability |
+| Soft rules L2–L4 | renumbered S5–S7 | One contiguous S-series; L-series stays project-side (L1) |
+
+### Upgrade steps for an existing v1 project
+
+1. **Add the mechanisms** (add-only, never overwrites):
+
+   ```bash
+   cd <claude-starter>
+   ./sync-project.sh <path-to-project>
+   ```
+
+2. **Apply its suggestions**, typically:
+
+   ```bash
+   cd <path-to-project>
+   git rm -f start_project.sh bootstrap-machine.sh MIGRATION.md \
+             README.zh-TW.md .claudeignore CLAUDE.md.template
+   pre-commit install   # if you use pre-commit
+   ```
+
+   (v1's spawner left `CLAUDE.md.template` tracked in every repo — this is
+   the moment to drop it.)
+
+3. **Give `CLAUDE.md` a Verify command and a Definition of done** — copy the
+   sections from `templates/CLAUDE.md.<kind>` and fill them in. This is the
+   highest-value single edit in the whole migration.
+
+4. **Optionally merge `INDEX.md` v2** (schema comment, Mechanisms section,
+   journal first-line-summary rule):
+
+   ```bash
+   diff <path-to-project>/.ai_context/INDEX.md <claude-starter>/.ai_context/INDEX.md
+   ```
+
+   Merge by hand — your registry rows are yours.
+
+5. **If your README is still the claude-starter README**, replace it with a
+   real project README (see `templates/README.project.md`).
+
+6. **Update the machine's global layer** (shows a diff, keeps a backup):
+
+   ```bash
+   cd <claude-starter> && ./bootstrap-machine.sh --force-global
+   ```
+
+7. Commit: `chore(context): upgrade to claude-starter v2 mechanisms`
+
+---
+
+## B. From multi-agent-dev-team to claude-starter
+
+If you have projects using the previous PM/BE/FE/QA + ECC + Discord layout,
+this guide walks through migrating them to this architecture.
+
+### What changed, and why
 
 | Old | New | Reason |
 |---|---|---|
-| `skills/{pm,backend,frontend,qa}/` per project | _(removed)_ | Roles overspecified — only useful for software dev, blocked other use cases |
-| `!plan / !backend / !frontend / !review / !debate / !summary / !automate` | _(removed)_ | Command router belongs in slash commands, not in CLAUDE.md |
+| `skills/{pm,backend,frontend,qa}/` per project | _(removed)_ | Roles overspecified — only useful for software dev, blocked other use cases. (Task-scoped agents can live in `.claude/agents/` per project when needed.) |
+| `!plan / !backend / !frontend / !review / !debate / !summary / !automate` | _(removed)_ | Command router belongs in the skill system, not in CLAUDE.md |
 | Discord prefixes, 1500-char limit, emoji conventions | _(removed)_ | Plug-in concern, not architecture |
 | `.ai_context/{progress,architecture,api_spec,conventions,discussion_log}.md` (5 fixed files) | `.ai_context/{state.md, decisions.md, knowledge/, journal/, INDEX.md, private/}` | Structure by lifecycle (state vs permanent vs event), not by software role |
 | `dev.sh` orchestration script | _(removed)_ | Claude Code's subagent / Task system handles this |
 | ECC hard-wired in CLAUDE.md and skills | _(decoupled)_ | If installed, it works; architecture doesn't depend on it |
-| PUA inlined as `## High Agency Mode` in CLAUDE.md | `~/.claude/skills/pua/SKILL.md`, on-demand | Maximum-effort mode shouldn't be the default — burns tokens when not needed |
-| One CLAUDE.md mixes philosophy + project + Discord | Three layers: global / project / `.ai_context/` | Separation of concerns |
+| PUA inlined as `## High Agency Mode` in CLAUDE.md | optional plugin, offered by bootstrap | Maximum-effort mode shouldn't be the default; v2's DoD + hooks mechanize its useful core |
+| One CLAUDE.md mixes philosophy + project + Discord | Layers: global / project / `.ai_context/` / `.claude/` | Separation of concerns |
 | `.ai_context/` not in git | `.ai_context/` in git (except `private/`) | Cross-machine continuity, decision history is a feature |
 
----
+### Migration steps for an existing project
 
-## Migration steps for an existing project
-
-### 1. Make a backup
+#### 1. Make a backup
 
 ```bash
 cd <your-old-project>
 cp -r .ai_context .ai_context.backup
 ```
 
-### 2. Move old files to the new layout
-
-The mapping:
+#### 2. Move old files to the new layout
 
 | Old file | New location |
 |---|---|
@@ -44,79 +112,56 @@ The mapping:
 
 ```bash
 mkdir -p .ai_context/knowledge .ai_context/journal .ai_context/private
-mv .ai_context/api_spec.md   .ai_context/knowledge/api-spec.md
+mv .ai_context/api_spec.md    .ai_context/knowledge/api-spec.md
 mv .ai_context/conventions.md .ai_context/knowledge/conventions.md
 # state.md, decisions.md, journal/* require manual translation — see below
 ```
 
-### 3. Translate `architecture.md` → `decisions.md`
+#### 3. Translate `architecture.md` → `decisions.md`
 
 For each design decision in the old `architecture.md`, write an ADR using
-the template at the top of `decisions.md`:
+the template at the top of `decisions.md`. Number them in the order they
+were originally decided.
 
-```markdown
-## ADR-001: <title>
-- Date: <if known, else today>
-- Status: Accepted
-- Context: ...
-- Decision: ...
-- Rationale: ...
-- Alternatives considered: ...
-- Consequences: ...
-```
+#### 4. Translate `progress.md` → `state.md` + journal
 
-Number them in the order they were originally decided.
-
-### 4. Translate `progress.md` → `state.md` + journal
-
-- **Current sprint / in-progress / TODOs** → write into `state.md`
-- **Constraints + Human Feedback sections** → keep them as sections in
-  `state.md`
+- **Current sprint / in-progress / TODOs** → `state.md` (`Now` and
+  `Next steps` sections)
+- **Constraints + Human Feedback sections** → keep as sections in `state.md`
 - **Completed work, old sprints** → archive into a single
   `journal/YYYY-MM-DD-pre-migration-archive.md`
 
-### 5. Add the new files
+#### 5. Add the new files
 
 Copy from claude-starter:
-- `.ai_context/INDEX.md`
-- `.ai_context/state.md` (template, then fill in)
-- `.ai_context/decisions.md` (template, then fill in from step 3)
+- `.ai_context/INDEX.md`, `state.md` (template), `decisions.md` (template)
+- `.claude/` (settings, hooks, wrap skill), `scripts/`,
+  `.pre-commit-config.yaml` — or just run `./sync-project.sh <project>`
 - `.gitignore` AI additions (append to existing `.gitignore`)
-- `.claudeignore`
 
-### 6. Replace the project `CLAUDE.md`
-
-The old CLAUDE.md mixed roles, commands, Discord, ECC. Replace with the new
-template and fill in only project-specific stack and rules:
+#### 6. Replace the project `CLAUDE.md`
 
 ```bash
-cp <claude-starter>/CLAUDE.md.template ./CLAUDE.md
-# edit: replace {{PROJECT_NAME}}, fill stack/commands/rules
+cp <claude-starter>/templates/CLAUDE.md.code ./CLAUDE.md
+# edit: replace {{PROJECT_NAME}}, fill stack/commands/Verify/DoD
 ```
 
-### 7. Remove obsolete pieces
+#### 7. Remove obsolete pieces
 
 ```bash
 rm -rf skills/                      # role skills (PM/BE/FE/QA)
 rm -f  dev.sh                       # orchestration script
-rm -rf .ai_context/pua_skill/       # PUA now installs as a Claude plugin,
-                                    # not as a project-local git clone.
-                                    # See bootstrap-machine.sh.
+rm -rf .ai_context/pua_skill/       # PUA installs as a plugin now, if at all
 ```
 
-### 8. Set up the global layer (one-time per machine)
-
-If you haven't already:
+#### 8. Set up the global layer (one-time per machine)
 
 ```bash
 cd <claude-starter>
 ./bootstrap-machine.sh
 ```
 
-This installs `~/.claude/CLAUDE.md` and (optionally) the PUA plugin via
-Claude's plugin marketplace.
-
-### 9. Verify and commit
+#### 9. Verify and commit
 
 ```bash
 git add -A
@@ -125,23 +170,19 @@ git push
 ```
 
 Open a new Claude session and confirm:
-- Claude reads `INDEX.md` first
+- the SessionStart hook injects `INDEX.md` + `state.md`
 - `state.md` reflects current work
 - ADRs in `decisions.md` are findable
-- No references to old commands or Discord remain
+- no references to old commands or Discord remain
 
----
-
-## Common mistakes to avoid
+### Common mistakes to avoid
 
 - **Don't migrate everything blindly.** Old `progress.md` often contains
-  noise — fluff updates, resolved bikesheds, stale TODOs. Filter as you go.
-  This is the natural moment to apply the new S4 (no fluff) rule.
-- **Don't keep the role skills "just in case".** They tied the project to
-  one workflow. If you find yourself wanting them back, write a `mode/` or
-  `personas/` directory with non-PM/BE/FE/QA framings instead.
+  noise — fluff updates, resolved bikesheds, stale TODOs. Filter as you go
+  (S4: no fluff).
+- **Don't keep the role skills "just in case".** If you need agents, write
+  task-scoped ones in `.claude/agents/`, not org-chart personas.
 - **Don't put `.ai_context/` in `.gitignore` because the old project did.**
-  The new design intentionally tracks it. If concerned about leaks, audit
-  H1/L1 first; only opt out as a last resort.
-- **Don't carry over speculation as fact.** While translating, tag
-  uncertain claims with `[TENTATIVE]`.
+  The design intentionally tracks it; audit H1/L1 instead.
+- **Don't carry over speculation as fact.** Tag uncertain claims
+  `[TENTATIVE]` while translating.

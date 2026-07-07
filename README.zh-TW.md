@@ -2,14 +2,21 @@
 
 [English](./README.md) · **繁體中文**
 
-> 不限程式語言的 Claude Code 專案 scaffold,內建結構化的持久記憶層。
+> 語言無關的 Claude Code 專案腳手架:結構化的持久記憶,
+> 加上讓規則真正成立的機制層。
 
-當你跨多個 session 跟 Claude 工作,通常會遇到兩個問題:
+跨多個 session 與 Claude 協作時,會出三種問題:
 
-1. **Claude 會忘記。** 週二做的決定,週四就消失了。你重新解釋,Claude 重新摸索,時間就漏掉了。
-2. **補丁式解法每次都長不一樣。** 一份 `CLAUDE.md` 加一個筆記資料夾,各專案各做各的。規則漂移、敏感資料外洩、新人不知道該先讀什麼。
+1. **Claude 在 session 之間會忘記。** 週二做的決策到週四就消失,你重新解釋、
+   Claude 重新摸索,時間白白流失。
+2. **常見的解法是一份 `CLAUDE.md` 加一個筆記資料夾,隨手拼裝。** 每個專案
+   長得都不一樣、規則各自漂移、敏感資料混進 commit。
+3. **散文規則不會自我執行。**「先讀 state.md」「不准寫密鑰」「不超過 5 KB」
+   —— 寫在 markdown 裡,只有模型剛好記得時才成立。
 
-`claude-starter` 是同一個解法,但只設計一次、到處重用 — 一個三層架構,讓 Claude 在每個專案、每台機器、每個 collaborator 之間都有一致的專案記憶。
+`claude-starter` 一次設計、處處重用地解決這三件事:三層記憶,外加第四層
+**機制** —— hooks、權限規則、pre-commit 檢查 —— 讓協議在長 session、
+context 壓縮、人類健忘之下依然成立。
 
 ---
 
@@ -17,43 +24,59 @@
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ Layer 1 — 全域       ~/.claude/CLAUDE.md                 │
-│   工程原則、.ai_context schema 約定、soft rules          │
-│   每個專案、每個 session 都會載入                        │
+│ 第 1 層 — 全域        ~/.claude/CLAUDE.md                │
+│   行為與偏好。每個專案、每個 session 都載入。            │
+│   正本:本 repo 的 global/CLAUDE.md。                    │
 └──────────────────────────────────────────────────────────┘
                             ▼
 ┌──────────────────────────────────────────────────────────┐
-│ Layer 2 — 專案       <project>/CLAUDE.md                 │
-│   技術棧、指令、專案特定規則。30–60 行                   │
-│   只放這個專案才成立、全域不成立的東西                   │
+│ 第 2 層 — 專案        <project>/CLAUDE.md                │
+│   技術棧、指令、Verify、Definition of done。             │
+│   「只在這裡成立」的事實。                               │
 └──────────────────────────────────────────────────────────┘
                             ▼
 ┌──────────────────────────────────────────────────────────┐
-│ Layer 3 — 專案記憶          <project>/.ai_context/       │
-│   ├── INDEX.md      Registry:列出有哪些檔案              │
-│   ├── state.md      現在(可覆寫)                       │
-│   ├── decisions.md  永久(append-only ADR log)           │
+│ 第 3 層 — 記憶        <project>/.ai_context/             │
+│   ├── INDEX.md      註冊表:什麼東西在哪                 │
+│   ├── state.md      現在(可覆寫,≤5 KB)                │
+│   ├── decisions.md  永久(append-only ADR 日誌)         │
 │   ├── knowledge/    長期參考                             │
-│   ├── journal/      日期化的事件紀錄                     │
-│   └── private/      敏感暫存(gitignored)               │
+│   ├── journal/      逐事件記錄(含日期)                 │
+│   └── private/      敏感草稿(gitignore)                │
+└──────────────────────────────────────────────────────────┘
+                            ▼
+┌──────────────────────────────────────────────────────────┐
+│ 第 4 層 — 機制        <project>/.claude/ + pre-commit    │
+│   用 hooks、skills、權限規則去「強制」上面三層,         │
+│   而不是指望它們被遵守。                                 │
 └──────────────────────────────────────────────────────────┘
 ```
 
 每一層回答一個問題:
 
-- **全域:** Claude 該怎麼*思考、行動*?
-- **專案:** *這個專案*是什麼?
-- **專案記憶:** *已經發生過*什麼?*現在*的事實是什麼?
+- **全域:** Claude 應該*怎麼做事*?
+- **專案:** *這個專案*是什麼?這裡的「完成」是什麼意思?
+- **記憶:** *已經發生過什麼*?*現在什麼為真*?
+- **機制:** 沒有人盯著的時候,什麼依然成立?
 
-這個切分是刻意的。它讓同一套架構能服務軟體開發、log 分析、研究筆記、寫作 — 不被某種角色框架綁死。
+## 散文 → 機制
+
+v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才是保證。
+
+| 規則(散文) | 機制(強制) |
+|---|---|
+| 「每個 session 先讀 INDEX.md 再讀 state.md」 | `SessionStart` hook 自動注入兩者 —— 啟動、resume、`/clear`、壓縮後皆然 |
+| 「停下來之前把記憶寫回去」 | `/wrap` skill 執行寫回儀式 |
+| 「commit 裡不准有密鑰」(H1) | gitleaks pre-commit + `settings.json` 禁止讀取 `.env*` |
+| 「state.md 不超過 5 KB」(S7) | pre-commit 大小檢查 + session 開始時警告 |
+| 「會老化的事實要標日期」(S3) | session-start hook 偵測 state.md 過期並警告 |
+| 「驗證過才算完成」 | CLAUDE.md 的 **Verify** 指令 + **Definition of done** 契約;可選的 `lint.sh` 讓每次編輯即時回饋 |
 
 ---
 
-## Quick start
+## 快速開始
 
 ### 1. 設定全域層(每台機器一次)
-
-Clone 這個 repo 然後跑 bootstrap:
 
 ```bash
 git clone https://github.com/<your-username>/claude-starter.git
@@ -61,112 +84,137 @@ cd claude-starter
 ./bootstrap-machine.sh
 ```
 
-這會安裝 `~/.claude/CLAUDE.md`(工程原則),並且可選擇安裝 [PUA plugin](https://github.com/tanweai/pua) — 一個第三方 Claude Code plugin,在 Claude 想放棄、卡關、或偵測到使用者 frustration 時自動 escalate。自動觸發,也可手動 `/pua`。
+repo 是自足的:`global/CLAUDE.md` 就在裡面。之後重跑會顯示 diff、
+確認後才更新 `~/.claude/CLAUDE.md`(保留日期備份);`--force-global`
+可跳過詢問。可選項:bun + uv 工具鏈、pre-commit + gitleaks、PUA plugin。
 
-### 2. 把這個 repo 標記成 GitHub Template
+### 2. 把這個 repo 標記為 GitHub template
 
-Push 到 GitHub 之後,在 repo Settings 勾選 "Template repository"。後面 `gh repo create --template` 才能用。
+推上 GitHub 後,到 Settings → 勾選 "Template repository",
+`gh repo create --template` 才能運作。
 
-### 3. 開新專案
+### 3. 生成新專案
 
 ```bash
-./start_project.sh my-new-project
+./start_project.sh my-app                      # code 型,private
+./start_project.sh --kind research my-survey   # 研究型
+./start_project.sh --kind analysis my-backtest # 資料分析型
+./start_project.sh --local --kind code demo    # 離線,不碰 GitHub
 ```
 
-這會從 template 建一個新 GitHub repo、clone 下來、自動填入專案名稱。然後在新目錄跑你語言的 init 指令(`npm init`、`uv init`、`cargo init`、`flutter create .`,或如果是 research / docs / log-analysis 專案就什麼都不跑 — starter 刻意不限語言)。
+生成器會依 kind 個人化 CLAUDE.md、產生真正的專案 README、填入日期、
+**移除腳手架自身的基建檔案**(新專案不會帶著 `start_project.sh`、
+本說明文等),有 pre-commit 就順手安裝,最後 commit + push。
 
 ### 4. 開始工作
 
-在專案目錄打開 Claude。每個 session 都會這樣做:
+在專案裡打開 Claude。SessionStart hook 會自動注入 `INDEX.md` +
+`state.md`。工作。停下來時跑 `/wrap` —— 它把 state、決策、journal
+寫回去。
 
-1. 讀 `./.ai_context/INDEX.md`
-2. 讀 `./.ai_context/state.md`
-3. 只在 INDEX 裡的觸發條件成立時,才讀其他檔案
+### 5. 升級先前生成的專案
 
-整個協定就這麼簡單。
+```bash
+./sync-project.sh ../my-older-project
+```
+
+只補上缺少的機制檔案(絕不覆寫),其餘以建議清單印出。
+詳見 [MIGRATION.md](./MIGRATION.md)。
 
 ---
 
-## 內容物
+## 盒子裡有什麼
 
 ```
 claude-starter/
-├── CLAUDE.md.template      專案 brief 範本 — 填入 stack、指令、規則
-├── .gitignore              內建 AI 相關的 ignore;語言 ignore 自己 append
-├── .claudeignore           Claude 不該掃的東西
-├── .ai_context/
-│   ├── INDEX.md            Read-first registry,內含 hard rules
-│   ├── state.md            現況快照範本
-│   ├── decisions.md        ADR log 範本
-│   ├── knowledge/          空目錄;有需要再加檔案
-│   ├── journal/            空目錄;格式 YYYY-MM-DD-<topic>.md
-│   └── private/            Gitignored 暫存 — Claude 看得到、git 看不到
-├── start_project.sh        Template-based 專案產生器
-├── bootstrap-machine.sh    一次性的機器設定
-├── MIGRATION.md            從其他 layout 遷移過來的指南
-└── README.md               你在這裡
+├── global/CLAUDE.md            第 1 層正本(bootstrap 安裝)
+├── templates/
+│   ├── CLAUDE.md.code          專案簡介:技術棧、指令、Verify、DoD
+│   ├── CLAUDE.md.research      研究框架:來源登記、證據分級
+│   ├── CLAUDE.md.analysis      資料框架:pipeline、可重現性
+│   └── README.project.md       新專案的真 README 樣板
+├── .claude/
+│   ├── settings.json           hooks 接線 + 權限規則(入 git)
+│   ├── hooks/
+│   │   ├── session-start.sh    注入 INDEX+state;過期/超量警告
+│   │   ├── post-edit.sh        編輯後即時 lint 回饋(委派 lint.sh)
+│   │   └── lint.sh.example     語言 init 之後填入你的 linter
+│   └── skills/wrap/SKILL.md    /wrap —— session 收尾記憶寫回
+├── .ai_context/                第 3 層(schema v2)
+├── .pre-commit-config.yaml     H1 密鑰掃描 + S7 大小上限
+├── scripts/                    pre-commit 輔助腳本(專案保留)
+├── .mcp.json.example           MCP 樣板(--kind analysis 保留)
+├── .github/workflows/lint.yml  模板 repo 自身的 CI(生成時移除)
+├── start_project.sh            生成器(驗證、個人化、清理)
+├── bootstrap-machine.sh        機器設定 + 全域層升級
+├── sync-project.sh             升級既有專案(只增不改,安全)
+└── MIGRATION.md                v1 → v2,以及更舊佈局的遷移
 ```
 
 ---
 
 ## 設計原則
 
-### Hard rules(放在每個專案的 `INDEX.md`)
+### 硬規則(在每個專案的 `INDEX.md`)
 
-- **H1 — 沒有 secrets。** 連 placeholder 形式都不要。
-- **H2 — 沒有事實複製。** 如果 README 或 source code 已經有,不要複製過來,用 reference。
-- **H3 — 不把臆測當事實。** 不確定的東西標 `[TENTATIVE]`。
-- **H4 — 對的檔案、對的目的。** 現在 → `state.md`、永久 → `decisions.md`、這次事件 → `journal/`。
-- **L1 — 沒有真名。** 用角色代稱。真名最多寫在 `private/` 裡。
+- **H1 — 不寫密鑰。** 機制:gitleaks + 禁讀 `.env*`。
+- **H2 — 不重複事實。** README 或原始碼裡有的,引用,不複製。
+- **H3 — 推測不當事實。** 未確認的主張標 `[TENTATIVE]`。
+- **H4 — 對的檔案放對的東西。** 現在 → `state.md`;永久 →
+  `decisions.md`;這次事件 → `journal/`。
+- **L1 — 不寫真名。** 用角色代稱。真名最多放 `private/`。
 
-### Soft rules(放在 `~/.claude/CLAUDE.md`)
+### 軟規則(在 `global/CLAUDE.md` → `~/.claude/CLAUDE.md`)
 
-- **S1** — 持久性門檻:只寫*下次 session 還會用到*的東西。
-- **S2** — 大段內容(>200 行)外部化,用 reference 不要 paste。
-- **S3** — 會過時的資訊都加 timestamp。
-- **S4** — 不寫廢話。寫*為什麼*,不寫「看起來不錯」。
-- **L2** — 不寫情緒性內容。
-- **L3** — 不複製 PR/commit description。
-- **L4** — `state.md` 上限 5 KB,超過就 archive 到 `journal/`。
+S1 持久化門檻 · S2 大宗內容外部化 · S3 會老化的事實標日期 ·
+S4 不寫廢話 · S5 不寫情緒 · S6 不複製 PR/commit 描述 ·
+S7 `state.md` ≤ 5 KB。*(S5–S7 在 v1 編號為 L2–L4。)*
 
-### 我們刻意*不做*的事
+### 我們刻意不做的事
 
-- **沒有角色人格(PM / Backend / Frontend / QA)。** 這把舊版架構綁死在軟體開發 workflow,移除。
-- **沒有指令路由(`!plan`、`!review` 那一套)。** Slash commands 應該住在 slash command 系統裡,不該寫在 `CLAUDE.md`。
-- **沒有 Discord 或聊天平台慣例。** Plug-in 層的事。
-- **沒有對第三方 plugin 的硬相依。** 你裝了 ECC 之類的工具當然好,但架構不依賴它。
-- **沒有預先 `mkdir src/`。** Source 結構由你語言的 scaffolding 工具決定,不是我們。
+- **不做角色人設(PM / Backend / QA)。** 需要任務型 agent 時在專案的
+  `.claude/agents/` 定義 —— opt-in,不內建。
+- **不在 CLAUDE.md 裡做指令路由。** slash 指令屬於 skill 系統
+  (`/wrap` 就是一個)。
+- **不做施壓式 prompt。** 驗證迴路勝過精神喊話;DoD 契約和 hooks
+  承擔這個職責。
+- **不內建語言工具鏈。** `bootstrap-machine.sh` 把 bun/uv 列為可選;
+  腳手架本身適用於程式、研究、分析、寫作。
+- **不 `mkdir src/`。** 原始碼佈局是語言腳手架工具的事。
 
 ---
 
 ## FAQ
 
-**Q:為什麼 `.ai_context/` 進 git?Repo 不會被污染嗎?**
+**Q:為什麼 `.ai_context/` 要進 git?**
 
-進 git 是為了讓 Claude 跨機器、跨 contributor、跨幾個月之後還記得事情。代價是一個資料夾的小 markdown 檔;好處是「我們三月決定的事情」不會消失。用 commit type `chore(context): ...` 把這些變更從 release notes 過濾掉。
+跨機器、跨協作者、跨月份的連續性。用 `chore(context): ...` 提交,
+可被 release-notes 過濾器排除。
 
-**Q:有 secrets 或敏感筆記怎麼辦?**
+**Q:`.claudeignore` 去哪了?**
 
-三層保護:(1) `.ai_context/private/` 是 gitignored;(2) `H1` 禁止任何地方寫 secrets;(3) `L1` 禁止真名。Push 到公開 repo 前要 audit。
+v2 移除了 —— Claude Code 並不讀這個檔案,它只是裝飾。真正的機制是
+`.claude/settings.json` 的權限規則(已內建),加上 Claude 本身就會
+跳過 build 產物。
 
-**Q:一定要用 helper script 嗎?**
+**Q:`.ai_context/` 和 Claude 原生記憶差在哪?**
 
-不用。它們只是方便。你也可以手動 clone template、手動 copy 檔案,隨你。架構就是檔案 + 慣例而已。
+`.ai_context/` 入 repo、可共享:專案真相。原生記憶(`~/.claude/...`)
+屬於個人、跨專案:個人偏好。`global/CLAUDE.md` 明訂分工,避免雙寫。
 
-**Q:這跟單純用 `CLAUDE.md` 差在哪?**
+**Q:團隊可以用嗎?**
 
-單純的 `CLAUDE.md` 只涵蓋 Layer 2。這套加了 Layer 1(跨專案的預設)和 Layer 3(持久記憶)。重點是單純 `CLAUDE.md` *做不到的事* — 跨 session 記得決定、跨專案共用慣例、把「易變狀態」和「永久決定」分開存放。
+可以 —— bootstrap 每人跑一次,模板共用。多人同時寫 ADR 時,把
+`decisions.md` 改成一檔一 ADR(`decisions/NNN-title.md`);
+`INDEX.md` 說明了時機。
 
-**Q:我有舊的 multi-agent layout 專案,怎麼遷移?**
+**Q:我有 v1 佈局(或更古老的 PM/BE/FE/QA 佈局)的專案。**
 
-看 [`MIGRATION.md`](./MIGRATION.md)。從 PM/BE/FE/QA + ECC + Discord 的舊架構一步步轉過來。
-
-**Q:團隊可以一起用嗎?**
-
-可以。`bootstrap-machine.sh` 是每個開發者各自跑一次;template repo 是共享的。每個人拿到一樣的全域原則,每個專案拿到一樣的記憶 layout。
+v1 → v2 用 `./sync-project.sh <path>`;完整說明見
+[MIGRATION.md](./MIGRATION.md)。
 
 ---
 
-## License
+## 授權
 
-MIT(或你想用的 — 公開之前選一個就好)。
+MIT(或你偏好的授權 —— 公開前先決定)。

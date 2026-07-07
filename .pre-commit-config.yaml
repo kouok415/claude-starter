@@ -1,0 +1,18 @@
+# Mechanical enforcement of the rules that used to be prose-only.
+# Install once per clone:  pre-commit install
+# (start_project.sh does this automatically when pre-commit is available.)
+repos:
+  - repo: local
+    hooks:
+      - id: ai-context-state-size
+        name: "S7: .ai_context/state.md <= 5 KB"
+        entry: scripts/check-state-size.sh
+        language: system
+        files: ^\.ai_context/state\.md$
+        pass_filenames: false
+
+      - id: gitleaks-secret-scan
+        name: "H1: no secrets (gitleaks)"
+        entry: scripts/precommit-gitleaks.sh
+        language: system
+        pass_filenames: false

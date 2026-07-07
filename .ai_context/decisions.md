@@ -6,6 +6,8 @@ format: each entry uses the template below. Most recent at the bottom.
 do-not: don't put tentative ideas here (use state.md). don't paste implementation
         details (those live in code or knowledge/). keep entries to the
         decision and its rationale, not the work that followed.
+teams:  if concurrent writers cause merge conflicts, switch to
+        decisions/NNN-<slug>.md (one file per ADR) and note it in INDEX.md.
 -->
 
 # Architecture Decision Records
