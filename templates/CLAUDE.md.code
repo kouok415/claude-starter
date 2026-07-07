@@ -50,3 +50,13 @@ A change is complete only when all of these hold (edit to fit the project):
 - Run `/wrap` at the end of a session to write memory back.
 - For instant lint feedback on every edit, copy
   `.claude/hooks/lint.sh.example` → `lint.sh` once the stack exists.
+
+## Long-horizon tasks
+
+- Any task expected to exceed ~30 minutes of autonomous work goes through
+  `/task <description>` — milestone plan, a fresh executor context per
+  milestone, adversarial verification, and a Stop gate on each milestone's
+  verify command.
+- Task work happens on a `task/<slug>` branch; every passed gate is a commit.
+- Stuck-milestone escalation: retry differently → 3 divergent parallel
+  attempts (worktrees) → reframe the problem → stop and report.

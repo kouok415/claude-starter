@@ -35,6 +35,7 @@ manually.
 | Encountering an unfamiliar domain term | `knowledge/glossary.md` |
 | User asks about a past event, debate, retro, or specific date | search `journal/` for matching `YYYY-MM-DD-*.md` |
 | User mentions sensitive scratch, untriaged data, or local-only notes | `private/` |
+| A long-horizon `/task` is running (`tasks/CURRENT` exists) | that task's `plan.md` + `lessons.md` (mechanized: session-start injects them) |
 
 **Do not auto-read** `journal/` or `knowledge/` files unless triggered. They
 exist for retrieval, not for warmup.
@@ -55,6 +56,7 @@ table. Keep *factual* reference (API contracts, glossaries) in `knowledge/`.
 | `decisions.md` | append-only; never edit existing entries |
 | `knowledge/*.md` | accumulate; edit factual updates, don't rewrite history |
 | `journal/*.md` | append-only per file; new file per event; first line = one-sentence summary |
+| `tasks/<slug>/` | `spec.md` frozen once the plan is approved; `plan.md` statuses updated at every gate; `lessons.md` append-only |
 | `private/*` | free-form; gitignored |
 
 Before writing to any file, read its top preamble for format and `do-not`
@@ -96,6 +98,8 @@ Where possible, the rules above are enforced mechanically (v2 projects):
 | `.claude/hooks/post-edit.sh` + `lint.sh` | instant lint feedback after every edit |
 | `.pre-commit-config.yaml` | H1 secret scan (gitleaks) + S7 size cap at commit time |
 | `.claude/settings.json` permissions | denies reading `.env*` and key files (H1) |
+| `.claude/hooks/stop-gate.sh` | milestone gate — a turn cannot end while the active `/task` milestone's verify fails |
+| `/task` skill (`.claude/skills/task/`) | long-horizon loop: plan fusion → fresh-context execution → adversarial verify → escalation ladder |
 
 Prose is the spec; mechanisms are the guarantee. If you change a rule,
 change its mechanism too.
@@ -113,6 +117,8 @@ change its mechanism too.
 | `knowledge/conventions.md` | accumulate | Code patterns, naming, layout (create as patterns emerge) |
 | `knowledge/glossary.md` | accumulate | Domain terms (create when domain has jargon) |
 | `journal/YYYY-MM-DD-*.md` | append-only per file | Per-event records: debates, retros, post-mortems, findings |
+| `tasks/CURRENT` | overwrite | Slug of the active `/task`; absent when no task is running |
+| `tasks/<slug>/` | per task | Execution state: `spec.md`, `plan.md`, `lessons.md`; scoreboard archived to `journal/` by /wrap on completion |
 | `private/*` | free-form | Sensitive scratch, gitignored, not committed |
 
 **Files in `knowledge/` are created on-demand**, not upfront. Don't create

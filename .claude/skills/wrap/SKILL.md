@@ -29,11 +29,19 @@ preamble before writing to it):
    `YYYY-MM-DD-<topic>.md` whose first line is a one-sentence summary.
    Skip routine sessions.
 
-4. Apply the writing rules as you go: S1 (only what the next session needs),
+4. **Active `/task`** — if `.ai_context/tasks/CURRENT` exists:
+   - Task finished: write its journal entry with the scoreboard (milestones
+     total, gate failures, highest escalation rung used, human
+     interventions), then delete `CURRENT` (keep the task directory).
+   - Task unfinished: leave `CURRENT` in place; make sure `state.md`'s
+     Now/Next points at the `[in_progress]` milestone so the next session
+     resumes cold from the checkpoint.
+
+5. Apply the writing rules as you go: S1 (only what the next session needs),
    S3 (date every aging claim), S4 (no fluff — the why, not "went well"),
    H1 (no secrets), H2 (don't duplicate what code/git already records).
 
-5. If the project uses git, offer to commit the memory changes as
+6. If the project uses git, offer to commit the memory changes as
    `chore(context): wrap <topic>`.
 
 Finish by replying with a one-line summary of what was persisted and where.
