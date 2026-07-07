@@ -60,6 +60,9 @@ A change is complete only when all of these hold (edit to fit the project):
 - Task work happens on a `task/<slug>` branch; every passed gate is a commit.
 - Stuck-milestone escalation: retry differently → 3 divergent parallel
   attempts (worktrees) → reframe the problem → stop and report.
+- `/task --auto <description>` runs unattended: ambiguity calls are
+  recorded as `[ASSUMED: ...]` in spec.md instead of asked — review them
+  before merging.
 - Profile is auto-detected from the session model and frozen per task.
   To pin it for this project, uncomment one:
   <!-- Task profile: opus-tier -->

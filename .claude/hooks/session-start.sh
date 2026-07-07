@@ -59,4 +59,10 @@ if [ -f "$CTX/state.md" ]; then
   fi
 fi
 
+# --- CLAUDE.md still a template? Nudge a draft-and-review ---
+if [ -f "$ROOT/CLAUDE.md" ] && \
+   grep -qE '<e\.g\.,|<command>|Replace before first commit' "$ROOT/CLAUDE.md"; then
+  printf 'WARNING: CLAUDE.md still contains template placeholders — draft Stack/Commands/Verify/DoD from the codebase (/init helps) and have the human review the diff; if the project has no code yet, interview the human instead.\n'
+fi
+
 exit 0

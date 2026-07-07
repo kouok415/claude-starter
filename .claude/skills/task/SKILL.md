@@ -1,6 +1,6 @@
 ---
 name: task
-description: Long-horizon execution harness — plan a big task into verifiable milestones, execute each in a fresh executor subagent, adversarially verify, gate on verify commands, escalate through divergent retries and reframing. Use for any task expected to exceed ~30 minutes of autonomous work, or when the user says /task, "long task", or "長任務".
+description: Long-horizon execution harness — plan a big task into verifiable milestones, execute each in a fresh executor subagent, adversarially verify, gate on verify commands, escalate through divergent retries and reframing. Use for any task expected to exceed ~30 minutes of autonomous work, or when the user says /task, "long task", or "長任務". Supports --auto for unattended runs (intent calls are recorded as assumptions instead of asked).
 ---
 
 # /task — long-horizon execution harness
@@ -15,7 +15,13 @@ current milestone's verify command at end-of-turn.
 
 1. Derive a short kebab-case `<slug>` from the request.
 2. If scope, constraints, or "what does done mean" are genuinely ambiguous,
-   ask now — never mid-run.
+   ask now — never mid-run. **Autonomous mode** (`--auto`, or the user says
+   to proceed without confirmation): don't pause — resolve derivable
+   ambiguities by reading the code (asking those is a design flaw, not
+   caution), make a documented call on preference/intent ambiguities and
+   record each as an `[ASSUMED: ...]` line in spec.md's Assumptions
+   section. Destructive or outward-facing actions still require
+   confirmation regardless of mode.
 3. Create `.ai_context/tasks/<slug>/`, write the slug into
    `.ai_context/tasks/CURRENT`, and create a branch `task/<slug>`
    (never run a task on main).
@@ -44,9 +50,13 @@ Write `spec.md`:
     ## Out of scope
     - <explicitly not doing>
 
+    ## Assumptions
+    - [ASSUMED: <call made without confirmation — reviewed at the end>]
+
 Reject vibes criteria ("works well", "clean"). Every AC needs a command or a
 directly observable behavior. If the user can't supply one, propose one and
-confirm it.
+confirm it — in autonomous mode, propose it and record it under
+`## Assumptions` instead of pausing.
 
 ## 2 · Plan fusion
 
@@ -120,7 +130,10 @@ stop-and-report.
    weakened?"). Any FAIL → back into the loop as a repair milestone.
 2. All green: mark everything `[done]`, delete `.ai_context/tasks/CURRENT`
    (keep the task dir), run `/wrap` (it archives the scoreboard to
-   `journal/`), then offer to merge `task/<slug>` or open a PR.
+   `journal/`), then offer to merge `task/<slug>` or open a PR. The
+   completion report must list every `[ASSUMED: ...]` entry from spec.md —
+   in autonomous mode those are the decisions the human still owes a
+   review.
 
 ## Profiles — one protocol, tiered knobs
 

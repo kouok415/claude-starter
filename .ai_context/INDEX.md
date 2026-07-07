@@ -93,7 +93,7 @@ Where possible, the rules above are enforced mechanically (v2 projects):
 
 | Mechanism | Enforces |
 |---|---|
-| `.claude/hooks/session-start.sh` | reading protocol; warns on stale `state.md` (S3) and >5 KB (S7) |
+| `.claude/hooks/session-start.sh` | reading protocol; warns on stale `state.md` (S3), >5 KB (S7), and placeholder CLAUDE.md |
 | `/wrap` skill (`.claude/skills/wrap/`) | write-back of state / ADRs / journal |
 | `.claude/hooks/post-edit.sh` + `lint.sh` | instant lint feedback after every edit |
 | `.pre-commit-config.yaml` | H1 secret scan (gitleaks) + S7 size cap at commit time |
