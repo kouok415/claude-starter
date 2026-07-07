@@ -199,6 +199,11 @@ rm -rf start_project.sh bootstrap-machine.sh sync-project.sh \
 
 chmod +x .claude/hooks/*.sh scripts/*.sh 2>/dev/null || true
 
+# Provenance: record which template checkout spawned this project (debugging
+# stale-spawner incidents; sync tooling can read the vintage).
+STARTER_REF="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+printf 'spawned-by: claude-starter@%s on %s\n' "$STARTER_REF" "$TODAY" > .claude/.starter-version
+
 # --- pre-commit (mechanical H1/S7 enforcement) -----------------------------------
 if have pre-commit && [ -f .pre-commit-config.yaml ]; then
   pre-commit install >/dev/null && echo "pre-commit hooks installed."
@@ -227,12 +232,9 @@ $REMOTE_LINE
 
 Next steps:
   cd $DIR
-  # 1. Run your language's init (npm create / uv init / cargo init / ...),
-  #    or nothing for a research / analysis project.
-  # 2. Fill CLAUDE.md: stack, commands — especially Verify and the
-  #    Definition of done. Tip: /init drafts the stack section for you.
-  # 3. Optional: cp .claude/hooks/lint.sh.example .claude/hooks/lint.sh
-  #    and wire your linter for instant feedback on every edit.
-  # 4. Open Claude and start working. Run /wrap when you stop.
+  claude   # the first session runs /setup: it interviews you, scaffolds
+           # the stack, and drafts CLAUDE.md/README/state.md for your
+           # review. (Manual fallback: fill CLAUDE.md yourself; /init helps.)
+  # Run /wrap when you stop; /task <description> for big jobs.
 
 EOF

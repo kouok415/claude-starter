@@ -14,16 +14,59 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="${1:?Usage: ./sync-project.sh <path-to-project>}"
+TARGET=""; UPDATE_STOCK=0; ADOPT=0
+for a in "$@"; do
+  case "$a" in
+    --update-stock) UPDATE_STOCK=1 ;;
+    --adopt)        ADOPT=1 ;;
+    -h|--help)
+      echo "Usage: ./sync-project.sh [--update-stock] [--adopt] <path-to-project>"
+      echo "  --update-stock  replace mechanism files whose content matches ANY"
+      echo "                  historical template version (provably unmodified"
+      echo "                  stock copies); customized files are never touched"
+      echo "  --adopt         onboard an existing non-starter repo: create the"
+      echo "                  .ai_context skeleton + CLAUDE.md template first"
+      exit 0 ;;
+    *) if [ -z "$TARGET" ]; then TARGET="$a"; else echo "Error: unexpected argument: $a"; exit 1; fi ;;
+  esac
+done
+[ -n "$TARGET" ] || { echo "Usage: ./sync-project.sh [--update-stock] [--adopt] <path-to-project>"; exit 1; }
 TARGET="${TARGET%/}"
 
-if [ ! -d "$TARGET/.ai_context" ]; then
-  echo "Error: $TARGET doesn't look like a claude-starter project (.ai_context/ missing)"
-  exit 1
-fi
-
 added=()
+updated=()
 suggest=()
+
+# --- Adopt an existing repo (create the skeleton first) -------------------------
+if [ ! -d "$TARGET/.ai_context" ]; then
+  if [ "$ADOPT" = 1 ]; then
+    [ -d "$TARGET" ] || { echo "Error: $TARGET does not exist"; exit 1; }
+    mkdir -p "$TARGET/.ai_context"
+    for f in INDEX.md state.md decisions.md; do
+      [ -e "$TARGET/.ai_context/$f" ] || cp "$SCRIPT_DIR/.ai_context/$f" "$TARGET/.ai_context/$f"
+    done
+    for d in journal knowledge private tasks; do
+      mkdir -p "$TARGET/.ai_context/$d"
+      [ -e "$TARGET/.ai_context/$d/.gitkeep" ] || : > "$TARGET/.ai_context/$d/.gitkeep"
+    done
+    if [ ! -f "$TARGET/CLAUDE.md" ]; then
+      cp "$SCRIPT_DIR/templates/CLAUDE.md.code" "$TARGET/CLAUDE.md"
+      suggest+=("adopted with the 'code' CLAUDE.md template — for research/analysis projects copy templates/CLAUDE.md.<kind> instead")
+    fi
+    base="$(basename "$TARGET")"; today="$(date +%F)"
+    for f in "$TARGET/CLAUDE.md" "$TARGET/.ai_context/state.md"; do
+      [ -f "$f" ] || continue
+      sed -i.bak -e "s/{{PROJECT_NAME}}/$base/g" -e "s/{{DATE}}/$today/g" -e "s/<DATE>/$today/g" "$f"
+      rm -f "$f.bak"
+    done
+    added+=(".ai_context/ skeleton (adopted)")
+    suggest+=("open Claude in the project and run /setup — it drafts CLAUDE.md/README/state.md from the existing code")
+  else
+    echo "Error: $TARGET doesn't look like a claude-starter project (.ai_context/ missing)"
+    echo "  To onboard an existing repo, re-run with --adopt"
+    exit 1
+  fi
+fi
 
 copy_if_missing() {
   local rel="$1"
@@ -44,6 +87,7 @@ copy_if_missing .claude/hooks/lint.sh.example
 copy_if_missing .claude/skills/wrap/SKILL.md
 copy_if_missing .claude/hooks/stop-gate.sh
 copy_if_missing .claude/skills/task/SKILL.md
+copy_if_missing .claude/skills/setup/SKILL.md
 copy_if_missing .claude/agents/planner.md
 copy_if_missing .claude/agents/plan-critic.md
 copy_if_missing .claude/agents/executor.md
@@ -53,6 +97,44 @@ copy_if_missing .ai_context/tasks/.gitkeep
 copy_if_missing scripts/check-state-size.sh
 copy_if_missing scripts/precommit-gitleaks.sh
 copy_if_missing .pre-commit-config.yaml
+
+# --- Update stock mechanism files (opt-in) --------------------------------------
+# A file is replaced ONLY if its content matches some historical version of
+# the same file in this template's git history — i.e. it is provably an
+# unmodified stock copy that has merely fallen behind. Customized files are
+# never touched.
+stock_update() {
+  local rel="$1" src="$SCRIPT_DIR/$1" dst="$TARGET/$1" h
+  [ "$UPDATE_STOCK" = 1 ] || return 0
+  [ -f "$src" ] && [ -f "$dst" ] || return 0
+  cmp -s "$dst" "$src" && return 0
+  git -C "$SCRIPT_DIR" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  while IFS= read -r h; do
+    if git -C "$SCRIPT_DIR" show "$h:$rel" 2>/dev/null | cmp -s - "$dst"; then
+      cp "$src" "$dst"
+      updated+=("$rel")
+      return 0
+    fi
+  done < <(git -C "$SCRIPT_DIR" log --format=%H -- "$rel")
+  suggest+=("$rel differs from every known template version (customized) — merge by hand: diff \"$TARGET/$rel\" \"$SCRIPT_DIR/$rel\"")
+}
+
+stock_update .claude/settings.json
+stock_update .claude/hooks/session-start.sh
+stock_update .claude/hooks/post-edit.sh
+stock_update .claude/hooks/stop-gate.sh
+stock_update .claude/skills/wrap/SKILL.md
+stock_update .claude/skills/task/SKILL.md
+stock_update .claude/skills/setup/SKILL.md
+stock_update .claude/agents/planner.md
+stock_update .claude/agents/plan-critic.md
+stock_update .claude/agents/executor.md
+stock_update .claude/agents/verifier.md
+stock_update .claude/agents/reframer.md
+stock_update .ai_context/INDEX.md
+stock_update scripts/check-state-size.sh
+stock_update scripts/precommit-gitleaks.sh
+stock_update .pre-commit-config.yaml
 
 chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/scripts/*.sh 2>/dev/null || true
 
@@ -108,6 +190,11 @@ else
   echo "Added: nothing — all mechanism files already present."
 fi
 echo ""
+if [ "${#updated[@]}" -gt 0 ]; then
+  echo "Updated stock files (${#updated[@]}):"
+  for u in "${updated[@]}"; do echo "  ~ $u"; done
+  echo ""
+fi
 if [ "${#suggest[@]}" -gt 0 ]; then
   echo "Suggestions (apply by hand — nothing was changed):"
   for s in "${suggest[@]}"; do echo "  * $s"; done
