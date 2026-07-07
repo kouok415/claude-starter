@@ -92,6 +92,9 @@ spec; the mechanism is the guarantee.
 
 ## Quick start
 
+> Hands-on walkthrough (spawn → daily loop → `/task` → profiles):
+> **[TUTORIAL.md](./TUTORIAL.md)** · [繁中](./TUTORIAL.zh-TW.md)
+
 ### 1. Set up the global layer (once per machine)
 
 ```bash
@@ -207,7 +210,8 @@ claude-starter/
 ├── start_project.sh            Spawner (validates, personalizes, cleans up)
 ├── bootstrap-machine.sh        Machine setup + global-layer updates
 ├── sync-project.sh             Upgrade existing projects (add-only, safe)
-└── MIGRATION.md                v2 → v3, v1 → v2, and older layouts
+├── MIGRATION.md                v2 → v3, v1 → v2, and older layouts
+└── TUTORIAL.md / .zh-TW.md     Hands-on walkthrough (removed on spawn)
 ```
 
 ---

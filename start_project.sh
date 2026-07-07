@@ -193,7 +193,8 @@ done
 # Remove scaffold infrastructure — these belong to the template repo, not to
 # the spawned project (GitHub templates have no .templateignore mechanism).
 rm -rf start_project.sh bootstrap-machine.sh sync-project.sh \
-       MIGRATION.md README.zh-TW.md global templates .github
+       MIGRATION.md README.zh-TW.md TUTORIAL.md TUTORIAL.zh-TW.md \
+       global templates .github
 [ "$KIND" = "analysis" ] || rm -f .mcp.json.example
 
 chmod +x .claude/hooks/*.sh scripts/*.sh 2>/dev/null || true

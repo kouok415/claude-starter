@@ -85,6 +85,9 @@ v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才
 
 ## 快速開始
 
+> 實戰教程(生成 → 日常迴圈 → `/task` → profile):
+> **[TUTORIAL.zh-TW.md](./TUTORIAL.zh-TW.md)** · [English](./TUTORIAL.md)
+
 ### 1. 設定全域層(每台機器一次)
 
 ```bash
@@ -191,7 +194,8 @@ claude-starter/
 ├── start_project.sh            生成器(驗證、個人化、清理)
 ├── bootstrap-machine.sh        機器設定 + 全域層升級
 ├── sync-project.sh             升級既有專案(只增不改,安全)
-└── MIGRATION.md                v2 → v3、v1 → v2,以及更舊佈局的遷移
+├── MIGRATION.md                v2 → v3、v1 → v2,以及更舊佈局的遷移
+└── TUTORIAL.md / .zh-TW.md     實戰教程(生成專案時移除)
 ```
 
 ---

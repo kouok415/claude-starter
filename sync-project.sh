@@ -72,7 +72,8 @@ if [ "$tgt_schema" != "$cur_schema" ]; then
 fi
 
 for f in start_project.sh bootstrap-machine.sh sync-project.sh MIGRATION.md \
-         README.zh-TW.md .claudeignore CLAUDE.md.template; do
+         README.zh-TW.md TUTORIAL.md TUTORIAL.zh-TW.md .claudeignore \
+         CLAUDE.md.template; do
   if [ -e "$TARGET/$f" ]; then
     suggest+=("template leftover: $f — consider: git -C \"$TARGET\" rm -f $f")
   fi
