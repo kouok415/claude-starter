@@ -26,6 +26,17 @@ emit_file() {
 emit_file "$CTX/INDEX.md"
 emit_file "$CTX/state.md"
 
+# --- Active long-horizon task (/task harness): inject its plan + lessons so
+#     re-anchoring after /clear or compaction lands on the latest milestone
+#     checkpoint, not on a start-of-session snapshot.
+if [ -f "$CTX/tasks/CURRENT" ]; then
+  slug="$(tr -d '[:space:]' < "$CTX/tasks/CURRENT")"
+  if [ -n "$slug" ] && [ -d "$CTX/tasks/$slug" ]; then
+    emit_file "$CTX/tasks/$slug/plan.md"
+    emit_file "$CTX/tasks/$slug/lessons.md"
+  fi
+fi
+
 if [ -f "$CTX/state.md" ]; then
   # --- Freshness (S3): warn when "Last updated" is old ---
   lu="$(grep -m1 -Eo '[0-9]{4}-[0-9]{2}-[0-9]{2}' "$CTX/state.md" || true)"
