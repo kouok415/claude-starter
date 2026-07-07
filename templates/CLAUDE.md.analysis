@@ -43,3 +43,12 @@ metric). A number without a pinned definition is not a result.
 
 - `INDEX.md` + `state.md` auto-injected each session via `.claude/` hooks.
 - Run `/wrap` at session end.
+
+## Long-horizon tasks
+
+- Multi-stage pipeline work (> ~30 min autonomous) goes through
+  `/task <description>` — milestone verify commands are pipeline slices
+  (one day / one symbol / one cohort) or output-schema checks.
+- Work happens on a `task/<slug>` branch; every passed gate is a commit.
+- `/task --auto` runs unattended; intent calls land in spec.md as
+  `[ASSUMED: ...]` for later review.

@@ -87,6 +87,9 @@ spec; the mechanism is the guarantee.
 | "Time-stamp aging facts" (S3) | session-start hook warns when `state.md` is stale |
 | "Verify before claiming done" | **Stop gate**: on `/task` runs, the active milestone's verify command must pass before a turn may end; plus the `Verify` + **Definition of done** contract in CLAUDE.md and the optional `lint.sh` post-edit hook |
 | "Long tasks decay — drift, silent errors, lost state" | `/task` harness: milestone plan with executable gates, fresh executor context per milestone, adversarial verifier, escalation ladder, commit per gate |
+| "A new project's first session sets it up" | session-start `SETUP REQUIRED` instruction + Stop gate blocks the first turn-end (once per session) until CLAUDE.md is drafted; the `/setup` skill carries the protocol |
+| "Scoreboard numbers must be real" | the Stop gate writes a `gatelog` per run; `/wrap` aggregates it into `scoreboard.csv` |
+| "Sessions that die without /wrap lose their state" | session-start warns when commits are newer than `state.md` |
 
 ---
 
@@ -201,7 +204,8 @@ claude-starter/
 │   │                           verifier, reframer (fresh-context stages)
 │   └── skills/
 │       ├── wrap/SKILL.md       /wrap — end-of-session memory write-back
-│       └── task/SKILL.md       /task — long-horizon milestone harness
+│       ├── task/SKILL.md       /task — long-horizon milestone harness
+│       └── setup/SKILL.md      /setup — first-session birth protocol
 ├── .ai_context/                Layer 3 (schema v2) — INDEX, state, decisions…
 ├── .pre-commit-config.yaml     H1 secret scan + S7 size cap
 ├── scripts/                    pre-commit helper scripts (kept in projects)

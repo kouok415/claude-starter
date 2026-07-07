@@ -30,11 +30,13 @@ cd claude-starter
 新專案自帶全部機制:hooks、`/wrap`、`/task`、agent 班底、`.ai_context/`
 骨架;模板自身的基建檔案已被清掉。
 
-## 2. 第一次 session——讓 Claude 起草 CLAUDE.md
+## 2. 第一次 session——`/setup` 跑出生協定
 
 在專案裡打開 Claude。只要 `CLAUDE.md` 還是模板佔位符狀態,session-start
-hook 就會發警告,Claude 會主動提議**從 codebase 起草 Stack / Commands /
-Verify / DoD** 給你。
+hook 就會指示 Claude 在**第一則回覆**執行 **`/setup`**——而且 Stop gate
+會擋住第一次回合結束,直到草稿落地。這是機制,不是模型可以漂過去的建議。
+協定內容:一輪批次訪談(只問程式碼答不了的)→ 鷹架 stack + 接 `lint.sh`
+→ 起草 CLAUDE.md / README / state.md → 把起草的 Verify 實跑一次 → commit。
 
 你的工作是花 2 分鐘審,不是花 10 分鐘寫——而你的修改恰好落在 Claude
 猜不到的地方:
@@ -44,9 +46,8 @@ Verify / DoD** 給你。
 - **Definition of done** —— 專案特有的門檻:效能下限、覆蓋率、「必須能跑
   範例資料」。意圖住在這裡,不在程式碼裡。
 
-空專案(還沒有程式碼)?Claude 會反過來訪談你。順手做:
-`cp .claude/hooks/lint.sh.example .claude/hooks/lint.sh` 接上你的
-linter——之後每次編輯即時回饋。
+想先不弄也可以——閘門擋一次就讓路,下個 session 重新武裝。空專案沒程式
+碼可讀?訪談會補上這個缺。
 
 ## 3. 日常迴圈(小任務)
 
@@ -87,7 +88,9 @@ linter——之後每次編輯即時回饋。
 5. **卡關?** —— 升級梯自動走:換方法重試 → 分歧策略平行 → `reframer`
    改寫問題本身 → 三振後停下、誠實回報。
 6. **完成** —— 三鏡頭終審面板,`/wrap` 把記分板(profile、閘門失敗數、
-   用到第幾級)歸檔進 `journal/`,然後問你要 merge 還是開 PR。
+   用到第幾級)歸檔進 `journal/`,並在 `.ai_context/scoreboard.csv` 追加
+   一列。閘門數字來自 hook 寫的 `gatelog` 檔案,不是模型的記憶。最後問
+   你要 merge 還是開 PR。
 
 **無人值守模式:**`/task --auto <描述>` —— 意圖型的判斷不再暫停詢問,
 改記成 spec.md 的 `[ASSUMED: ...]` 條目,完工報告強制全部列出給你審。
@@ -95,7 +98,8 @@ linter——之後每次編輯即時回饋。
 
 **中斷了?** 重開 session 即可——hook 會把該任務的 `plan.md` +
 `lessons.md` 注回去,從上一個過關的里程碑續跑。run 中途被壓縮同理,
-不怕。
+不怕。任務進行中再喊 `/task` 是**續跑**(找到 `[in_progress]` 里程碑
+直接回到迴圈,絕不重新規劃);要放棄就刪 `.ai_context/tasks/CURRENT`。
 
 ## 5. Profile
 
@@ -116,9 +120,10 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 ```
 
 只增不改:缺的機制檔補上,已存在的絕不覆寫——改以建議清單提示手動
-合併(典型是 v3 之前的 `settings.json` 要併入 `"Stop"` hook 區塊、
-`session-start.sh` 要加任務注入段)。完整指南:
-[MIGRATION.md](./MIGRATION.md)。
+合併。兩個進階模式:`--update-stock` 會連「可證明未被客製的 stock 檔」
+一起前進(內容與模板任一歷史版本逐位元相同才換;客製檔照樣絕不碰);
+`--adopt` 收編既有的非 starter repo(先建骨架,再由 `/setup` 從既有
+程式碼起草簡報)。完整指南:[MIGRATION.md](./MIGRATION.md)。
 
 ## 7. 疑難排解
 
@@ -132,6 +137,9 @@ cd claude-starter && ./sync-project.sh ../my-older-project
   INDEX/state 注入。
 - **state.md 過期/超量警告** —— 跑 `/wrap`,它會刷新日期並歸檔已解決
   的段落。
+- **verify 命令是無提示執行的。** 閘門在每次回合結束時直接跑當前里程碑
+  的 `- verify:`,不會彈權限確認——保持它們唯讀、快速(< 5 分鐘);
+  plan-critic 會攔破壞性命令,計畫審查就是你的檢查點。
 
 ## 8. 速查表
 
@@ -142,7 +150,10 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 | 大任務 | `/task <描述>` |
 | 大任務(無人值守) | `/task --auto <描述>` |
 | 放棄任務 | 刪 `.ai_context/tasks/CURRENT` |
+| 設置 / 重起草專案簡報 | `/setup` |
 | 舊專案升級 | `./sync-project.sh <path>` |
+| 升級 + 推進 stock 檔 | `./sync-project.sh --update-stock <path>` |
+| 收編既有 repo | `./sync-project.sh --adopt <path>` |
 | 全域層更新 | `./bootstrap-machine.sh --force-global` |
 
 建議的第一步:挑一個真實的中型任務,用 `mixed` profile 跑一次,完事讀

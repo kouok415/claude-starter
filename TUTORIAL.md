@@ -31,11 +31,15 @@ your global layer (dated backup kept).
 The new project carries everything: hooks, `/wrap`, `/task`, the agent
 crew, and the `.ai_context/` skeleton. Template infrastructure is removed.
 
-## 2. First session — let Claude draft CLAUDE.md
+## 2. First session — `/setup` runs the birth protocol
 
 Open Claude in the project. While `CLAUDE.md` still contains template
-placeholders, the session-start hook emits a warning and Claude will offer
-to **draft Stack / Commands / Verify / DoD from the codebase** for you.
+placeholders, the session-start hook instructs Claude to run **`/setup`**
+in its first reply — and the Stop gate blocks the first turn-end until the
+draft lands, so this is mechanical, not a suggestion the model can drift
+past. The protocol: one batched interview round (only what the code can't
+tell) → scaffold the stack + wire `lint.sh` → draft CLAUDE.md / README /
+state.md → run the drafted Verify once → commit.
 
 Your job is the 2-minute review, not the 10-minute write-up — and your
 edits matter exactly where Claude can't guess:
@@ -45,9 +49,8 @@ edits matter exactly where Claude can't guess:
 - **Definition of done** — project-specific bars: perf floors, coverage,
   "must run on the sample fixture". Intent lives here, not in the code.
 
-Greenfield project with no code yet? Claude interviews you instead.
-Optional: `cp .claude/hooks/lint.sh.example .claude/hooks/lint.sh` and wire
-your linter — every edit then gets instant feedback.
+Declining is fine — the gate yields after one block and re-arms next
+session. Greenfield with no code yet? The interview does the work instead.
 
 ## 3. The daily loop (small work)
 
@@ -93,8 +96,10 @@ What happens, in order:
    divergent parallel attempts → `reframer` rewrites the problem → after
    three strikes it stops and reports honestly.
 6. **Completion** — a three-lens review panel, then `/wrap` archives a
-   scoreboard (profile, gate failures, highest rung used) to `journal/`,
-   and you get a merge/PR offer.
+   scoreboard (profile, gate failures, highest rung used) to `journal/`
+   and appends a row to `.ai_context/scoreboard.csv`. Gate counts come
+   from the hook-written `gatelog`, not from the model's memory. You get
+   a merge/PR offer.
 
 **Unattended mode:** `/task --auto <description>` — intent calls are
 recorded as `[ASSUMED: ...]` entries in spec.md instead of asked, and the
@@ -103,7 +108,10 @@ outward-facing actions still require confirmation.
 
 **Interrupted?** Reopen the session — the hook re-injects the task's
 `plan.md` + `lessons.md`, and the run resumes from the last passed gate.
-Compaction mid-run is survivable for the same reason.
+Compaction mid-run is survivable for the same reason. Invoking `/task`
+while a task is active **resumes** it (finds the `[in_progress]` milestone
+and re-enters the loop — never re-plans); abandoning is deleting
+`.ai_context/tasks/CURRENT`.
 
 ## 5. Profiles
 
@@ -125,10 +133,12 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 ```
 
 Add-only: missing mechanism files are copied in, anything that exists is
-never overwritten — instead you get suggestions for the manual merges
-(typically the `"Stop"` hook block in `settings.json` and the task
-injection in `session-start.sh`, if those predate v3). Full guide:
-[MIGRATION.md](./MIGRATION.md).
+never overwritten — instead you get suggestions for the manual merges.
+Two extra modes: `--update-stock` also advances mechanism files that are
+provably unmodified stock copies (content matches a historical template
+version; customized files are still never touched), and `--adopt` onboards
+an existing non-starter repo (creates the skeleton, then `/setup` drafts
+the brief from the code). Full guide: [MIGRATION.md](./MIGRATION.md).
 
 ## 7. Troubleshooting
 
@@ -144,6 +154,10 @@ injection in `session-start.sh`, if those predate v3). Full guide:
   injection at the top of a fresh session.
 - **Stale / oversize `state.md` warnings** — run `/wrap`; it refreshes the
   date and archives resolved sections.
+- **Verify commands run unprompted.** The gate executes the active
+  milestone's `- verify:` at every turn-end without permission prompts —
+  keep them read-only and fast (< 5 min). The plan-critic rejects
+  destructive ones; plan review is your checkpoint.
 
 ## 8. Cheat sheet
 
@@ -154,7 +168,10 @@ injection in `session-start.sh`, if those predate v3). Full guide:
 | Big task | `/task <description>` |
 | Big task, unattended | `/task --auto <description>` |
 | Abandon a task | delete `.ai_context/tasks/CURRENT` |
+| Set up / re-draft the project brief | `/setup` |
 | Upgrade a project | `./sync-project.sh <path>` |
+| Upgrade + advance stock files | `./sync-project.sh --update-stock <path>` |
+| Onboard an existing repo | `./sync-project.sh --adopt <path>` |
 | Update global layer | `./bootstrap-machine.sh --force-global` |
 
 First recommended run: pick a real mid-size task, use the `mixed` profile,

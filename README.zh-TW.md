@@ -80,6 +80,9 @@ v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才
 | 「會老化的事實要標日期」(S3) | session-start hook 偵測 state.md 過期並警告 |
 | 「驗證過才算完成」 | **Stop gate**:`/task` 進行中時,當前里程碑的 verify 指令不通過,回合就結束不了;外加 CLAUDE.md 的 **Verify** + **Definition of done** 契約、可選的 `lint.sh` 即時回饋 |
 | 「長任務會衰變:漂移、無聲錯誤、狀態流失」 | `/task` harness —— 帶可執行閘門的里程碑計畫、每個里程碑全新 executor context、對抗式 verifier、升級梯、過關即 commit |
+| 「新專案的第一個 session 要完成設置」 | session-start 的 `SETUP REQUIRED` 指令 + Stop gate 擋住第一次回合結束(每 session 一次)直到 CLAUDE.md 起草完成;協定本體在 `/setup` skill |
+| 「記分板數字必須是真的」 | Stop gate 每次執行寫入 `gatelog`;`/wrap` 彙總成 `scoreboard.csv` |
+| 「沒跑 /wrap 就死掉的 session」 | session-start 偵測 commit 比 `state.md` 新時發出警告 |
 
 ---
 
@@ -185,7 +188,8 @@ claude-starter/
 │   │                           executor、verifier、reframer
 │   └── skills/
 │       ├── wrap/SKILL.md       /wrap —— session 收尾記憶寫回
-│       └── task/SKILL.md       /task —— 長程里程碑 harness
+│       ├── task/SKILL.md       /task —— 長程里程碑 harness
+│       └── setup/SKILL.md      /setup —— 第一次 session 的出生協定
 ├── .ai_context/                第 3 層(schema v2)
 ├── .pre-commit-config.yaml     H1 密鑰掃描 + S7 大小上限
 ├── scripts/                    pre-commit 輔助腳本(專案保留)
