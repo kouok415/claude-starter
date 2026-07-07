@@ -57,12 +57,20 @@ if [ -f "$CTX/state.md" ]; then
   if [ "$size" -gt 5120 ]; then
     printf 'WARNING: state.md is %s bytes (cap 5120, S7) — archive resolved sections to journal/ and trim.\n' "$size"
   fi
+
+  # --- Unwrapped session? Commits newer than state.md's Last updated ---
+  if [ -n "$lu" ] && [ -d "$ROOT/.git" ]; then
+    last_commit="$(git -C "$ROOT" log -1 --format=%cs 2>/dev/null || true)"
+    if [ -n "$last_commit" ] && [[ "$last_commit" > "$lu" ]]; then
+      printf 'WARNING: latest commit (%s) is newer than state.md (%s) — the previous session may have ended without /wrap. Reconcile from git log/diff, then refresh state.md.\n' "$last_commit" "$lu"
+    fi
+  fi
 fi
 
-# --- CLAUDE.md still a template? Nudge a draft-and-review ---
+# --- Newborn project? Instruct the first-session /setup protocol ---
 if [ -f "$ROOT/CLAUDE.md" ] && \
    grep -qE '<e\.g\.,|<command>|Replace before first commit' "$ROOT/CLAUDE.md"; then
-  printf 'WARNING: CLAUDE.md still contains template placeholders — draft Stack/Commands/Verify/DoD from the codebase (/init helps) and have the human review the diff; if the project has no code yet, interview the human instead.\n'
+  printf 'SETUP REQUIRED: this project has not been set up (CLAUDE.md is still a template). In your FIRST reply, run the /setup protocol — interview, scaffold, draft CLAUDE.md/README/state.md for human review — before or alongside the current request. The Stop gate blocks the first turn-end until the draft lands.\n'
 fi
 
 exit 0
