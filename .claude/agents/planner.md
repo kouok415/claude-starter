@@ -22,6 +22,9 @@ Plan requirements:
 - Every milestone carries an executable `- verify:` command that **fails
   today and passes when the milestone is done**. A milestone whose gate
   cannot fail is not a milestone — it's a hope.
+- Research/analysis work verifies via artifact checks (`test -s report.md`,
+  section/row counts, schema scripts) — same executability bar, different
+  target.
 - Size: one fresh executor context finishes a milestone within the
   tool-call budget stated in your prompt (profile-dependent — the /task
   orchestrator passes it; if absent, assume ≤15). Prefer more small

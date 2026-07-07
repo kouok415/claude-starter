@@ -24,6 +24,10 @@ Checklist, per candidate:
    invalidates the plan — and is it cheap to test up front?
 6. **Reversibility.** Any milestone that, half-done, leaves the tree broken
    with no checkpoint to retreat to?
+7. **Gate safety & cost.** Verify commands run unprompted at every gate:
+   reject destructive or stateful ops (rm, git push, deploys, paid API
+   calls) and anything that can't finish well under 5 minutes (the gate
+   kills at 540s).
 
 Output:
 

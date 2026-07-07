@@ -56,7 +56,7 @@ table. Keep *factual* reference (API contracts, glossaries) in `knowledge/`.
 | `decisions.md` | append-only; never edit existing entries |
 | `knowledge/*.md` | accumulate; edit factual updates, don't rewrite history |
 | `journal/*.md` | append-only per file; new file per event; first line = one-sentence summary |
-| `tasks/<slug>/` | `spec.md` frozen once the plan is approved; `plan.md` statuses updated at every gate; `lessons.md` append-only |
+| `tasks/<slug>/` | `spec.md` frozen once the plan is approved (reframer rung-4 patches are the exception — note them in `lessons.md`); `plan.md` statuses updated at every gate; `lessons.md` append-only; `gatelog` hook-written, never hand-edited |
 | `private/*` | free-form; gitignored |
 
 Before writing to any file, read its top preamble for format and `do-not`
@@ -93,13 +93,14 @@ Where possible, the rules above are enforced mechanically (v2 projects):
 
 | Mechanism | Enforces |
 |---|---|
-| `.claude/hooks/session-start.sh` | reading protocol; warns on stale `state.md` (S3), >5 KB (S7), and placeholder CLAUDE.md |
+| `.claude/hooks/session-start.sh` | reading protocol; warns on stale `state.md` (S3), >5 KB (S7), unwrapped previous sessions; instructs `/setup` on newborn projects |
 | `/wrap` skill (`.claude/skills/wrap/`) | write-back of state / ADRs / journal |
 | `.claude/hooks/post-edit.sh` + `lint.sh` | instant lint feedback after every edit |
 | `.pre-commit-config.yaml` | H1 secret scan (gitleaks) + S7 size cap at commit time |
 | `.claude/settings.json` permissions | denies reading `.env*` and key files (H1) |
-| `.claude/hooks/stop-gate.sh` | milestone gate — a turn cannot end while the active `/task` milestone's verify fails |
+| `.claude/hooks/stop-gate.sh` | setup gate (first turn-end blocked until CLAUDE.md is drafted; once per session) + milestone gate (a turn cannot end while the active `/task` milestone's verify fails); writes `gatelog` |
 | `/task` skill (`.claude/skills/task/`) | long-horizon loop: plan fusion → fresh-context execution → adversarial verify → escalation ladder |
+| `/setup` skill (`.claude/skills/setup/`) | first-session protocol: interview → scaffold → draft brief → mechanism check |
 
 Prose is the spec; mechanisms are the guarantee. If you change a rule,
 change its mechanism too.
@@ -119,6 +120,8 @@ change its mechanism too.
 | `journal/YYYY-MM-DD-*.md` | append-only per file | Per-event records: debates, retros, post-mortems, findings |
 | `tasks/CURRENT` | overwrite | Slug of the active `/task`; absent when no task is running |
 | `tasks/<slug>/` | per task | Execution state: `spec.md`, `plan.md`, `lessons.md`; scoreboard archived to `journal/` by /wrap on completion |
+| `tasks/<slug>/gatelog` | append-only (hook-written) | Mechanical record of every gate run: timestamp, milestone, PASS/FAIL |
+| `scoreboard.csv` | append-only | One row per completed `/task` — the harness A/B dataset |
 | `private/*` | free-form | Sensitive scratch, gitignored, not committed |
 
 **Files in `knowledge/` are created on-demand**, not upfront. Don't create

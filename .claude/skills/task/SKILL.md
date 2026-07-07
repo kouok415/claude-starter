@@ -13,6 +13,12 @@ current milestone's verify command at end-of-turn.
 
 ## 0 · Intake
 
+0. **Resume, not restart.** If `.ai_context/tasks/CURRENT` already names a
+   task, this is a resume: read that task's `plan.md` + `lessons.md`, find
+   the `[in_progress]` milestone, and re-enter the milestone loop (§3) —
+   do NOT re-interview or re-plan. If the user is clearly asking for a
+   *different* task, ask whether to finish, abandon (delete `CURRENT`),
+   or defer the new one. One active task at a time.
 1. Derive a short kebab-case `<slug>` from the request.
 2. If scope, constraints, or "what does done mean" are genuinely ambiguous,
    ask now — never mid-run. **Autonomous mode** (`--auto`, or the user says
@@ -22,9 +28,11 @@ current milestone's verify command at end-of-turn.
    record each as an `[ASSUMED: ...]` line in spec.md's Assumptions
    section. Destructive or outward-facing actions still require
    confirmation regardless of mode.
-3. Create `.ai_context/tasks/<slug>/`, write the slug into
-   `.ai_context/tasks/CURRENT`, and create a branch `task/<slug>`
-   (never run a task on main).
+3. **Start from a clean tree** — uncommitted changes would get entangled
+   with the first checkpoint; commit or stash them first (ask if it's
+   unclear whose they are). Then create `.ai_context/tasks/<slug>/`, write
+   the slug into `.ai_context/tasks/CURRENT`, and create a branch
+   `task/<slug>` (never run a task on main).
 4. **Pick the profile** (see § Profiles below): use the `Task profile:`
    override from the project's CLAUDE.md if present, otherwise detect your
    own model tier. Record it in the `plan.md` header — every later knob
@@ -87,6 +95,17 @@ confirm it — in autonomous mode, propose it and record it under
     - verify: `<command>`
     - risk: high
 
+**Non-code work (research / analysis kinds):** verify commands check the
+artifact, not a test suite — existence, structure, coverage:
+
+    - verify: `test -s reports/h2-outlook.md`
+    - verify: `test "$(grep -c '^## ' reports/x.md)" -ge 6`
+    - verify: `python scripts/check_csv.py data/out.csv`
+
+Only when done-ness truly cannot be expressed as a command, let a
+verifier-agent spot-check stand in as the gate — but try the artifact
+check first.
+
 ## 3 · Milestone loop
 
 For each milestone in order:
@@ -114,6 +133,20 @@ a red gate cannot be narrated over — don't try, fix it.
 | 3 | 3 × `executor` in parallel **worktrees**, each declares its strategy in one sentence first — reject non-distinct strategies before they run; `verifier` picks the winner |
 | 4 | `reframer` | all failure evidence; it re-cuts the milestone / patches the spec — then back to rung 1 on the revised problem |
 | exhausted | **stop** | append `lessons.md`, write a `journal/` entry, report honestly (three-strikes rule) |
+
+**Rung-3 worktree protocol** — subagents share your working directory, so
+isolation must be explicit:
+
+1. From the task branch: `git worktree add ../<repo>-r3-<n> -b
+   task/<slug>-r3-<n>` for n = 1..3.
+2. Spawn each executor WITH its worktree path; all of its file operations
+   and its verify run happen inside that path only.
+3. `verifier` runs the milestone verify in each worktree and picks the
+   winner (tie-break: smallest diff).
+4. Merge the winning branch into `task/<slug>` (squash is fine), then
+   `git worktree remove` all three and delete the `-r3-*` branches.
+
+Never let rung-3 executors loose in the shared tree.
 
 After every failed rung: append what-was-tried / why-it-failed to
 `lessons.md` — the next fresh context must not re-learn it. On
@@ -175,6 +208,8 @@ under the new profile, update the `plan.md` header, note the switch in
   transition. The SessionStart hook re-injects plan + lessons after /clear
   and after compaction — stale statuses poison the re-anchor.
 - Scoreboard (goes in the journal entry on completion): profile, milestones
-  total, gate failures, highest ladder rung used, human interventions. This
-  is the data that says whether the harness earns its keep — and, across
-  tasks, which profile earns it for which kind of work.
+  total, gate failures, highest ladder rung used, human interventions. Gate
+  outcomes are logged mechanically to `tasks/<slug>/gatelog` by the Stop
+  hook — count from the file, never from memory. This is the data that says
+  whether the harness earns its keep — and, across tasks, which profile
+  earns it for which kind of work.
