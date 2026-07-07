@@ -162,9 +162,18 @@ It converts "one heroic context" into a gated pipeline:
 
 State lives in `.ai_context/tasks/<slug>/` (`spec.md`, `plan.md`,
 `lessons.md`) and is re-injected after `/clear` and compaction, so the run
-survives context loss. On completion `/wrap` archives a scoreboard (gates
-failed, highest rung used) to `journal/` — the data for judging whether the
-harness earns its keep.
+survives context loss. On completion `/wrap` archives a scoreboard (profile,
+gates failed, highest rung used) to `journal/` — the data for judging
+whether the harness earns its keep.
+
+**Profiles.** The protocol is model-tier aware: the reliability core (gate,
+state, verification) is always fully on, while milestone size, planner
+fan-out, and the escalation path scale with the tier — detected at intake,
+frozen into the task's `plan.md`, overridable with `Task profile:` in the
+project CLAUDE.md. A `mixed` setup (strong model orchestrates, cheaper tier
+executes) is one frontmatter line: `model: opus` in
+`.claude/agents/executor.md`. Mid-task model switches are never silent —
+remaining milestones get re-cut explicitly.
 
 ---
 

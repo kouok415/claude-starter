@@ -19,6 +19,13 @@ current milestone's verify command at end-of-turn.
 3. Create `.ai_context/tasks/<slug>/`, write the slug into
    `.ai_context/tasks/CURRENT`, and create a branch `task/<slug>`
    (never run a task on main).
+4. **Pick the profile** (see § Profiles below): use the `Task profile:`
+   override from the project's CLAUDE.md if present, otherwise detect your
+   own model tier. Record it in the `plan.md` header — every later knob
+   reads the recorded value, never the live model. If you are fable-class
+   and `.claude/agents/executor.md` still says `model: inherit`, suggest
+   the `mixed` setup once (pin the executor to `opus` for markedly cheaper
+   execution), then proceed with whatever the user chooses.
 
 ## 1 · Spec — acceptance criteria must be executable
 
@@ -43,21 +50,23 @@ confirm it.
 
 ## 2 · Plan fusion
 
-1. Spawn **3 `planner` subagents in parallel** on the same spec, each with a
-   different assigned lens — e.g. minimal-change / risk-first /
-   redesign-first (adapt lenses to the task).
+1. Spawn `planner` subagents per the profile's fan-out — `opus-tier`:
+   **3 in parallel** on the same spec, each with a different assigned lens,
+   e.g. minimal-change / risk-first / redesign-first (adapt lenses to the
+   task); `fable-tier` / `mixed`: 1 planner is enough.
 2. Spawn **`plan-critic`** over all three candidates. It attacks; it never
    fixes.
 3. **You synthesize** the final `plan.md`: take the soundest skeleton, graft
    the best milestones from the others, resolve every blocker/major finding.
-4. Milestone sizing: one fresh executor context should finish a milestone in
-   roughly ≤15 tool calls. Split anything bigger — prefer 12 small
-   milestones over 6 large ones (gate overhead is linear, error compounding
-   is exponential).
+4. Milestone sizing comes from the profile — pass the tool-call budget to
+   the planners when you spawn them. One fresh executor context should
+   finish a milestone within that budget; split anything bigger (gate
+   overhead is linear, error compounding is exponential).
 
 `plan.md` format — **the Stop gate parses this; keep it exact**:
 
     # Plan: <title>
+    <!-- profile: opus-tier | fable-tier | mixed -->
     <!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
 
     ## M1: <milestone title> [pending]
@@ -79,9 +88,9 @@ For each milestone in order:
 4. **PASS** → mark `[done]`, commit (`feat(<slug>): M<n> <title>`), update
    `state.md` Now/Next in two lines, move on.
 5. **FAIL** → escalation ladder below.
-6. Every 3rd milestone, spawn `verifier` in **drift-check mode**: compare
-   the accumulated diff against `spec.md` — still pointed at the acceptance
-   criteria? any quiet scope creep?
+6. At the profile's drift cadence, spawn `verifier` in **drift-check
+   mode**: compare the accumulated diff against `spec.md` — still pointed
+   at the acceptance criteria? any quiet scope creep?
 
 The Stop gate re-runs the in_progress verify whenever you try to end a turn;
 a red gate cannot be narrated over — don't try, fix it.
@@ -97,9 +106,12 @@ a red gate cannot be narrated over — don't try, fix it.
 | exhausted | **stop** | append `lessons.md`, write a `journal/` entry, report honestly (three-strikes rule) |
 
 After every failed rung: append what-was-tried / why-it-failed to
-`lessons.md` — the next fresh context must not re-learn it. If the
-`planner` / `plan-critic` / `reframer` agents are not installed, collapse
-rungs 3–4 into stop-and-report.
+`lessons.md` — the next fresh context must not re-learn it. On
+`fable-tier`, skip rung 3 and go straight to `reframer`: two failed,
+genuinely distinct approaches from a strong model is evidence the problem
+is mis-posed — diagnose, don't resample. If the `planner` / `plan-critic`
+/ `reframer` agents are not installed, collapse rungs 3–4 into
+stop-and-report.
 
 ## 5 · Completion
 
@@ -110,12 +122,46 @@ rungs 3–4 into stop-and-report.
    (keep the task dir), run `/wrap` (it archives the scoreboard to
    `journal/`), then offer to merge `task/<slug>` or open a PR.
 
+## Profiles — one protocol, tiered knobs
+
+The harness core is model-independent and always fully on: stop gate,
+external state, fresh-context verification, executable acceptance criteria,
+lessons, scoreboard. Only the knobs below scale with the model tier —
+they compensate for capability, so stronger models need less of them.
+
+Resolution order: `Task profile:` in the project's CLAUDE.md → otherwise
+detect the orchestrator's own model tier at intake. Record the result in
+the `plan.md` header; downstream reads the recorded profile, never the
+live model.
+
+| Knob | `opus-tier` | `fable-tier` |
+|---|---|---|
+| Milestone size (per fresh executor context) | ≤15 tool calls | 30–50 tool calls |
+| Planner fan-out | 3 lenses + `plan-critic` | 1 + `plan-critic` |
+| Executor spawn prompt | milestone + a suggested approach | milestone + goal + constraints only — no prescribed steps |
+| Drift-check cadence | every 3rd milestone | every 5th, or after `risk: high` milestones only |
+| Escalation ladder | 1 → 2 → 3 → 4 | 1 → 2 → 4 |
+
+`mixed` — recommended where both tiers are available: pin `model: opus` in
+`.claude/agents/executor.md` and run the session on a fable-class model.
+Judgment-dense, low-token stages (plan synthesis, critique, reframing,
+final panel) get the strong model; token-heavy execution runs at the
+cheaper tier. Use `opus-tier` milestone sizing (the executor does the
+work); planner fan-out may drop to 1 + critic (a strong model plans).
+
+**Mid-task model switches are never silent.** The plan's granularity was
+cut for the recorded profile. If the session model changes mid-task: keep
+completed milestones, spawn `planner` to re-cut only the remaining ones
+under the new profile, update the `plan.md` header, note the switch in
+`lessons.md`.
+
 ## Rules
 
 - Never claim done while a verify is red — the gate blocks it anyway.
 - `plan.md` statuses are the compaction anchor: update them at every
   transition. The SessionStart hook re-injects plan + lessons after /clear
   and after compaction — stale statuses poison the re-anchor.
-- Scoreboard (goes in the journal entry on completion): milestones total,
-  gate failures, highest ladder rung used, human interventions. This is the
-  data that says whether the harness earns its keep.
+- Scoreboard (goes in the journal entry on completion): profile, milestones
+  total, gate failures, highest ladder rung used, human interventions. This
+  is the data that says whether the harness earns its keep — and, across
+  tasks, which profile earns it for which kind of work.

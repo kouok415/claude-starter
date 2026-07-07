@@ -17,7 +17,8 @@ Checklist, per candidate:
 2. **Coverage.** Map every acceptance criterion in `spec.md` to a milestone.
    An AC owned by no milestone is a guaranteed end-of-run surprise.
 3. **Order & dependencies.** Anything consumed before it is produced?
-4. **Size.** Any milestone a fresh context cannot finish in ≈15 tool calls?
+4. **Size.** Any milestone a fresh context cannot finish within the
+   profile's tool-call budget (stated in your prompt; assume ≤15 if absent)?
 5. **Assumptions.** Hunt `[ASSUMPTION]` tags and the unstated ones (env,
    versions, data availability, service behavior). Which, if false,
    invalidates the plan — and is it cheap to test up front?

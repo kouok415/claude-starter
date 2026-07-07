@@ -30,8 +30,8 @@ preamble before writing to it):
    Skip routine sessions.
 
 4. **Active `/task`** — if `.ai_context/tasks/CURRENT` exists:
-   - Task finished: write its journal entry with the scoreboard (milestones
-     total, gate failures, highest escalation rung used, human
+   - Task finished: write its journal entry with the scoreboard (profile,
+     milestones total, gate failures, highest escalation rung used, human
      interventions), then delete `CURRENT` (keep the task directory).
    - Task unfinished: leave `CURRENT` in place; make sure `state.md`'s
      Now/Next points at the `[in_progress]` milestone so the next session

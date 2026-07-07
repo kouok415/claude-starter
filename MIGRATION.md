@@ -26,6 +26,7 @@ pipelines instead of one heroic context.
 | Plans came from a single attempt | Plan fusion: 3 planner lenses + red-team critic + synthesis | Decorrelated candidates + selection beat one-shot planning |
 | Stuck = retry harder, or hand back to the human | Escalation ladder: different approach → 3 divergent worktree attempts → reframer (change the problem, not the attempt) → stop | Mechanizes the global three-strikes rule |
 | No agents shipped | Functional `/task` crew in `.claude/agents/` (planner, plan-critic, executor, verifier, reframer) | Functional pipeline stages, not role personas; inert unless `/task` runs |
+| — | Tier profiles: `opus-tier` / `fable-tier` / `mixed`, detected at intake and frozen per task | One protocol serves both model tiers — reliability core always on, capability-substitution knobs scale |
 
 ### Upgrade steps for an existing v2 project
 

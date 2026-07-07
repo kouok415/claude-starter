@@ -22,8 +22,10 @@ Plan requirements:
 - Every milestone carries an executable `- verify:` command that **fails
   today and passes when the milestone is done**. A milestone whose gate
   cannot fail is not a milestone — it's a hope.
-- Size: one fresh executor context finishes a milestone in ≈≤15 tool calls.
-  Prefer more small milestones over fewer large ones.
+- Size: one fresh executor context finishes a milestone within the
+  tool-call budget stated in your prompt (profile-dependent — the /task
+  orchestrator passes it; if absent, assume ≤15). Prefer more small
+  milestones over fewer large ones.
 - Order strictly by dependency; nothing may consume what a later milestone
   produces.
 - Mark risky or uncertain milestones `risk: high` (the loop may parallelize
