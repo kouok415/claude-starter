@@ -42,6 +42,14 @@ copy_if_missing .claude/hooks/session-start.sh
 copy_if_missing .claude/hooks/post-edit.sh
 copy_if_missing .claude/hooks/lint.sh.example
 copy_if_missing .claude/skills/wrap/SKILL.md
+copy_if_missing .claude/hooks/stop-gate.sh
+copy_if_missing .claude/skills/task/SKILL.md
+copy_if_missing .claude/agents/planner.md
+copy_if_missing .claude/agents/plan-critic.md
+copy_if_missing .claude/agents/executor.md
+copy_if_missing .claude/agents/verifier.md
+copy_if_missing .claude/agents/reframer.md
+copy_if_missing .ai_context/tasks/.gitkeep
 copy_if_missing scripts/check-state-size.sh
 copy_if_missing scripts/precommit-gitleaks.sh
 copy_if_missing .pre-commit-config.yaml
@@ -76,6 +84,16 @@ fi
 
 if [ -f "$TARGET/.pre-commit-config.yaml" ] && [ ! -f "$TARGET/.git/hooks/pre-commit" ]; then
   suggest+=("pre-commit config present but not installed — run: (cd \"$TARGET\" && pre-commit install)")
+fi
+
+# v3 harness: these two files predate v3 in older projects, and sync never
+# overwrites — so wiring changes are surfaced as suggestions instead.
+if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'stop-gate\.sh' "$TARGET/.claude/settings.json"; then
+  suggest+=("settings.json has no Stop-gate wiring — merge the \"Stop\" hook block from the template's .claude/settings.json")
+fi
+
+if [ -f "$TARGET/.claude/hooks/session-start.sh" ] && ! grep -q 'tasks/CURRENT' "$TARGET/.claude/hooks/session-start.sh"; then
+  suggest+=("session-start.sh predates the /task harness — diff against the template to add active-task plan injection")
 fi
 
 # --- Summary ------------------------------------------------------------------------

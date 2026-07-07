@@ -20,7 +20,9 @@ When you work with Claude across many sessions, three things go wrong:
 `claude-starter` fixes all three, designed once and reused: three layers of
 memory, backed by a fourth layer of *mechanisms* — hooks, permission rules,
 pre-commit checks — so the protocol survives long sessions, compaction, and
-human forgetfulness.
+human forgetfulness. A fifth layer turns big jobs into gated milestone runs:
+`/task` plans, executes, and verifies long-horizon work that a single
+context could not reliably survive.
 
 ---
 
@@ -54,6 +56,12 @@ human forgetfulness.
 │   Hooks, skills, permission rules that ENFORCE the       │
 │   three layers above instead of hoping they're followed. │
 └──────────────────────────────────────────────────────────┘
+                            ▼
+┌──────────────────────────────────────────────────────────┐
+│ Layer 5 — Execution     /task + stop gate + agents       │
+│   Long-horizon harness: milestone plans, fresh-context   │
+│   executors, adversarial verify, enforced gates.         │
+└──────────────────────────────────────────────────────────┘
 ```
 
 Each layer answers one question:
@@ -62,6 +70,8 @@ Each layer answers one question:
 - **Project:** what is *this project*, and what does *done* mean here?
 - **Memory:** what has *already happened*, and what's *true now*?
 - **Mechanisms:** what holds when nobody is paying attention?
+- **Execution:** how does a job too big for one context get done — and
+  *proven* done?
 
 ## Prose → mechanism
 
@@ -75,7 +85,8 @@ spec; the mechanism is the guarantee.
 | "No secrets in commits" (H1) | gitleaks pre-commit hook + `settings.json` denies reading `.env*` |
 | "state.md stays under 5 KB" (S7) | pre-commit size check + session-start warning |
 | "Time-stamp aging facts" (S3) | session-start hook warns when `state.md` is stale |
-| "Verify before claiming done" | `Verify` command + **Definition of done** contract in CLAUDE.md; optional `lint.sh` post-edit hook gives instant feedback |
+| "Verify before claiming done" | **Stop gate**: on `/task` runs, the active milestone's verify command must pass before a turn may end; plus the `Verify` + **Definition of done** contract in CLAUDE.md and the optional `lint.sh` post-edit hook |
+| "Long tasks decay — drift, silent errors, lost state" | `/task` harness: milestone plan with executable gates, fresh executor context per milestone, adversarial verifier, escalation ladder, commit per gate |
 
 ---
 
@@ -117,7 +128,8 @@ etc.), installs pre-commit hooks if available, commits and pushes.
 
 Open Claude in the project. The SessionStart hook injects `INDEX.md` +
 `state.md` automatically. Work. Run `/wrap` when you stop — it writes
-state, decisions, and journal entries back.
+state, decisions, and journal entries back. Kick off anything big with
+`/task <description>` — see **Long-horizon tasks** below.
 
 ### 5. Upgrading projects spawned earlier
 
@@ -127,6 +139,32 @@ state, decisions, and journal entries back.
 
 Adds missing mechanism files (never overwrites), and prints suggestions for
 the rest. See [MIGRATION.md](./MIGRATION.md).
+
+---
+
+## Long-horizon tasks — `/task`
+
+Memory keeps *sessions* continuous; `/task` keeps a single *big run* alive.
+It converts "one heroic context" into a gated pipeline:
+
+1. **Spec** — acceptance criteria as executable checks, or it doesn't start.
+2. **Plan fusion** — 3 `planner` agents (different lenses) → red-team
+   `plan-critic` → a synthesized `plan.md` of small milestones, each with a
+   `verify:` command.
+3. **Milestone loop** — fresh `executor` context per milestone, adversarial
+   `verifier` after it, a commit per passed gate, drift check every third
+   milestone.
+4. **Stop gate** — `stop-gate.sh` re-runs the active milestone's verify when
+   the turn tries to end; a red gate means the turn *cannot* end. The
+   Definition of done stops being prose.
+5. **Escalation** — retry differently → 3 divergent worktree attempts →
+   `reframer` rewrites the problem → stop and report (three strikes).
+
+State lives in `.ai_context/tasks/<slug>/` (`spec.md`, `plan.md`,
+`lessons.md`) and is re-injected after `/clear` and compaction, so the run
+survives context loss. On completion `/wrap` archives a scoreboard (gates
+failed, highest rung used) to `journal/` — the data for judging whether the
+harness earns its keep.
 
 ---
 
@@ -143,10 +181,15 @@ claude-starter/
 ├── .claude/
 │   ├── settings.json           Hooks wiring + permission rules (tracked)
 │   ├── hooks/
-│   │   ├── session-start.sh    Injects INDEX+state; stale/size warnings
+│   │   ├── session-start.sh    Injects INDEX+state (+ active task plan)
 │   │   ├── post-edit.sh        Instant lint feedback (delegates to lint.sh)
+│   │   ├── stop-gate.sh        /task milestone gate — no stop on red verify
 │   │   └── lint.sh.example     Fill in your linter after language init
-│   └── skills/wrap/SKILL.md    /wrap — end-of-session memory write-back
+│   ├── agents/                 /task crew: planner, plan-critic, executor,
+│   │                           verifier, reframer (fresh-context stages)
+│   └── skills/
+│       ├── wrap/SKILL.md       /wrap — end-of-session memory write-back
+│       └── task/SKILL.md       /task — long-horizon milestone harness
 ├── .ai_context/                Layer 3 (schema v2) — INDEX, state, decisions…
 ├── .pre-commit-config.yaml     H1 secret scan + S7 size cap
 ├── scripts/                    pre-commit helper scripts (kept in projects)
@@ -155,7 +198,7 @@ claude-starter/
 ├── start_project.sh            Spawner (validates, personalizes, cleans up)
 ├── bootstrap-machine.sh        Machine setup + global-layer updates
 ├── sync-project.sh             Upgrade existing projects (add-only, safe)
-└── MIGRATION.md                v1 → v2, and older layouts → this one
+└── MIGRATION.md                v2 → v3, v1 → v2, and older layouts
 ```
 
 ---
@@ -181,8 +224,10 @@ S7 `state.md` ≤ 5 KB. *(S5–S7 were L2–L4 in v1.)*
 
 ### What we deliberately don't do
 
-- **No role personas (PM / Backend / QA).** If you need task-scoped agents,
-  define them in `.claude/agents/` per project — opt-in, not baked in.
+- **No role personas (PM / Backend / QA).** The agents that do ship are
+  *functional stages* of the `/task` loop (plan, critique, execute, verify,
+  reframe) — inert unless `/task` runs. Org-chart personas stay out; add
+  further task-scoped agents per project if you need them.
 - **No command router in CLAUDE.md.** Slash commands belong to the skill
   system (`/wrap` is one).
 - **No pressure-prompting.** Verification loops beat exhortation; the DoD

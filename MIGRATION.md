@@ -1,15 +1,56 @@
 # Migration guide
 
-Two migrations live here:
+Three migrations live here:
 
-- **[A. claude-starter v1 → v2](#a-claude-starter-v1--v2)** — projects
+- **[A. claude-starter v2 → v3](#a-claude-starter-v2--v3)** — add the
+  long-horizon execution harness (`/task`, stop gate, agent crew) to
+  projects spawned from v2.
+- **[B. claude-starter v1 → v2](#b-claude-starter-v1--v2)** — projects
   spawned from this template before the mechanisms layer existed.
-- **[B. multi-agent-dev-team → claude-starter](#b-from-multi-agent-dev-team-to-claude-starter)**
+- **[C. multi-agent-dev-team → claude-starter](#c-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
 
 ---
 
-## A. claude-starter v1 → v2
+## A. claude-starter v2 → v3
+
+v3 adds the execution harness: long-horizon tasks run as gated milestone
+pipelines instead of one heroic context.
+
+### What changed in v3, and why
+
+| v2 | v3 | Reason |
+|---|---|---|
+| "Verify before claiming done" was a CLAUDE.md contract | **Stop gate** (`stop-gate.sh`): on `/task` runs, the active milestone's verify command must pass before a turn may end | The DoD was the one v2 rule with prose but no mechanism |
+| Long tasks ran in one context until it drifted | `/task`: milestone plan → fresh executor context per milestone → adversarial verifier → commit per gate; plan re-injected after compaction | Error compounding is exponential; gate overhead is linear |
+| Plans came from a single attempt | Plan fusion: 3 planner lenses + red-team critic + synthesis | Decorrelated candidates + selection beat one-shot planning |
+| Stuck = retry harder, or hand back to the human | Escalation ladder: different approach → 3 divergent worktree attempts → reframer (change the problem, not the attempt) → stop | Mechanizes the global three-strikes rule |
+| No agents shipped | Functional `/task` crew in `.claude/agents/` (planner, plan-critic, executor, verifier, reframer) | Functional pipeline stages, not role personas; inert unless `/task` runs |
+
+### Upgrade steps for an existing v2 project
+
+1. **Add the harness files** (add-only, never overwrites):
+
+   ```bash
+   cd <claude-starter>
+   ./sync-project.sh <path-to-project>
+   ```
+
+2. **Apply its suggestions** — for v2 projects that's typically two manual
+   merges, because both files already exist and sync never overwrites:
+   - merge the `"Stop"` hook block from the template's
+     `.claude/settings.json` into yours;
+   - diff `.claude/hooks/session-start.sh` against the template's and add
+     the active-task plan injection block.
+
+3. **Add the protocol to the project brief** — copy the "Long-horizon
+   tasks" section from `templates/CLAUDE.md.code` into your `CLAUDE.md`.
+
+4. Commit: `chore(context): upgrade to claude-starter v3 harness`
+
+---
+
+## B. claude-starter v1 → v2
 
 ### What changed in v2, and why
 
@@ -72,7 +113,7 @@ Two migrations live here:
 
 ---
 
-## B. From multi-agent-dev-team to claude-starter
+## C. From multi-agent-dev-team to claude-starter
 
 If you have projects using the previous PM/BE/FE/QA + ECC + Discord layout,
 this guide walks through migrating them to this architecture.
