@@ -22,6 +22,7 @@ file="$(printf '%s' "$payload" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]
 if out="$("$LINT" "$file" 2>&1)"; then
   exit 0
 else
-  printf '%s\n' "$out" >&2
+  # Bounded: a catastrophic lint run must not flood the context window.
+  printf '%s\n' "$out" | tail -n 40 >&2
   exit 2
 fi

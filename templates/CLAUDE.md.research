@@ -1,5 +1,8 @@
 # {{PROJECT_NAME}} — research project
 
+<!-- claude-starter: UNCONFIGURED — the first session must run /setup;
+     drafting CLAUDE.md deletes this sentinel line (the setup gate keys on it). -->
+
 <!-- One paragraph: the research question, why it matters, what a good
      answer enables. Replace before first commit. -->
 

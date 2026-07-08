@@ -13,6 +13,10 @@
 # Claude session caches (if any tool drops these)
 .claude/cache/
 
+# Stop-gate PASS-cache — runtime state; MUST stay ignored (gitignoring it
+# keeps it out of its own change-fingerprint).
+.ai_context/tasks/*/.gate-cache
+
 # Local-only Claude Code settings (machine-specific permissions etc.)
 # .claude/settings.json IS tracked on purpose — it carries shared hooks.
 .claude/settings.local.json
@@ -31,10 +35,13 @@ Thumbs.db
 *.swp
 *.swo
 
-# Env / secrets
+# Env / secrets — any depth, not just repo root
 .env
 .env.local
 .env.*.local
+**/.env
+**/.env.local
+**/.env.*.local
 
 # Append your language-specific ignores (node_modules/, __pycache__/, target/,
 # build/, dist/, etc.) here, or use `gh repo create --gitignore <lang>` to

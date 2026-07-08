@@ -1,5 +1,8 @@
 # {{PROJECT_NAME}} — data analysis project
 
+<!-- claude-starter: UNCONFIGURED — the first session must run /setup;
+     drafting CLAUDE.md deletes this sentinel line (the setup gate keys on it). -->
+
 <!-- One paragraph: what's being analyzed, for what decision, what a useful
      output looks like. Replace before first commit. -->
 

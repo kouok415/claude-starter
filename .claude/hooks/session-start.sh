@@ -18,9 +18,11 @@ CTX="$ROOT/.ai_context"
 # --- Newborn project? Instruct the first-session /setup protocol.
 #     Deliberately BEFORE the .ai_context early-exit: the Stop hook's setup
 #     gate doesn't require .ai_context either, and the two layers of one
-#     mechanism must share a trigger domain.
+#     mechanism must share a trigger domain. Sentinel first (v3.3 templates);
+#     legacy placeholder patterns kept for pre-sentinel projects. Keep this
+#     pattern in sync with stop-gate.sh.
 if [ -f "$ROOT/CLAUDE.md" ] && \
-   grep -qE '<e\.g\.,|<command>|Replace before first commit' "$ROOT/CLAUDE.md"; then
+   grep -qE 'claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit' "$ROOT/CLAUDE.md"; then
   printf 'SETUP REQUIRED: this project has not been set up (CLAUDE.md is still a template). In your FIRST reply, run the /setup protocol — interview, scaffold, draft CLAUDE.md/README/state.md for human review — before or alongside the current request. The Stop gate blocks the first turn-end until the draft lands.\n'
 fi
 
@@ -36,14 +38,38 @@ emit_file() {
 emit_file "$CTX/INDEX.md"
 emit_file "$CTX/state.md"
 
-# --- Active long-horizon task (/task harness): inject its plan + lessons so
-#     re-anchoring after /clear or compaction lands on the latest milestone
-#     checkpoint, not on a start-of-session snapshot.
+# --- Active long-horizon task (/task harness): inject its brief + plan +
+#     lessons so re-anchoring after /clear or compaction lands on the latest
+#     milestone checkpoint, not on a start-of-session snapshot. (This is the
+#     reason /task's resume step does NOT re-read these files.)
 if [ -f "$CTX/tasks/CURRENT" ]; then
   slug="$(tr -d '[:space:]' < "$CTX/tasks/CURRENT")"
-  if [ -n "$slug" ] && [ -d "$CTX/tasks/$slug" ]; then
-    emit_file "$CTX/tasks/$slug/plan.md"
-    emit_file "$CTX/tasks/$slug/lessons.md"
+  tdir="$CTX/tasks/$slug"
+  if [ -n "$slug" ] && [ -d "$tdir" ]; then
+    emit_file "$tdir/brief.md"
+    emit_file "$tdir/plan.md"
+    emit_file "$tdir/lessons.md"
+
+    # Status corruption / resume nudge: [pending] milestones but none
+    # [in_progress] means the Stop gate is silently OFF (a typo'd status
+    # tag does exactly this). Warn — don't block; completion wrap-up is a
+    # legitimate zero-in_progress state.
+    if [ -f "$tdir/plan.md" ] && \
+       grep -q '^## .*\[pending\]' "$tdir/plan.md" && \
+       ! grep -q '^## .*\[in_progress\]' "$tdir/plan.md"; then
+      printf 'WARNING: task %s has [pending] milestones but none [in_progress] — the milestone gate is OFF in this state. Mark the next milestone [in_progress] before working, and check for a status typo.\n' "$slug"
+    fi
+
+    # Size cap (S7 spirit) for the always-injected task files: past 4 KB
+    # they tax every session start and every subagent that reads them.
+    for tf in brief.md lessons.md; do
+      if [ -f "$tdir/$tf" ]; then
+        tsize="$(wc -c < "$tdir/$tf" | tr -d ' ')"
+        if [ "$tsize" -gt 4096 ]; then
+          printf 'WARNING: tasks/%s/%s is %s bytes (cap 4096) — distill it: one line per entry, narratives to journal/.\n' "$slug" "$tf" "$tsize"
+        fi
+      fi
+    done
   fi
 fi
 

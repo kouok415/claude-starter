@@ -36,7 +36,8 @@ the session, don't re-ask — proceed on what they said.
 
 - `CLAUDE.md` — stack, commands, **Verify** (end-to-end proof, not just the
   test suite), **Definition of done** (project-specific bars). Clear every
-  template placeholder.
+  template placeholder AND delete the `claude-starter: UNCONFIGURED`
+  sentinel comment — the setup gate keys on it.
 - `README.md` — from the interview, not boilerplate.
 - `state.md` — Now: "project bootstrapped"; Next steps: the first 1–3 real
   milestones from the interview.
