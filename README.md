@@ -209,6 +209,7 @@ claude-starter/
 ├── .ai_context/                Layer 3 (schema v2) — INDEX, state, decisions…
 ├── .pre-commit-config.yaml     H1 secret scan + S7 size cap
 ├── scripts/                    pre-commit helper scripts (kept in projects)
+├── tests/run.sh                L1+L2 regression suite (runs in CI)
 ├── .mcp.json.example           MCP stub (kept for --kind analysis)
 ├── .github/workflows/lint.yml  CI for this template repo (removed on spawn)
 ├── start_project.sh            Spawner (validates, personalizes, cleans up)

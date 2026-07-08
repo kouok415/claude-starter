@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+#
+# tests/run.sh — claude-starter harness regression suite.
+#
+#   L1: mechanism level  — hooks and sync logic against fixtures
+#   L2: integration level — mechanisms inside a really-spawned project
+#
+# No model calls; safe for CI. Fixtures are spec-faithful (plan.md carries
+# the format comment header — the v3.2 P0 escaped precisely because a
+# fixture omitted it). Exit 0 = all green; SKIPs don't fail the run.
+
+set -uo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GATE="$REPO/.claude/hooks/stop-gate.sh"
+SS="$REPO/.claude/hooks/session-start.sh"
+
+export GIT_AUTHOR_NAME=harness-tests GIT_AUTHOR_EMAIL=tests@local
+export GIT_COMMITTER_NAME=harness-tests GIT_COMMITTER_EMAIL=tests@local
+
+PASS=0; FAIL=0; SKIP=0
+ok()   { PASS=$((PASS+1)); echo "PASS: $*"; }
+no()   { FAIL=$((FAIL+1)); echo "FAIL: $*"; }
+skp()  { SKIP=$((SKIP+1)); echo "SKIP: $*"; }
+ck()   { local want="$1" got="$2"; shift 2; if [ "$want" = "$got" ]; then ok "$*"; else no "$* (want rc=$want got rc=$got)"; fi; }
+
+WORK="$(mktemp -d)"
+cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* ; }
+trap cleanup EXIT
+
+# Spec-faithful plan fixture: format header INCLUDED, one in_progress.
+write_plan() { # $1 = path, $2 = M2 verify command
+  cat > "$1" <<EOF
+# Plan: fixture
+<!-- profile: opus-tier | fable-tier | mixed -->
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: groundwork [done]
+- verify: \`false\`
+- risk: low
+
+## M2: current [in_progress]
+- verify: \`$2\`
+- risk: low
+
+## M3: future [pending]
+- verify: \`false\`
+- risk: high
+EOF
+}
+
+echo "=== L1-1 · stop-gate: setup gate"
+D="$WORK/l11"; mkdir -p "$D/.ai_context"
+printf '# t\n- **Install:** `<command>`\n' > "$D/CLAUDE.md"
+printf '{"session_id": "tsuite-a"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "newborn project blocks first stop"
+printf '{"session_id": "tsuite-a"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "same session yields on second stop"
+printf '{"session_id": "tsuite-b"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "new session re-arms"
+printf '{"stop_hook_active": true, "session_id": "tsuite-c"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "stop_hook_active loop protection wins"
+printf '# t\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+printf '{"session_id": "tsuite-d"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "drafted CLAUDE.md passes forever"
+
+echo "=== L1-2 · stop-gate: milestone gate (spec-faithful plans)"
+D="$WORK/l12"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "green verify passes (format header not miscounted)"
+grep -q "	M2	PASS" "$D/.ai_context/tasks/demo/gatelog" && ok "gatelog PASS row carries milestone id" || no "gatelog PASS row missing/wrong"
+write_plan "$D/.ai_context/tasks/demo/plan.md" 'sh -c "echo boom; exit 1"'
+err=$(printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "red verify blocks"
+echo "$err" | grep -q "boom" && ok "failure output fed back" || no "failure output missing"
+grep -q "	M2	FAIL" "$D/.ai_context/tasks/demo/gatelog" && ok "gatelog FAIL row" || no "gatelog FAIL row missing"
+sed -i.bak 's/## M3: future \[pending\]/## M3: future [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
+err=$(printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "true double in_progress blocks"
+echo "$err" | grep -q '2 milestones' && ok "counts heading lines only (2, not 3)" || no "wrong in_progress count"
+rm -f "$D/.ai_context/tasks/CURRENT"
+printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "no active task => no-op"
+
+echo "=== L1-3 · session-start: injection + warnings"
+D="$WORK/l13"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# n\n- **Dev:** `<command>`\n' > "$D/CLAUDE.md"
+printf 'Last updated: 2026-01-01\nbody\n' > "$D/.ai_context/state.md"
+printf 'idx\n' > "$D/.ai_context/INDEX.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+printf 'lesson-x\n' > "$D/.ai_context/tasks/demo/lessons.md"
+git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm x
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'SETUP REQUIRED' && ok "newborn instruction emitted" || no "newborn instruction missing"
+echo "$out" | grep -q 'INDEX.md ===' && ok "INDEX injected" || no "INDEX missing"
+echo "$out" | grep -q 'lesson-x' && ok "active task plan+lessons injected" || no "task injection missing"
+echo "$out" | grep -q 'days ago' && ok "stale-state warning (S3)" || no "stale warning missing"
+echo "$out" | grep -q 'ended without /wrap' && ok "unwrapped-session warning" || no "unwrapped warning missing"
+D2="$WORK/l13b"; mkdir -p "$D2"
+printf '# n2\n- **Dev:** `<command>`\n' > "$D2/CLAUDE.md"
+out=$(CLAUDE_PROJECT_DIR="$D2" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'SETUP REQUIRED' && ok "newborn instruction without .ai_context (domain matches gate)" || no "newborn instruction gated on .ai_context"
+
+echo "=== L1-4 · sync: --update-stock + --adopt"
+if git -C "$REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
+  skp "update-stock history test (shallow clone — set fetch-depth: 0)"
+else
+  OLD_SHA="$(git -C "$REPO" log --format=%H -- .claude/hooks/stop-gate.sh | tail -1)"
+  D="$WORK/l14"; mkdir -p "$D/.ai_context" "$D/.claude/hooks"
+  cp "$REPO/.ai_context/INDEX.md" "$D/.ai_context/"
+  git -C "$REPO" show "$OLD_SHA:.claude/hooks/stop-gate.sh" > "$D/.claude/hooks/stop-gate.sh"
+  printf '{"custom": true}\n' > "$D/.claude/settings.json"
+  out=$("$REPO/sync-project.sh" --update-stock "$D" 2>&1)
+  cmp -s "$D/.claude/hooks/stop-gate.sh" "$REPO/.claude/hooks/stop-gate.sh" && ok "historical stock file advanced" || no "stock file not advanced"
+  echo "$out" | grep -q 'settings.json differs from every known template version' && ok "customized file flagged, untouched" || no "customized handling wrong"
+  grep -q custom "$D/.claude/settings.json" && ok "customized content preserved" || no "customized content clobbered"
+fi
+D="$WORK/l14a/existing"; mkdir -p "$D/src"; echo 'x=1' > "$D/src/m.py"
+"$REPO/sync-project.sh" "$D" >/dev/null 2>&1 && no "non-starter accepted without --adopt" || ok "non-starter rejected without --adopt"
+out=$("$REPO/sync-project.sh" --adopt "$D" 2>&1)
+{ [ -f "$D/.ai_context/INDEX.md" ] && [ -f "$D/CLAUDE.md" ] && [ -d "$D/.ai_context/tasks" ]; } && ok "adopt creates skeleton" || no "adopt skeleton incomplete"
+echo "$out" | grep -q 'run /setup' && ok "adopt hands off to /setup" || no "adopt handoff missing"
+
+echo "=== L2-1 · spawn completeness (--local)"
+( cd "$WORK" && "$REPO/start_project.sh" --local --kind code lab ) >/dev/null 2>&1
+P="$WORK/lab"
+if [ ! -d "$P" ]; then
+  no "spawn failed — remaining L2 tests skipped"
+else
+  ok "spawn succeeded"
+  miss=""
+  for f in .claude/settings.json .claude/hooks/session-start.sh .claude/hooks/stop-gate.sh \
+           .claude/hooks/post-edit.sh .claude/skills/wrap/SKILL.md .claude/skills/task/SKILL.md \
+           .claude/skills/setup/SKILL.md .claude/agents/planner.md .claude/agents/plan-critic.md \
+           .claude/agents/executor.md .claude/agents/verifier.md .claude/agents/reframer.md \
+           .claude/.starter-version .ai_context/INDEX.md .ai_context/tasks/.gitkeep CLAUDE.md README.md; do
+    [ -e "$P/$f" ] || miss="$miss $f"
+  done
+  [ -z "$miss" ] && ok "all mechanism files present" || no "missing:$miss"
+  left=""
+  for f in TUTORIAL.md TUTORIAL.zh-TW.md MIGRATION.md README.zh-TW.md start_project.sh \
+           sync-project.sh bootstrap-machine.sh templates global .github; do
+    [ -e "$P/$f" ] && left="$left $f"
+  done
+  [ -z "$left" ] && ok "template leftovers all removed" || no "leftovers:$left"
+  python3 -m json.tool "$P/.claude/settings.json" >/dev/null 2>&1 && ok "settings.json valid JSON" || no "settings.json invalid"
+  for k in SessionStart PostToolUse Stop; do
+    grep -q "\"$k\"" "$P/.claude/settings.json" && ok "hook wired: $k" || no "hook missing: $k"
+  done
+  [ -x "$P/.claude/hooks/stop-gate.sh" ] && ok "hooks executable" || no "hooks not executable"
+  grep -q 'claude-starter@' "$P/.claude/.starter-version" && ok "provenance stamp present" || no "provenance stamp missing"
+
+  echo "=== L2-2 · pre-commit guards (gitleaks + S7)"
+  if command -v pre-commit >/dev/null 2>&1; then
+    ( cd "$P" && pre-commit install >/dev/null 2>&1 )
+    # Fake key from AWS docs pattern — test fixture only.        # gitleaks:allow
+    printf 'aws_access_key_id = AKIAIOSFODNN7TESTKEY\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYTESTKEY99\n' > "$P/notes.md" # gitleaks:allow
+    ( cd "$P" && git add notes.md && git commit -qm leak ) >/dev/null 2>&1 && no "gitleaks let a fake AWS key through" || ok "gitleaks blocks fake AWS key"
+    ( cd "$P" && git reset -q HEAD notes.md 2>/dev/null; rm -f notes.md )
+    python3 - "$P/.ai_context/state.md" <<'PY'
+import sys
+open(sys.argv[1],'w').write('Last updated: 2026-07-07\n' + ('x'*79+'\n')*80)
+PY
+    ( cd "$P" && git add .ai_context/state.md && git commit -qm big ) >/dev/null 2>&1 && no "S7 let >5KB state.md through" || ok "S7 blocks oversized state.md"
+    ( cd "$P" && git checkout -q -- .ai_context/state.md 2>/dev/null || git reset -q 2>/dev/null )
+    ( cd "$P" && git checkout -q -- .ai_context/state.md 2>/dev/null || true )
+  else
+    skp "pre-commit not installed — gitleaks/S7 guard tests"
+  fi
+
+  echo "=== L2-3 · hook chain inside the spawned project"
+  out=$(CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/session-start.sh" </dev/null 2>&1)
+  echo "$out" | grep -q 'SETUP REQUIRED' && ok "newborn spawn gets setup instruction" || no "setup instruction missing in spawn"
+  mkdir -p "$P/.ai_context/tasks/demo"; echo demo > "$P/.ai_context/tasks/CURRENT"
+  write_plan "$P/.ai_context/tasks/demo/plan.md" "true"
+  printf '# lab\n## Commands\n- Test: `true`\n' > "$P/CLAUDE.md"
+  printf '{"session_id": "tsuite-l2"}' | CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
+  ck 0 $? "project gate: green passes"
+  write_plan "$P/.ai_context/tasks/demo/plan.md" "false"
+  printf '{"session_id": "tsuite-l2"}' | CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
+  ck 2 $? "project gate: red blocks"
+  grep -qc "	M2	" "$P/.ai_context/tasks/demo/gatelog" >/dev/null && ok "project gatelog written" || no "project gatelog missing"
+  rm -f "$P/.ai_context/tasks/CURRENT"
+
+  echo "=== L2-5 · no-op latency"
+  t0=$(date +%s%N)
+  printf '{"session_id": "tsuite-l5"}' | CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
+  t1=$(date +%s%N)
+  ms=$(( (t1 - t0) / 1000000 ))
+  [ "$ms" -lt 500 ] && ok "no-op gate latency ${ms}ms (<500ms)" || no "no-op gate latency ${ms}ms (>=500ms)"
+fi
+
+echo "=== L2-4 · research kind + artifact verify"
+( cd "$WORK" && "$REPO/start_project.sh" --local --kind research rlab ) >/dev/null 2>&1
+R="$WORK/rlab"
+if [ ! -d "$R" ]; then
+  no "research spawn failed"
+else
+  grep -q 'research project' "$R/CLAUDE.md" && ok "research CLAUDE.md in place" || no "research template wrong"
+  grep -q '## Long-horizon tasks' "$R/CLAUDE.md" && ok "research template carries /task section" || no "research /task section missing"
+  mkdir -p "$R/.ai_context/tasks/demo"; echo demo > "$R/.ai_context/tasks/CURRENT"
+  printf '# r\n## Commands\n- Test: `true`\n' > "$R/CLAUDE.md"
+  write_plan "$R/.ai_context/tasks/demo/plan.md" "test -s reports/x.md"
+  printf '{"session_id": "tsuite-r"}' | CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
+  ck 2 $? "artifact gate blocks while deliverable absent"
+  mkdir -p "$R/reports" && echo content > "$R/reports/x.md"
+  printf '{"session_id": "tsuite-r"}' | CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
+  ck 0 $? "artifact gate passes once deliverable exists"
+fi
+
+echo ""
+echo "==== summary: $PASS passed, $FAIL failed, $SKIP skipped"
+[ "$FAIL" -eq 0 ]

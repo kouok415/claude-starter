@@ -11,11 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tests/run.sh verifies --update-stock against full git history
 
       - name: bash syntax check
         run: |
           shopt -s nullglob
-          for f in *.sh scripts/*.sh .claude/hooks/*.sh; do
+          for f in *.sh scripts/*.sh .claude/hooks/*.sh tests/*.sh; do
             bash -n "$f"
           done
 
@@ -23,7 +25,10 @@ jobs:
         run: |
           sudo apt-get update -y && sudo apt-get install -y shellcheck
           shopt -s nullglob
-          shellcheck -S warning *.sh scripts/*.sh .claude/hooks/*.sh
+          shellcheck -S warning *.sh scripts/*.sh .claude/hooks/*.sh tests/*.sh
+
+      - name: harness regression suite (L1+L2)
+        run: bash tests/run.sh
 
       - name: validate JSON
         run: |

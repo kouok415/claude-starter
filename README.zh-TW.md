@@ -193,6 +193,7 @@ claude-starter/
 ├── .ai_context/                第 3 層(schema v2)
 ├── .pre-commit-config.yaml     H1 密鑰掃描 + S7 大小上限
 ├── scripts/                    pre-commit 輔助腳本(專案保留)
+├── tests/run.sh                L1+L2 回歸套件(CI 內建執行)
 ├── .mcp.json.example           MCP 樣板(--kind analysis 保留)
 ├── .github/workflows/lint.yml  模板 repo 自身的 CI(生成時移除)
 ├── start_project.sh            生成器(驗證、個人化、清理)
