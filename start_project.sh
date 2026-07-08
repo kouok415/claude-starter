@@ -33,7 +33,17 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlinks first: invoked via a symlink (e.g. /code/start_project.sh),
+# the symlink's directory must NOT be mistaken for the template — cp -R of
+# that directory would copy everything living beside the link.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$src")" && pwd)"
+unset src dir
 
 have() { command -v "$1" >/dev/null 2>&1; }
 

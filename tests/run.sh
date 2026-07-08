@@ -219,6 +219,18 @@ ck 0 $? "bloated worktree with small staged content passes (staged is what commi
 ( cd "$D" && git add .ai_context/state.md && bash "$REPO/scripts/check-state-size.sh" ) >/dev/null 2>&1
 ck 1 $? "bloated staged content blocks"
 
+echo "=== L1-9 · seed purity (the template repo ships placeholders, never real memory)"
+if [ -f "$REPO/.claude/.starter-version" ]; then
+  skp "seed purity (this is a spawned project, not the template repo)"
+else
+  grep -q '{{DATE}}' "$REPO/.ai_context/state.md" && ok "seed state.md still a placeholder" || no "seed state.md polluted — real memory belongs in the dev workshop project, not the product"
+  grep -q '^## ADR-[0-9]' "$REPO/.ai_context/decisions.md" && no "seed decisions.md contains real ADRs" || ok "seed decisions.md clean"
+  for sd in journal knowledge private tasks; do
+    stray=$(find "$REPO/.ai_context/$sd" -type f ! -name '.gitkeep' 2>/dev/null | wc -l)
+    [ "$stray" -eq 0 ] && ok "seed $sd/ empty" || no "seed $sd/ has $stray stray file(s)"
+  done
+fi
+
 echo "=== L2-1 · spawn completeness (--local)"
 ( cd "$WORK" && "$REPO/start_project.sh" --local --kind code lab ) >/dev/null 2>&1
 P="$WORK/lab"
@@ -305,6 +317,16 @@ else
   mkdir -p "$R/reports" && echo content > "$R/reports/x.md"
   printf '{"session_id": "tsuite-r"}' | CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
   ck 0 $? "artifact gate passes once deliverable exists"
+fi
+
+echo "=== L2-6 · spawning via a symlink resolves the real template"
+ln -s "$REPO/start_project.sh" "$WORK/spawn-link"
+( cd "$WORK" && "$WORK/spawn-link" --local --kind code symlab ) >/dev/null 2>&1
+if [ -d "$WORK/symlab" ]; then
+  [ -f "$WORK/symlab/CLAUDE.md" ] && ok "symlink spawn produced a project" || no "symlink spawn missing CLAUDE.md"
+  [ -e "$WORK/symlab/l11" ] && no "symlink spawn copied the link's PARENT directory (SCRIPT_DIR bug regressed)" || ok "no parent-directory copy artifact"
+else
+  no "symlink spawn failed entirely"
 fi
 
 echo ""
