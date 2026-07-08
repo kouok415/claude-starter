@@ -85,10 +85,14 @@ spec; the mechanism is the guarantee.
 | "No secrets in commits" (H1) | gitleaks pre-commit hook + `settings.json` denies reading `.env*` |
 | "state.md stays under 5 KB" (S7) | pre-commit size check + session-start warning |
 | "Time-stamp aging facts" (S3) | session-start hook warns when `state.md` is stale |
-| "Verify before claiming done" | **Stop gate**: on `/task` runs, the active milestone's verify command must pass before a turn may end; plus the `Verify` + **Definition of done** contract in CLAUDE.md and the optional `lint.sh` post-edit hook |
+| "Verify before claiming done" | **Stop gate**: on `/task` runs, the active milestone's verify command must pass before a turn may end (unchanged tree = cached PASS, no re-run); plus the `Verify` + **Definition of done** contract in CLAUDE.md and the optional `lint.sh` post-edit hook |
 | "Long tasks decay — drift, silent errors, lost state" | `/task` harness: milestone plan with executable gates, fresh executor context per milestone, adversarial verifier, escalation ladder, commit per gate |
-| "A new project's first session sets it up" | session-start `SETUP REQUIRED` instruction + Stop gate blocks the first turn-end (once per session) until CLAUDE.md is drafted; the `/setup` skill carries the protocol |
-| "Scoreboard numbers must be real" | the Stop gate writes a `gatelog` per run; `/wrap` aggregates it into `scoreboard.csv` |
+| "A new project's first session sets it up" | session-start `SETUP REQUIRED` instruction + Stop gate blocks the first turn-end (once per session); both key on the `claude-starter: UNCONFIGURED` sentinel in CLAUDE.md, which `/setup` deletes when the draft lands |
+| "Discovery is paid once, not once per subagent" | `scout` agent writes `tasks/<slug>/brief.md` at intake; session-start injects it; every later context navigates by it and appends corrections instead of re-surveying |
+| "Ceremony scales with the task, verification with the risk" | `/task` records size (S/M/L) in the plan header — S plans and executes inline; each milestone's `risk:` picks gate-only / light / full verification |
+| "A status typo must not silently disarm the gate" | session-start warns when an active task has `[pending]` milestones but none `[in_progress]` (the state in which the milestone gate is OFF) |
+| "Always-injected files stay small" | 4 KB warnings for `brief.md`/`lessons.md`, 5 KB pre-commit cap + warning for `state.md` (S7), size-guard test on `INDEX.md` itself |
+| "Scoreboard numbers must be real" | the Stop gate writes a `gatelog` per real run; `/wrap` aggregates it into `scoreboard.csv` |
 | "Sessions that die without /wrap lose their state" | session-start warns when commits are newer than `state.md` |
 
 ---
@@ -154,23 +158,29 @@ Memory keeps *sessions* continuous; `/task` keeps a single *big run* alive.
 It converts "one heroic context" into a gated pipeline:
 
 1. **Spec** — acceptance criteria as executable checks, or it doesn't start.
-2. **Plan fusion** — 3 `planner` agents (different lenses) → red-team
-   `plan-critic` → a synthesized `plan.md` of small milestones, each with a
-   `verify:` command.
-3. **Milestone loop** — fresh `executor` context per milestone, adversarial
-   `verifier` after it, a commit per passed gate, drift check every third
-   milestone.
-4. **Stop gate** — `stop-gate.sh` re-runs the active milestone's verify when
-   the turn tries to end; a red gate means the turn *cannot* end. The
+2. **Scout** — one survey pass writes `brief.md`, the map every later
+   context navigates by. Contexts stay fresh for judgment independence;
+   facts are inherited, never re-derived.
+3. **Plan** — ceremony scales with recorded task size: **S** drafts inline
+   (no spawns), **M** = 1 `planner` + red-team `plan-critic`, **L** = 3
+   planner lenses + critic. Small milestones, each with a `verify:` command
+   and a `risk:` grade.
+4. **Milestone loop** — S executes in the main context; M/L spawn a fresh
+   `executor` per milestone. Verification depth follows risk: `low` = the
+   mechanical gate only, `med` = light diff review, `high` = full
+   adversarial `verifier`. A commit per passed gate.
+5. **Stop gate** — `stop-gate.sh` re-runs the active milestone's verify when
+   the turn tries to end; a red gate means the turn *cannot* end (an
+   unchanged tree hits the PASS-cache instead of re-running). The
    Definition of done stops being prose.
-5. **Escalation** — retry differently → 3 divergent worktree attempts →
+6. **Escalation** — retry differently → 3 divergent worktree attempts →
    `reframer` rewrites the problem → stop and report (three strikes).
 
 State lives in `.ai_context/tasks/<slug>/` (`spec.md`, `plan.md`,
-`lessons.md`) and is re-injected after `/clear` and compaction, so the run
-survives context loss. On completion `/wrap` archives a scoreboard (profile,
-gates failed, highest rung used) to `journal/` — the data for judging
-whether the harness earns its keep.
+`brief.md`, `lessons.md`) and is re-injected after `/clear` and compaction,
+so the run survives context loss. On completion `/wrap` appends a
+scoreboard row (profile, size, gates failed, highest rung used) — the data
+for judging whether the harness earns its keep.
 
 **Profiles.** The protocol is model-tier aware: the reliability core (gate,
 state, verification) is always fully on, while milestone size, planner
@@ -200,13 +210,14 @@ claude-starter/
 │   │   ├── post-edit.sh        Instant lint feedback (delegates to lint.sh)
 │   │   ├── stop-gate.sh        /task milestone gate — no stop on red verify
 │   │   └── lint.sh.example     Fill in your linter after language init
-│   ├── agents/                 /task crew: planner, plan-critic, executor,
-│   │                           verifier, reframer (fresh-context stages)
+│   ├── agents/                 /task crew: scout, planner, plan-critic,
+│   │                           executor, verifier, reframer
 │   └── skills/
 │       ├── wrap/SKILL.md       /wrap — end-of-session memory write-back
 │       ├── task/SKILL.md       /task — long-horizon milestone harness
+│       ├── task/reference.md   worktree protocol + profile knobs (on demand)
 │       └── setup/SKILL.md      /setup — first-session birth protocol
-├── .ai_context/                Layer 3 (schema v2) — INDEX, state, decisions…
+├── .ai_context/                Layer 3 (schema v3) — INDEX, state, decisions…
 ├── .pre-commit-config.yaml     H1 secret scan + S7 size cap
 ├── scripts/                    pre-commit helper scripts (kept in projects)
 ├── tests/run.sh                L1+L2 regression suite (runs in CI)

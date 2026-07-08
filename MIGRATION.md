@@ -1,18 +1,70 @@
 # Migration guide
 
-Three migrations live here:
+Four migrations live here (docs are bilingual elsewhere; this file and the
+English README are the authority when translations drift):
 
-- **[A. claude-starter v2 → v3](#a-claude-starter-v2--v3)** — add the
+- **[A. claude-starter v3.x → v3.3](#a-claude-starter-v3x--v33)** — the
+  token-economy release: scout/brief, S/M/L sizing, risk-scaled
+  verification, PASS-cache, setup sentinel.
+- **[B. claude-starter v2 → v3](#b-claude-starter-v2--v3)** — add the
   long-horizon execution harness (`/task`, stop gate, agent crew) to
   projects spawned from v2.
-- **[B. claude-starter v1 → v2](#b-claude-starter-v1--v2)** — projects
+- **[C. claude-starter v1 → v2](#c-claude-starter-v1--v2)** — projects
   spawned from this template before the mechanisms layer existed.
-- **[C. multi-agent-dev-team → claude-starter](#c-from-multi-agent-dev-team-to-claude-starter)**
+- **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
 
 ---
 
-## A. claude-starter v2 → v3
+## A. claude-starter v3.x → v3.3
+
+v3.3 keeps every reliability mechanism and removes structural token waste:
+discovery is externalized once per task instead of re-derived per subagent,
+ceremony scales with task size, and model-verification depth follows
+milestone risk. No model switching is involved anywhere — the harness runs
+whatever model the session runs.
+
+### What changed, and why
+
+| v3.0–v3.2 | v3.3 | Reason |
+|---|---|---|
+| Every subagent re-surveyed the repo | `scout` writes `tasks/<slug>/brief.md` once (M/L tasks); everyone else navigates by it and appends dated corrections | Fresh context exists for judgment independence; facts carry no bias — re-deriving them N× was pure waste |
+| Full ceremony regardless of task size | Size recorded in the plan header: **S** plans + executes inline (no spawns), **M** = 1 planner + critic (escalates to 3-lens on repeated structural blockers), **L** = full fan-out | A 2-milestone task paid ~11 spawns of overhead for nothing |
+| Model verifier after every milestone + 3-lens panel always | Depth follows `risk:` — low = mechanical gate only, med = light diff review, high = full adversarial; panel reserved for L / any-high. The critic now blocks weak verify commands on `risk: low` | The Stop gate re-runs verify commands for free; buy model judgment only where judgment risk exists |
+| Verify re-ran on every turn-end | PASS-cache: unchanged tree (HEAD + diff + untracked sizes) = cached PASS, silent skip | Minute-long test suites were re-running on conversational turns |
+| Setup gate keyed on placeholder heuristics | Templates carry a `claude-starter: UNCONFIGURED` sentinel; both hooks key on it (legacy patterns still honored) | Heuristics mis-fire both ways: the research template had a one-line margin, and a literal `<command>` in user content would arm the gate forever |
+| `plan.md` header records profile only | `profile … ; size: S \| M \| L`; `scoreboard.csv` gains a `size` column | Size is the second A/B axis the scoreboard needs |
+| INDEX.md ~7 KB injected every session | ≤4 KB (mechanism map moved to README §Prose → mechanism); `brief.md`/`lessons.md` capped at 4 KB with warnings | The injection tax is paid every session in every project |
+
+New files: `.claude/agents/scout.md`, `.claude/skills/task/reference.md`
+(rung-3 worktree protocol + profile knobs + non-code verify patterns,
+loaded on demand instead of resident). Also fixed: status-typo warning
+(`[pending]` milestones with no `[in_progress]` = the gate is silently
+OFF — session-start now says so), bounded post-edit lint output (tail
+-40), nested `.env` read-deny + gitignore, staged-content S7 check.
+
+### Upgrade steps for a v3.0–v3.2 project
+
+```bash
+cd <claude-starter>
+./sync-project.sh --update-stock <path-to-project>
+```
+
+Provably-unmodified stock hooks/skills/agents advance automatically;
+customized ones are flagged for hand-merge. Then:
+
+1. `.gitignore` — append the new lines: `**/.env` variants and
+   `.ai_context/tasks/*/.gate-cache`.
+2. Already-configured projects need nothing else: the sentinel only
+   matters for newborn projects, and legacy placeholder detection still
+   covers unconfigured pre-v3.3 spawns.
+3. An in-flight `/task` keeps running — old plan headers (no `size:`)
+   are treated as size L (they were planned under full ceremony);
+   `brief.md` appears naturally on the next task.
+
+---
+
+## B. claude-starter v2 → v3
 
 v3 adds the execution harness: long-horizon tasks run as gated milestone
 pipelines instead of one heroic context.
@@ -51,7 +103,7 @@ pipelines instead of one heroic context.
 
 ---
 
-## B. claude-starter v1 → v2
+## C. claude-starter v1 → v2
 
 ### What changed in v2, and why
 
@@ -114,7 +166,7 @@ pipelines instead of one heroic context.
 
 ---
 
-## C. From multi-agent-dev-team to claude-starter
+## D. From multi-agent-dev-team to claude-starter
 
 If you have projects using the previous PM/BE/FE/QA + ECC + Discord layout,
 this guide walks through migrating them to this architecture.
