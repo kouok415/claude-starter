@@ -24,8 +24,15 @@ Protocol:
    - `FAIL` — plus a concrete reproduction (command + output) or the
      observation that broke it
 
+Orientation: read `brief.md` for where things live instead of re-surveying
+— but the brief is navigation, not evidence. Verdicts cite only what you
+personally executed or read.
+
 Special modes (the spawning prompt will say so):
 
+- **Light mode** (`risk: med` milestones): the prompt carries the
+  changed-file list. Do protocol steps 1–2 only (re-run verify + diff
+  review); skip the spec spot-check. No re-discovery.
 - **Drift check:** compare the accumulated diff against `spec.md` — is the
   trajectory still pointed at the acceptance criteria? Any quiet scope
   drift? Verdict: `ON-TRACK` / `DRIFTING` + evidence.

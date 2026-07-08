@@ -31,15 +31,17 @@ preamble before writing to it):
 
 4. **Active `/task`** — if `.ai_context/tasks/CURRENT` exists:
    - Task finished: write its journal entry with the scoreboard — profile,
-     milestones total, gate failures **counted from `tasks/<slug>/gatelog`**
-     (never from memory), highest escalation rung used, human interventions
-     — and append the same numbers as one row to `.ai_context/scoreboard.csv`
-     (create it with header
-     `date,slug,profile,milestones,gate_failures,highest_rung,interventions,outcome`
+     size, milestones total, gate failures **counted from
+     `tasks/<slug>/gatelog`** (never from memory), highest escalation rung
+     used, human interventions — and append the same numbers as one row to
+     `.ai_context/scoreboard.csv` (create it with header
+     `date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,outcome`
      if absent). Then delete `CURRENT` (keep the task directory).
    - Task unfinished: leave `CURRENT` in place; make sure `state.md`'s
      Now/Next points at the `[in_progress]` milestone so the next session
-     resumes cold from the checkpoint.
+     resumes cold from the checkpoint. If `lessons.md` or `brief.md`
+     exceeds 4 KB, distill now: one line per entry, narratives to
+     `journal/` — the next session inherits these files whole.
 
 5. **CLAUDE.md drift** — did this session change commands, stack, or how
    the project is verified? Update CLAUDE.md's Commands/Verify to match

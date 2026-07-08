@@ -1,133 +1,72 @@
-<!-- schema: v2 -->
+<!-- schema: v3 -->
 <!--
 purpose: Registry of .ai_context/ — what's here, when to read, when to write.
 mutability: edit when adding or removing files; otherwise stable.
-format: keep sections in this order; keep entries terse.
-do-not: don't put project content here, only meta-information about other files.
+do-not: no project content here — only meta-information about other files;
+        keep this file ≤ 4 KB (it is injected into every session).
 -->
 
 # .ai_context Index
 
-This directory is Claude's persistent project memory. Each file declares its
-own rules in a top-of-file HTML-comment preamble — read it before writing.
+Claude's persistent project memory. Each file declares its own rules in a
+top-of-file HTML-comment preamble — read it before writing. This file and
+`state.md` are auto-injected at every session start (hooks); read the rest
+**on-demand**:
 
----
-
-## Reading protocol
-
-**On every session start, read in this order:**
-
-1. `INDEX.md` — this file.
-2. `state.md` — current project snapshot.
-
-In projects spawned from claude-starter v2 this is mechanized: a SessionStart
-hook (`.claude/hooks/session-start.sh`) injects both files automatically — on
-startup, resume, `/clear`, and after compaction. If hooks are disabled, do it
-manually.
-
-**Then read on-demand based on the situation:**
-
-| If the situation is... | Read |
+| Situation | Read |
 |---|---|
-| Making a design choice, picking between options, choosing a dependency | `decisions.md` (check existing ADRs first) |
-| Touching the API, adding endpoints, changing contracts | `knowledge/api-spec.md` |
-| Code review, opening a PR, writing new code | `knowledge/conventions.md` |
-| Encountering an unfamiliar domain term | `knowledge/glossary.md` |
-| User asks about a past event, debate, retro, or specific date | search `journal/` for matching `YYYY-MM-DD-*.md` |
-| User mentions sensitive scratch, untriaged data, or local-only notes | `private/` |
-| A long-horizon `/task` is running (`tasks/CURRENT` exists) | that task's `plan.md` + `lessons.md` (mechanized: session-start injects them) |
+| Design choice, picking between options, dependency pick | `decisions.md` (check existing ADRs first) |
+| Touching the API, changing contracts | `knowledge/api-spec.md` |
+| Code review, PR, writing new code | `knowledge/conventions.md` |
+| Unfamiliar domain term | `knowledge/glossary.md` |
+| Past event, debate, retro, specific date | search `journal/YYYY-MM-DD-*.md` |
+| Sensitive scratch, local-only notes | `private/` |
+| Active `/task` (`tasks/CURRENT` exists) | that task's `brief.md` + `plan.md` + `lessons.md` (auto-injected too) |
 
-**Do not auto-read** `journal/` or `knowledge/` files unless triggered. They
-exist for retrieval, not for warmup.
-
-**Procedural knowledge routes itself:** when a `knowledge/` file describes
-*how to do something* (a runbook, a coding pattern, a release checklist),
-prefer promoting it to a skill under `.claude/skills/<name>/SKILL.md` with a
-trigger description — skills load on demand without anyone remembering this
-table. Keep *factual* reference (API contracts, glossaries) in `knowledge/`.
-
----
+Don't warm up on `journal/` or `knowledge/` — they exist for retrieval.
+Procedural knowledge (runbooks, checklists, how-tos) belongs in a skill
+(`.claude/skills/<name>/SKILL.md`), which loads itself on demand; keep
+factual reference (contracts, glossaries) in `knowledge/`.
 
 ## Writing protocol
 
 | File / dir | Mutability |
 |---|---|
-| `state.md` | overwrite-friendly; reflects *now* only |
-| `decisions.md` | append-only; never edit existing entries |
-| `knowledge/*.md` | accumulate; edit factual updates, don't rewrite history |
-| `journal/*.md` | append-only per file; new file per event; first line = one-sentence summary |
-| `tasks/<slug>/` | `spec.md` frozen once the plan is approved (reframer rung-4 patches are the exception — note them in `lessons.md`); `plan.md` statuses updated at every gate; `lessons.md` append-only; `gatelog` hook-written, never hand-edited |
+| `state.md` | overwrite; reflects *now* only; ≤5 KB (S7) |
+| `decisions.md` | append-only ADRs; never edit existing entries |
+| `knowledge/*.md` | accumulate; create on demand (no empty stubs), add a row here |
+| `journal/*.md` | append-only; one file per event; first line = one-sentence summary |
+| `tasks/<slug>/spec.md` | frozen once the plan is approved (reframer rung-4 patches excepted — note them in lessons) |
+| `tasks/<slug>/plan.md` | statuses updated at every transition; exactly one `[in_progress]` |
+| `tasks/<slug>/brief.md` | scout-written map; others append dated corrections; ≤4 KB |
+| `tasks/<slug>/lessons.md` | append-only; one line per lesson; ≤4 KB |
+| `tasks/<slug>/gatelog` | hook-written only, never hand-edited |
+| `scoreboard.csv` | append-only; one row per completed `/task` — the harness A/B dataset |
 | `private/*` | free-form; gitignored |
 
-Before writing to any file, read its top preamble for format and `do-not`
-rules. At the end of a significant session, run `/wrap` (or update `state.md`
-by hand) — a reading protocol without write-back is only half the loop.
-
----
+End significant sessions with `/wrap` — a reading protocol without
+write-back is half a loop. Teams with concurrent ADR writers: switch to
+`decisions/NNN-<slug>.md` (one file per ADR) and note the switch here.
 
 ## Forbidden (hard rules — never violate)
 
-- **H1 — No secrets.** Never write API keys, tokens, passwords, connection
-  strings, or internal URLs. Not even as placeholders. If a secret is needed
-  to make a point, write `<redacted>` and reference where the real value
-  lives (e.g., "in `.env`, see `.env.example`").
-- **H2 — No fact duplication.** If a fact exists in `README.md`, source
-  code, type signatures, or commit history, do not copy it here. Reference
-  it by path or link. Duplication creates drift.
-- **H3 — No speculation as fact.** Tentative claims must be tagged
-  `[TENTATIVE]` or `[HYPOTHESIS]`. When confirmed, remove the tag.
-  Untagged statements are facts and are trusted as such.
-- **H4 — Right file, right purpose.** Before writing, ask: is this *now*
-  (state.md), *permanent* (decisions.md / knowledge/), or *this event*
-  (journal/)? Wrong placement is worse than no entry — it pollutes the
-  category.
-- **L1 — No real names.** Don't write real customer, employee, or external
-  contact names. Use roles (`PM`, `customer-A`, `vendor-X`). Real names
-  belong in private/ at most, never in tracked files.
-
----
+- **H1 — No secrets.** No keys, tokens, passwords, connection strings, or
+  internal URLs — not even as placeholders. Write `<redacted>` plus where
+  the real value lives (e.g., "in `.env`, see `.env.example`").
+- **H2 — No fact duplication.** If it exists in README, code, type
+  signatures, or git history, reference it by path — don't copy it here.
+  Duplication creates drift.
+- **H3 — No speculation as fact.** Tag tentative claims `[TENTATIVE]` or
+  `[HYPOTHESIS]`; untagged statements are trusted as facts.
+- **H4 — Right file, right purpose.** *Now* → `state.md`; *permanent* →
+  `decisions.md` / `knowledge/`; *this event* → `journal/`. Wrong placement
+  pollutes the category.
+- **L1 — No real names.** Use roles (`PM`, `customer-A`, `vendor-X`). Real
+  names at most in `private/`, never in tracked files.
 
 ## Mechanisms
 
-Where possible, the rules above are enforced mechanically (v2 projects):
-
-| Mechanism | Enforces |
-|---|---|
-| `.claude/hooks/session-start.sh` | reading protocol; warns on stale `state.md` (S3), >5 KB (S7), unwrapped previous sessions; instructs `/setup` on newborn projects |
-| `/wrap` skill (`.claude/skills/wrap/`) | write-back of state / ADRs / journal |
-| `.claude/hooks/post-edit.sh` + `lint.sh` | instant lint feedback after every edit |
-| `.pre-commit-config.yaml` | H1 secret scan (gitleaks) + S7 size cap at commit time |
-| `.claude/settings.json` permissions | denies reading `.env*` and key files (H1) |
-| `.claude/hooks/stop-gate.sh` | setup gate (first turn-end blocked until CLAUDE.md is drafted; once per session) + milestone gate (a turn cannot end while the active `/task` milestone's verify fails); writes `gatelog` |
-| `/task` skill (`.claude/skills/task/`) | long-horizon loop: plan fusion → fresh-context execution → adversarial verify → escalation ladder |
-| `/setup` skill (`.claude/skills/setup/`) | first-session protocol: interview → scaffold → draft brief → mechanism check |
-
-Prose is the spec; mechanisms are the guarantee. If you change a rule,
-change its mechanism too.
-
----
-
-## File registry
-
-| Path | Mutability | Purpose |
-|---|---|---|
-| `INDEX.md` | edit on add/remove | This registry |
-| `state.md` | overwrite | Current snapshot: in-progress work, next steps, constraints |
-| `decisions.md` | append-only | ADR log of design decisions |
-| `knowledge/api-spec.md` | accumulate | API contracts (create when project has APIs) |
-| `knowledge/conventions.md` | accumulate | Code patterns, naming, layout (create as patterns emerge) |
-| `knowledge/glossary.md` | accumulate | Domain terms (create when domain has jargon) |
-| `journal/YYYY-MM-DD-*.md` | append-only per file | Per-event records: debates, retros, post-mortems, findings |
-| `tasks/CURRENT` | overwrite | Slug of the active `/task`; absent when no task is running |
-| `tasks/<slug>/` | per task | Execution state: `spec.md`, `plan.md`, `lessons.md`; scoreboard archived to `journal/` by /wrap on completion |
-| `tasks/<slug>/gatelog` | append-only (hook-written) | Mechanical record of every gate run: timestamp, milestone, PASS/FAIL |
-| `scoreboard.csv` | append-only | One row per completed `/task` — the harness A/B dataset |
-| `private/*` | free-form | Sensitive scratch, gitignored, not committed |
-
-**Files in `knowledge/` are created on-demand**, not upfront. Don't create
-empty stubs. Add a file when you have real content for it, and add a row to
-this registry.
-
-**Teams with concurrent ADR writers:** the single `decisions.md` will merge-
-conflict; switch to `decisions/NNN-<slug>.md` (one file per ADR) and note the
-switch here.
+Every rule above is enforced mechanically where possible — session-start
+injection, Stop gates, pre-commit scans, permission denies. The mechanism
+map lives in **README.md §Prose → mechanism**. If you change a rule, change
+its mechanism too.

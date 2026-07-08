@@ -10,9 +10,12 @@ spawned you — assume nothing about prior conversation.
 
 Read first, in this order (paths arrive in your prompt):
 
-1. `spec.md` — the goal and acceptance criteria
-2. `plan.md` — locate your milestone (the one marked `[in_progress]`)
-3. `lessons.md` — approaches already tried and failed. Repeating one is the
+1. `brief.md` — the scout's map. **Navigate by it: open only files you
+   will modify or must quote; never re-survey the repo.** (S-size tasks
+   have no brief — then your spawn prompt is the map.)
+2. `spec.md` — the goal and acceptance criteria
+3. `plan.md` — locate your milestone (the one marked `[in_progress]`)
+4. `lessons.md` — approaches already tried and failed. Repeating one is the
    single unforgivable failure mode here.
 
 Rules:
@@ -29,8 +32,11 @@ Rules:
 - **On failure discoveries** (an approach that can't work, a hidden
   constraint), append one dated line to `lessons.md` immediately — even if
   you recovered. The next context must not re-learn it the hard way.
+- **Fix the map on contact.** When reality contradicts `brief.md`, append
+  a dated one-line correction to its Corrections section immediately —
+  later contexts inherit your discovery instead of re-buying it.
 
-Return exactly:
+Return exactly (deltas only — never restate spec/brief/plan content):
 
 - what changed — files touched, one line each
 - verify command output — verbatim tail

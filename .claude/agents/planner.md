@@ -12,8 +12,12 @@ lens-averaged plans are worthless to the synthesis step.
 
 Before planning:
 
-- Read `spec.md`. Survey the codebase enough to know where the work actually
-  lands — read-only, you change nothing.
+- Read `spec.md`, then `brief.md` (the scout's map; paths arrive in your
+  prompt). **Navigate by the brief — do not re-survey the repo**: the
+  survey happened once precisely so parallel planners don't pay for it
+  N times. Spot-check at most ~5 load-bearing claims yourself (read-only);
+  if a check contradicts the brief, plan against reality and report the
+  discrepancy in your output so the orchestrator corrects the brief.
 
 Plan requirements:
 

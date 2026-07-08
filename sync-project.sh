@@ -87,7 +87,9 @@ copy_if_missing .claude/hooks/lint.sh.example
 copy_if_missing .claude/skills/wrap/SKILL.md
 copy_if_missing .claude/hooks/stop-gate.sh
 copy_if_missing .claude/skills/task/SKILL.md
+copy_if_missing .claude/skills/task/reference.md
 copy_if_missing .claude/skills/setup/SKILL.md
+copy_if_missing .claude/agents/scout.md
 copy_if_missing .claude/agents/planner.md
 copy_if_missing .claude/agents/plan-critic.md
 copy_if_missing .claude/agents/executor.md
@@ -125,7 +127,9 @@ stock_update .claude/hooks/post-edit.sh
 stock_update .claude/hooks/stop-gate.sh
 stock_update .claude/skills/wrap/SKILL.md
 stock_update .claude/skills/task/SKILL.md
+stock_update .claude/skills/task/reference.md
 stock_update .claude/skills/setup/SKILL.md
+stock_update .claude/agents/scout.md
 stock_update .claude/agents/planner.md
 stock_update .claude/agents/plan-critic.md
 stock_update .claude/agents/executor.md

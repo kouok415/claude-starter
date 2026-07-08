@@ -13,7 +13,10 @@ Checklist, per candidate:
 
 1. **Gate quality.** For each `- verify:` command: does it even run? does it
    prove *this milestone*, or just "the test suite passes"? could it pass
-   today with zero work done (= not a gate)?
+   today with zero work done (= not a gate)? On a `risk: low` milestone a
+   weak command is a **blocker**: low risk skips the model verifier, so the
+   mechanical gate is its only net — strengthen the command or raise the
+   risk.
 2. **Coverage.** Map every acceptance criterion in `spec.md` to a milestone.
    An AC owned by no milestone is a guaranteed end-of-run surprise.
 3. **Order & dependencies.** Anything consumed before it is produced?
@@ -28,9 +31,15 @@ Checklist, per candidate:
    reject destructive or stateful ops (rm, git push, deploys, paid API
    calls) and anything that can't finish well under 5 minutes (the gate
    kills at 540s).
+8. **Brief fidelity.** Spot-check 2–3 load-bearing claims in `brief.md`
+   against the repo — every later context navigates by that map. A wrong
+   load-bearing claim is a blocker on the brief itself; say so explicitly.
 
 Output:
 
 - Numbered findings, each: `severity (blocker|major|minor) — what breaks —
-  concrete fix suggestion`.
+  concrete fix suggestion`. Additionally tag findings that attack the
+  plan's *shape* (milestone cut, ordering, AC coverage) as `structural` —
+  two consecutive structurally-flawed candidates trigger the orchestrator's
+  full 3-lens re-plan.
 - One closing line: which candidate's skeleton is soundest, and why.
