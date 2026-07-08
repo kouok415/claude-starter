@@ -14,6 +14,16 @@ set -uo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-.}"
 CTX="$ROOT/.ai_context"
+
+# --- Newborn project? Instruct the first-session /setup protocol.
+#     Deliberately BEFORE the .ai_context early-exit: the Stop hook's setup
+#     gate doesn't require .ai_context either, and the two layers of one
+#     mechanism must share a trigger domain.
+if [ -f "$ROOT/CLAUDE.md" ] && \
+   grep -qE '<e\.g\.,|<command>|Replace before first commit' "$ROOT/CLAUDE.md"; then
+  printf 'SETUP REQUIRED: this project has not been set up (CLAUDE.md is still a template). In your FIRST reply, run the /setup protocol — interview, scaffold, draft CLAUDE.md/README/state.md for human review — before or alongside the current request. The Stop gate blocks the first turn-end until the draft lands.\n'
+fi
+
 [ -d "$CTX" ] || exit 0
 
 emit_file() {
@@ -65,12 +75,6 @@ if [ -f "$CTX/state.md" ]; then
       printf 'WARNING: latest commit (%s) is newer than state.md (%s) — the previous session may have ended without /wrap. Reconcile from git log/diff, then refresh state.md.\n' "$last_commit" "$lu"
     fi
   fi
-fi
-
-# --- Newborn project? Instruct the first-session /setup protocol ---
-if [ -f "$ROOT/CLAUDE.md" ] && \
-   grep -qE '<e\.g\.,|<command>|Replace before first commit' "$ROOT/CLAUDE.md"; then
-  printf 'SETUP REQUIRED: this project has not been set up (CLAUDE.md is still a template). In your FIRST reply, run the /setup protocol — interview, scaffold, draft CLAUDE.md/README/state.md for human review — before or alongside the current request. The Stop gate blocks the first turn-end until the draft lands.\n'
 fi
 
 exit 0

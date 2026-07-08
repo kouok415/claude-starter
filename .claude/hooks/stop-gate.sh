@@ -50,9 +50,11 @@ slug="$(tr -d '[:space:]' < "$TASKS/CURRENT")"
 plan="$TASKS/$slug/plan.md"
 [ -f "$plan" ] || exit 0
 
-# Exactly one [in_progress] is the contract — corrupted statuses would poison
-# the compaction anchor, so block until fixed.
-n_inprog="$(grep -c '\[in_progress\]' "$plan" || true)"
+# Exactly one [in_progress] milestone is the contract — corrupted statuses
+# would poison the compaction anchor, so block until fixed. Anchor to
+# heading lines: plan.md's format comment also contains the literal string
+# "[in_progress]" and must not be counted.
+n_inprog="$(grep -c '^## .*\[in_progress\]' "$plan" || true)"
 if [ "${n_inprog:-0}" -gt 1 ]; then
   printf 'GATE FAILED — %s milestones are marked [in_progress] in plan.md; exactly one is allowed. Fix the statuses, then finish.\n' "$n_inprog" >&2
   exit 2
@@ -73,7 +75,7 @@ cmd="$(awk '
 ' "$plan")"
 [ -n "$cmd" ] || exit 0
 
-ms="$(grep -m1 '\[in_progress\]' "$plan" | sed -n 's/^## \([^:]*\):.*/\1/p')"
+ms="$(grep -m1 '^## .*\[in_progress\]' "$plan" | sed -n 's/^## \([^:]*\):.*/\1/p')"
 gatelog="$TASKS/$slug/gatelog"
 
 # Bound the verify run so a hung command cannot wedge the session
