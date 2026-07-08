@@ -32,7 +32,7 @@ trap cleanup EXIT
 write_plan() { # $1 = path, $2 = M2 verify command
   cat > "$1" <<EOF
 # Plan: fixture
-<!-- profile: opus-tier | fable-tier | mixed -->
+<!-- profile: opus-tier | fable-tier | mixed ; size: S | M | L -->
 <!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
 
 ## M1: groundwork [done]
@@ -100,6 +100,7 @@ echo "$out" | grep -q 'INDEX.md ===' && ok "INDEX injected" || no "INDEX missing
 echo "$out" | grep -q 'lesson-x' && ok "active task plan+lessons injected" || no "task injection missing"
 echo "$out" | grep -q 'days ago' && ok "stale-state warning (S3)" || no "stale warning missing"
 echo "$out" | grep -q 'ended without /wrap' && ok "unwrapped-session warning" || no "unwrapped warning missing"
+echo "$out" | grep -q 'milestone gate is OFF' && no "false status warning while in_progress exists" || ok "no false status warning"
 D2="$WORK/l13b"; mkdir -p "$D2"
 printf '# n2\n- **Dev:** `<command>`\n' > "$D2/CLAUDE.md"
 out=$(CLAUDE_PROJECT_DIR="$D2" bash "$SS" </dev/null 2>&1)
@@ -124,6 +125,99 @@ D="$WORK/l14a/existing"; mkdir -p "$D/src"; echo 'x=1' > "$D/src/m.py"
 out=$("$REPO/sync-project.sh" --adopt "$D" 2>&1)
 { [ -f "$D/.ai_context/INDEX.md" ] && [ -f "$D/CLAUDE.md" ] && [ -d "$D/.ai_context/tasks" ]; } && ok "adopt creates skeleton" || no "adopt skeleton incomplete"
 echo "$out" | grep -q 'run /setup' && ok "adopt hands off to /setup" || no "adopt handoff missing"
+{ [ -f "$D/.claude/agents/scout.md" ] && [ -f "$D/.claude/skills/task/reference.md" ]; } && ok "v3.3 files (scout, reference) land via sync" || no "scout/reference missing after sync"
+
+echo "=== L1-5 · v3.3: sentinel gate, status warning, brief injection, caps"
+D="$WORK/l15"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# t\n<!-- claude-starter: UNCONFIGURED — run /setup -->\nno legacy patterns here\n' > "$D/CLAUDE.md"
+printf '{"session_id": "tsuite-s1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "sentinel-only CLAUDE.md arms the setup gate"
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'SETUP REQUIRED' && ok "sentinel arms session-start instruction" || no "sentinel missed by session-start"
+n=$(grep -l 'claude-starter: UNCONFIGURED' "$REPO"/templates/CLAUDE.md.* | wc -l)
+[ "$n" -eq 3 ] && ok "all 3 templates carry the sentinel" || no "only $n/3 templates carry the sentinel"
+
+printf '# ok\n## Commands\n- Test: \`true\`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'EOF'
+# Plan: fixture
+<!-- profile: opus-tier ; size: S -->
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: a [done]
+- verify: `true`
+- risk: low
+
+## M2: b [pending]
+- verify: `true`
+- risk: low
+EOF
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'milestone gate is OFF' && ok "pending-without-in_progress warned (typo net)" || no "status-corruption warning missing"
+printf '{"session_id": "tsuite-s2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "gate no-ops on zero in_progress (warning is session-start's job)"
+
+printf 'BRIEF-CONTENT-MARKER\n' > "$D/.ai_context/tasks/demo/brief.md"
+python3 - "$D/.ai_context/tasks/demo/lessons.md" <<'PY'
+import sys; open(sys.argv[1],'w').write('lesson line\n'*500)
+PY
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'BRIEF-CONTENT-MARKER' && ok "brief.md injected on active task" || no "brief.md not injected"
+echo "$out" | grep -q 'cap 4096' && ok "oversized lessons.md warned" || no "lessons cap warning missing"
+
+mkdir -p "$D/.claude/hooks"
+cp "$REPO/.claude/hooks/post-edit.sh" "$D/.claude/hooks/"
+printf '#!/usr/bin/env bash\nfor i in $(seq 1 100); do echo "line $i"; done\nexit 1\n' > "$D/.claude/hooks/lint.sh"
+chmod +x "$D/.claude/hooks/lint.sh" "$D/.claude/hooks/post-edit.sh"
+err=$(printf '{"file_path": "x.py"}' | CLAUDE_PROJECT_DIR="$D" bash "$D/.claude/hooks/post-edit.sh" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "post-edit propagates lint failure"
+nl=$(printf '%s\n' "$err" | wc -l)
+[ "$nl" -le 45 ] && ok "post-edit output bounded ($nl lines)" || no "post-edit output unbounded ($nl lines)"
+
+echo "=== L1-6 · resident-size guards + security entries"
+sz=$(wc -c < "$REPO/.ai_context/INDEX.md")
+[ "$sz" -le 4096 ] && ok "INDEX.md within 4 KB ($sz B — injected every session)" || no "INDEX.md re-bloated ($sz B > 4096)"
+sz=$(wc -c < "$REPO/.claude/skills/task/SKILL.md")
+[ "$sz" -le 11264 ] && ok "task SKILL.md within 11 KB ($sz B)" || no "task SKILL.md bloated ($sz B) — move detail to reference.md"
+grep -qF 'Read(./**/.env)' "$REPO/.claude/settings.json" && ok "nested .env read-deny present" || no "nested .env deny missing"
+grep -qxF '**/.env' "$REPO/.gitignore" && ok "nested .env gitignored" || no "nested .env gitignore missing"
+grep -q 'gate-cache' "$REPO/.gitignore" && ok "gate-cache gitignored (fingerprint-safe)" || no "gate-cache ignore missing"
+
+echo "=== L1-7 · stop-gate PASS-cache (git-fingerprinted)"
+D="$WORK/l17"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: \`true\`\n' > "$D/CLAUDE.md"
+printf '.ai_context/tasks/*/.gate-cache\n' > "$D/.gitignore"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm base
+printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "green verify passes (run 1)"
+printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "green verify passes (run 2, unchanged tree)"
+n=$(grep -c 'PASS' "$D/.ai_context/tasks/demo/gatelog")
+[ "$n" -eq 1 ] && ok "unchanged tree hit PASS-cache (1 gatelog row, not 2)" || no "PASS-cache missed ($n rows)"
+echo change > "$D/newfile.txt"
+printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+n=$(grep -c 'PASS' "$D/.ai_context/tasks/demo/gatelog")
+[ "$n" -eq 2 ] && ok "tree change invalidated the cache (re-ran verify)" || no "cache not invalidated ($n rows)"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
+printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "red verify still blocks after prior caching"
+[ ! -f "$D/.ai_context/tasks/demo/.gate-cache" ] && ok "FAIL clears the cache" || no "stale cache survives a FAIL"
+
+echo "=== L1-8 · S7 pre-commit measures STAGED content"
+D="$WORK/l18"; mkdir -p "$D/.ai_context"
+printf 'Last updated: 2026-07-08\nsmall\n' > "$D/.ai_context/state.md"
+git -C "$D" init -q && git -C "$D" add -A
+( cd "$D" && bash "$REPO/scripts/check-state-size.sh" ) >/dev/null 2>&1
+ck 0 $? "small staged state.md passes"
+python3 - "$D/.ai_context/state.md" <<'PY'
+import sys; open(sys.argv[1],'w').write('x'*6000)
+PY
+( cd "$D" && bash "$REPO/scripts/check-state-size.sh" ) >/dev/null 2>&1
+ck 0 $? "bloated worktree with small staged content passes (staged is what commits)"
+( cd "$D" && git add .ai_context/state.md && bash "$REPO/scripts/check-state-size.sh" ) >/dev/null 2>&1
+ck 1 $? "bloated staged content blocks"
 
 echo "=== L2-1 · spawn completeness (--local)"
 ( cd "$WORK" && "$REPO/start_project.sh" --local --kind code lab ) >/dev/null 2>&1
@@ -135,7 +229,8 @@ else
   miss=""
   for f in .claude/settings.json .claude/hooks/session-start.sh .claude/hooks/stop-gate.sh \
            .claude/hooks/post-edit.sh .claude/skills/wrap/SKILL.md .claude/skills/task/SKILL.md \
-           .claude/skills/setup/SKILL.md .claude/agents/planner.md .claude/agents/plan-critic.md \
+           .claude/skills/task/reference.md .claude/skills/setup/SKILL.md \
+           .claude/agents/scout.md .claude/agents/planner.md .claude/agents/plan-critic.md \
            .claude/agents/executor.md .claude/agents/verifier.md .claude/agents/reframer.md \
            .claude/.starter-version .ai_context/INDEX.md .ai_context/tasks/.gitkeep CLAUDE.md README.md; do
     [ -e "$P/$f" ] || miss="$miss $f"
