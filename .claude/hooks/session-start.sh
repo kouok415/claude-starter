@@ -38,31 +38,39 @@ emit_file() {
 emit_file "$CTX/INDEX.md"
 emit_file "$CTX/state.md"
 
-# --- Active long-horizon task (/task harness): inject its brief + plan +
-#     lessons so re-anchoring after /clear or compaction lands on the latest
-#     milestone checkpoint, not on a start-of-session snapshot. (This is the
-#     reason /task's resume step does NOT re-read these files.)
+# --- Active long-horizon task (/task harness): inject its spec + brief +
+#     plan + lessons so re-anchoring after /clear or compaction lands on the
+#     latest milestone checkpoint WITH its intent (spec carries the ACs and
+#     constraints — S tasks have no executor that would re-read it). This is
+#     the reason /task's resume step does NOT re-read these files.
 if [ -f "$CTX/tasks/CURRENT" ]; then
   slug="$(tr -d '[:space:]' < "$CTX/tasks/CURRENT")"
   tdir="$CTX/tasks/$slug"
-  if [ -n "$slug" ] && [ -d "$tdir" ]; then
+  if [ -z "$slug" ]; then
+    printf 'WARNING: .ai_context/tasks/CURRENT exists but is empty/corrupt — the milestone gate cannot arm; restore the slug or delete the file.\n'
+  elif [ ! -f "$tdir/plan.md" ]; then
+    printf 'WARNING: tasks/CURRENT names "%s" but its plan.md is missing (mid-intake pause, renamed dir, or stale CURRENT) — the milestone gate cannot arm until plan.md exists.\n' "$slug"
+    emit_file "$tdir/spec.md"
+    emit_file "$tdir/brief.md"
+    emit_file "$tdir/lessons.md"
+  else
+    emit_file "$tdir/spec.md"
     emit_file "$tdir/brief.md"
     emit_file "$tdir/plan.md"
     emit_file "$tdir/lessons.md"
 
     # Status corruption / resume nudge: [pending] milestones but none
-    # [in_progress] means the Stop gate is silently OFF (a typo'd status
-    # tag does exactly this). Warn — don't block; completion wrap-up is a
-    # legitimate zero-in_progress state.
-    if [ -f "$tdir/plan.md" ] && \
-       grep -q '^## .*\[pending\]' "$tdir/plan.md" && \
+    # [in_progress] means the Stop gate is not armed (a typo'd status tag
+    # does exactly this). The stop-gate blocks the mid-flight case once per
+    # session; this warning also covers the legitimate states.
+    if grep -q '^## .*\[pending\]' "$tdir/plan.md" && \
        ! grep -q '^## .*\[in_progress\]' "$tdir/plan.md"; then
       printf 'WARNING: task %s has [pending] milestones but none [in_progress] — the milestone gate is OFF in this state. Mark the next milestone [in_progress] before working, and check for a status typo.\n' "$slug"
     fi
 
     # Size cap (S7 spirit) for the always-injected task files: past 4 KB
     # they tax every session start and every subagent that reads them.
-    for tf in brief.md lessons.md; do
+    for tf in spec.md brief.md lessons.md; do
       if [ -f "$tdir/$tf" ]; then
         tsize="$(wc -c < "$tdir/$tf" | tr -d ' ')"
         if [ "$tsize" -gt 4096 ]; then
@@ -75,7 +83,9 @@ fi
 
 if [ -f "$CTX/state.md" ]; then
   # --- Freshness (S3): warn when "Last updated" is old ---
-  lu="$(grep -m1 -Eo '[0-9]{4}-[0-9]{2}-[0-9]{2}' "$CTX/state.md" || true)"
+  # Anchored to the labeled line: S3 requires the label, and a body date
+  # ("ship by 2026-08-01") must not shadow the actual freshness claim.
+  lu="$(sed -n 's/.*[Ll]ast updated:*[^0-9]*\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\).*/\1/p' "$CTX/state.md" | head -n1)"
   if [ -n "$lu" ]; then
     lu_epoch="$(date -d "$lu" +%s 2>/dev/null || date -j -f '%Y-%m-%d' "$lu" +%s 2>/dev/null || echo '')"
     if [ -n "$lu_epoch" ]; then
