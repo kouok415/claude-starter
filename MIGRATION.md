@@ -1,8 +1,11 @@
 # Migration guide
 
-Four migrations live here (docs are bilingual elsewhere; this file and the
+Five migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[0. claude-starter v3.3 → v3.4](#0-claude-starter-v33--v34)** — the
+  gate-integrity release: no silent gate-off states, content-hashed
+  PASS-cache, gatelog command provenance, decision-grade scoreboard.
 - **[A. claude-starter v3.x → v3.3](#a-claude-starter-v3x--v33)** — the
   token-economy release: scout/brief, S/M/L sizing, risk-scaled
   verification, PASS-cache, setup sentinel.
@@ -13,6 +16,53 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## 0. claude-starter v3.3 → v3.4
+
+v3.4 closes the milestone gate's remaining silent-failure paths and makes
+the scoreboard able to answer its own question ("does the harness earn its
+keep?"). Well-formed tasks see no behavior change; malformed task state now
+gets caught instead of silently disarming the gate.
+
+### What changed, and why
+
+| v3.3 | v3.4 | Reason |
+|---|---|---|
+| A status typo (`[done]`+`[pending]`, no `[in_progress]`) only warned at the NEXT session start | The Stop gate blocks it once per session and logs an `INTEGRITY` gatelog row | The typo happens at milestone transitions — mid-session — and left the gate dark until the next session |
+| Empty/corrupt `CURRENT`, missing plan.md, heading-less plan.md, verify-less `[in_progress]` milestone: all silent `exit 0` | Each blocks once per session (shared marker) + `INTEGRITY` row; all-`[pending]` (intake pause) and all-`[done]` (wrap-up) stay legitimate no-ops | Every silent disarm made `gate_failures=0` unreadable — clean run or dark gate? Now a quiet gatelog is proof of a clean run |
+| "Never run a task on main" was prose | CURRENT + branch main/master blocks once per session | Task-on-main breaks the rollback model and rung-3 worktrees; violation was silent, detection is one git call |
+| PASS-cache fingerprinted untracked files by size only | Content hash for untracked files ≤1 MB; larger fall back to size+mtime | A same-size edit could ride a stale PASS — the one violation of ADR "conservative misses OK, stale passes never" |
+| gatelog rows: timestamp + milestone + verdict | + the exact verify command enforced (tabs sanitized) | A mid-run weakening of the verify left no trace; now it's on the audit record |
+| Verify commands ran whatever plan.md said | Denylist: `sudo` / `git push` / `rm -rf <absolute>` never execute — blocked every time, logged | Verifies run unattended at every turn end, and `--auto` S-tasks have no plan-critic reviewing them |
+| SessionStart injected brief + plan + lessons | + spec.md (ACs, constraints, out-of-scope) | S tasks execute in the main context — after compaction the intent lived only in luck; executors re-read spec, the orchestrator didn't |
+| scoreboard: `...,interventions,outcome`, outcome wording ad hoc, completed tasks only | + `duration_min` (first→last commit on `task/<slug>`); `outcome` pinned to `success\|failed\|abandoned`; abandoned tasks must write their row too | Without a cost axis and failure rows the A/B dataset was survivor-biased and couldn't answer "earns its keep" |
+| Freshness warning keyed on the first date found in state.md | Anchored to the `Last updated:` line (S3's label) | A body date ("ship by 2026-08-01") could shadow the real freshness claim |
+| `--update-stock` advanced files but not the provenance stamp | Appends `synced-to: claude-starter@<ref>` to `.claude/.starter-version` | The stamp exists for stale-spawner debugging; it was lying after every sync |
+
+The final review panel's test-integrity lens now also audits
+`git log -p -- .ai_context/tasks/<slug>/spec.md` — spec weakening was
+invisible to a panel that only reads the current spec (git already stores
+the history; the fix is pointing the judge at it).
+
+### Upgrade steps for a v3.3 project
+
+```bash
+cd <claude-starter>
+./sync-project.sh --update-stock <path-to-project>
+```
+
+Provably-stock hooks/skills/agents advance automatically. Then:
+
+1. **Existing `scoreboard.csv`** (if any): add the `duration_min` column to
+   the header, second-from-last (`...,interventions,duration_min,outcome`),
+   and backfill old rows with `?`.
+2. Mid-flight tasks need nothing — the integrity checks only fire on
+   malformed state, and a well-formed task passes untouched.
+3. Note the freshness-warning change: a `state.md` without a labeled
+   `Last updated:` line now warns even if a date appears elsewhere (that
+   is S3 as written).
 
 ---
 
