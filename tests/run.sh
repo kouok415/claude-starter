@@ -25,7 +25,7 @@ skp()  { SKIP=$((SKIP+1)); echo "SKIP: $*"; }
 ck()   { local want="$1" got="$2"; shift 2; if [ "$want" = "$got" ]; then ok "$*"; else no "$* (want rc=$want got rc=$got)"; fi; }
 
 WORK="$(mktemp -d)"
-cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* ; }
+cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* ; }
 trap cleanup EXIT
 
 # Spec-faithful plan fixture: format header INCLUDED, one in_progress.
@@ -93,11 +93,13 @@ printf 'idx\n' > "$D/.ai_context/INDEX.md"
 echo demo > "$D/.ai_context/tasks/CURRENT"
 write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
 printf 'lesson-x\n' > "$D/.ai_context/tasks/demo/lessons.md"
+printf 'SPEC-MARKER goal line\n' > "$D/.ai_context/tasks/demo/spec.md"
 git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm x
 out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
 echo "$out" | grep -q 'SETUP REQUIRED' && ok "newborn instruction emitted" || no "newborn instruction missing"
 echo "$out" | grep -q 'INDEX.md ===' && ok "INDEX injected" || no "INDEX missing"
 echo "$out" | grep -q 'lesson-x' && ok "active task plan+lessons injected" || no "task injection missing"
+echo "$out" | grep -q 'SPEC-MARKER' && ok "spec.md injected on active task (intent anchor)" || no "spec.md not injected"
 echo "$out" | grep -q 'days ago' && ok "stale-state warning (S3)" || no "stale warning missing"
 echo "$out" | grep -q 'ended without /wrap' && ok "unwrapped-session warning" || no "unwrapped warning missing"
 echo "$out" | grep -q 'milestone gate is OFF' && no "false status warning while in_progress exists" || ok "no false status warning"
@@ -105,6 +107,14 @@ D2="$WORK/l13b"; mkdir -p "$D2"
 printf '# n2\n- **Dev:** `<command>`\n' > "$D2/CLAUDE.md"
 out=$(CLAUDE_PROJECT_DIR="$D2" bash "$SS" </dev/null 2>&1)
 echo "$out" | grep -q 'SETUP REQUIRED' && ok "newborn instruction without .ai_context (domain matches gate)" || no "newborn instruction gated on .ai_context"
+D3="$WORK/l13c"; mkdir -p "$D3/.ai_context/tasks"
+printf '# n3\n## Commands\n- Test: `true`\n' > "$D3/CLAUDE.md"
+printf '# s\n- decoy deadline 2026-01-01\n\n_Last updated: %s_\n' "$(date +%F)" > "$D3/.ai_context/state.md"
+printf 'idx\n' > "$D3/.ai_context/INDEX.md"
+echo ghost > "$D3/.ai_context/tasks/CURRENT"
+out=$(CLAUDE_PROJECT_DIR="$D3" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'days ago' && no "body date shadowed the Last-updated line (anchoring broken)" || ok "freshness anchored to the Last-updated line"
+echo "$out" | grep -q 'plan.md is missing' && ok "dangling CURRENT warned" || no "dangling CURRENT not warned"
 
 echo "=== L1-4 · sync: --update-stock + --adopt"
 if git -C "$REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
@@ -119,6 +129,7 @@ else
   cmp -s "$D/.claude/hooks/stop-gate.sh" "$REPO/.claude/hooks/stop-gate.sh" && ok "historical stock file advanced" || no "stock file not advanced"
   echo "$out" | grep -q 'settings.json differs from every known template version' && ok "customized file flagged, untouched" || no "customized handling wrong"
   grep -q custom "$D/.claude/settings.json" && ok "customized content preserved" || no "customized content clobbered"
+  grep -q 'synced-to: claude-starter@' "$D/.claude/.starter-version" 2>/dev/null && ok "synced-to stamp appended on --update-stock" || no "synced-to stamp missing"
 fi
 D="$WORK/l14a/existing"; mkdir -p "$D/src"; echo 'x=1' > "$D/src/m.py"
 "$REPO/sync-project.sh" "$D" >/dev/null 2>&1 && no "non-starter accepted without --adopt" || ok "non-starter rejected without --adopt"
@@ -155,7 +166,10 @@ EOF
 out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
 echo "$out" | grep -q 'milestone gate is OFF' && ok "pending-without-in_progress warned (typo net)" || no "status-corruption warning missing"
 printf '{"session_id": "tsuite-s2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "gate no-ops on zero in_progress (warning is session-start's job)"
+ck 2 $? "status typo (done+pending, no in_progress) blocks first stop (integrity)"
+printf '{"session_id": "tsuite-s2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "status-typo integrity yields on second stop (marker)"
+grep -q 'INTEGRITY' "$D/.ai_context/tasks/demo/gatelog" && ok "INTEGRITY row logged for dark-gate state" || no "INTEGRITY row missing"
 
 printf 'BRIEF-CONTENT-MARKER\n' > "$D/.ai_context/tasks/demo/brief.md"
 python3 - "$D/.ai_context/tasks/demo/lessons.md" <<'PY'
@@ -190,6 +204,7 @@ printf '.ai_context/tasks/*/.gate-cache\n' > "$D/.gitignore"
 echo demo > "$D/.ai_context/tasks/CURRENT"
 write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
 git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm base
+git -C "$D" checkout -qb task/demo
 printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 0 $? "green verify passes (run 1)"
 printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
@@ -200,10 +215,85 @@ echo change > "$D/newfile.txt"
 printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 n=$(grep -c 'PASS' "$D/.ai_context/tasks/demo/gatelog")
 [ "$n" -eq 2 ] && ok "tree change invalidated the cache (re-ran verify)" || no "cache not invalidated ($n rows)"
+printf 'chAnge\n' > "$D/newfile.txt"
+printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+n=$(grep -c 'PASS' "$D/.ai_context/tasks/demo/gatelog")
+[ "$n" -eq 3 ] && ok "same-size untracked edit invalidated the cache (content hash)" || no "same-size edit missed ($n rows)"
+grep -q "	M2	PASS	true" "$D/.ai_context/tasks/demo/gatelog" && ok "gatelog rows carry the verify command" || no "gatelog command column missing"
 write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
 printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 2 $? "red verify still blocks after prior caching"
 [ ! -f "$D/.ai_context/tasks/demo/.gate-cache" ] && ok "FAIL clears the cache" || no "stale cache survives a FAIL"
+
+echo "=== L1-10 · gate integrity: no silent disarm"
+D="$WORK/l110"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+: > "$D/.ai_context/tasks/CURRENT"
+printf '{"session_id": "tsuite-i1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "empty CURRENT blocks (integrity)"
+printf '{"session_id": "tsuite-i1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "empty-CURRENT integrity yields on second stop (marker)"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+err=$(printf '{"session_id": "tsuite-i2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "CURRENT without plan.md blocks (integrity)"
+echo "$err" | grep -q 'mid-intake' && ok "missing-plan message names the legitimate pause" || no "missing-plan message unhelpful"
+grep -q 'INTEGRITY' "$D/.ai_context/tasks/demo/gatelog" && ok "INTEGRITY row written to gatelog" || no "INTEGRITY row missing"
+printf 'not a plan\n' > "$D/.ai_context/tasks/demo/plan.md"
+printf '{"session_id": "tsuite-i3"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "heading-less plan.md blocks (integrity)"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'EOF'
+# Plan: fixture
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: only [in_progress]
+- risk: low
+EOF
+printf '{"session_id": "tsuite-i4"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "[in_progress] without a verify command blocks (integrity)"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'EOF'
+# Plan: fixture
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: a [pending]
+- verify: `true`
+- risk: low
+
+## M2: b [pending]
+- verify: `true`
+- risk: low
+EOF
+printf '{"session_id": "tsuite-i5"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "all-pending intake pause passes (no false block)"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'EOF'
+# Plan: fixture
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: a [done]
+- verify: `true`
+- risk: low
+EOF
+printf '{"session_id": "tsuite-i6"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "all-done wrap-up passes (no false block)"
+write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned && git push origin main'
+err=$(printf '{"session_id": "tsuite-i7"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "forbidden verify (git push) blocks"
+[ ! -f "$D/pwned" ] && ok "forbidden verify was NOT executed" || no "forbidden verify RAN"
+echo "$err" | grep -q 'NOT run' && ok "refusal message explains the denylist" || no "refusal message missing"
+printf '{"session_id": "tsuite-i7"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "forbidden verify keeps blocking (no once-per-session yield)"
+grep -q 'forbidden verify' "$D/.ai_context/tasks/demo/gatelog" && ok "forbidden verify logged (INTEGRITY row)" || no "forbidden-verify row missing"
+
+D="$WORK/l110b"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+git -C "$D" init -q -b main 2>/dev/null || { git -C "$D" init -q && git -C "$D" checkout -qb main; }
+git -C "$D" add -A && git -C "$D" commit -qm base
+printf '{"session_id": "tsuite-i8"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "active task on main blocks (integrity)"
+git -C "$D" checkout -qb task/demo
+printf '{"session_id": "tsuite-i9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "task branch passes (fresh session)"
 
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"
@@ -285,6 +375,7 @@ PY
   mkdir -p "$P/.ai_context/tasks/demo"; echo demo > "$P/.ai_context/tasks/CURRENT"
   write_plan "$P/.ai_context/tasks/demo/plan.md" "true"
   printf '# lab\n## Commands\n- Test: `true`\n' > "$P/CLAUDE.md"
+  git -C "$P" checkout -qb task/demo 2>/dev/null || true
   printf '{"session_id": "tsuite-l2"}' | CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
   ck 0 $? "project gate: green passes"
   write_plan "$P/.ai_context/tasks/demo/plan.md" "false"
@@ -312,6 +403,7 @@ else
   mkdir -p "$R/.ai_context/tasks/demo"; echo demo > "$R/.ai_context/tasks/CURRENT"
   printf '# r\n## Commands\n- Test: `true`\n' > "$R/CLAUDE.md"
   write_plan "$R/.ai_context/tasks/demo/plan.md" "test -s reports/x.md"
+  git -C "$R" checkout -qb task/demo 2>/dev/null || true
   printf '{"session_id": "tsuite-r"}' | CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
   ck 2 $? "artifact gate blocks while deliverable absent"
   mkdir -p "$R/reports" && echo content > "$R/reports/x.md"
