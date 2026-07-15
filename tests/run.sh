@@ -131,6 +131,13 @@ else
   grep -q custom "$D/.claude/settings.json" && ok "customized content preserved" || no "customized content clobbered"
   grep -q 'synced-to: claude-starter@' "$D/.claude/.starter-version" 2>/dev/null && ok "synced-to stamp appended on --update-stock" || no "synced-to stamp missing"
   [ -x "$D/scripts/harness-report.sh" ] && ok "new stock file (harness-report.sh) installed by sync" || no "harness-report.sh not installed — copy_if_missing pair missing"
+  D5="$WORK/l14b"; mkdir -p "$D5/.ai_context" "$D5/.claude"
+  cp -r "$REPO/.claude/hooks" "$REPO/.claude/skills" "$REPO/.claude/agents" "$REPO/.claude/settings.json" "$D5/.claude/"
+  cp "$REPO/.ai_context/INDEX.md" "$D5/.ai_context/"
+  cp "$REPO/.pre-commit-config.yaml" "$D5/"
+  mkdir -p "$D5/scripts"; cp "$REPO/scripts/check-state-size.sh" "$REPO/scripts/precommit-gitleaks.sh" "$D5/scripts/"
+  "$REPO/sync-project.sh" --update-stock "$D5" >/dev/null 2>&1
+  grep -q 'synced-to: claude-starter@' "$D5/.claude/.starter-version" 2>/dev/null && ok "added-only sync still appends the synced-to stamp (attribution integrity)" || no "added-only sync left no stamp — harness column would mis-attribute"
 fi
 unpaired=""
 while IFS= read -r f; do

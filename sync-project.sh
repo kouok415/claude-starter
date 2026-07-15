@@ -146,7 +146,7 @@ chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/scripts/*.sh 2>/dev/null || true
 
 # --update-stock leaves a provenance trail: the spawn stamp records which
 # template vintage the mechanisms were last synced to (stale-spawner debugging).
-if [ "$UPDATE_STOCK" = 1 ] && [ "${#updated[@]}" -gt 0 ]; then
+if [ "$UPDATE_STOCK" = 1 ] && [ "$(( ${#updated[@]} + ${#added[@]} ))" -gt 0 ]; then
   ref="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   printf 'synced-to: claude-starter@%s on %s\n' "$ref" "$(date +%F)" \
     >> "$TARGET/.claude/.starter-version" 2>/dev/null || true
