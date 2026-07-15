@@ -193,6 +193,9 @@ sz=$(wc -c < "$REPO/.ai_context/INDEX.md")
 [ "$sz" -le 4096 ] && ok "INDEX.md within 4 KB ($sz B — injected every session)" || no "INDEX.md re-bloated ($sz B > 4096)"
 sz=$(wc -c < "$REPO/.claude/skills/task/SKILL.md")
 [ "$sz" -le 11264 ] && ok "task SKILL.md within 11 KB ($sz B)" || no "task SKILL.md bloated ($sz B) — move detail to reference.md"
+sz=$(wc -c < "$REPO/.claude/skills/wrap/SKILL.md")
+[ "$sz" -le 6144 ] && ok "wrap SKILL.md within 6 KB ($sz B)" || no "wrap SKILL.md bloated ($sz B)"
+grep -qF 'duration_min,outcome,harness' "$REPO/.claude/skills/wrap/SKILL.md" && ok "wrap scoreboard header carries the harness column" || no "wrap scoreboard header missing the harness column"
 grep -qF 'Read(./**/.env)' "$REPO/.claude/settings.json" && ok "nested .env read-deny present" || no "nested .env deny missing"
 grep -qxF '**/.env' "$REPO/.gitignore" && ok "nested .env gitignored" || no "nested .env gitignore missing"
 grep -q 'gate-cache' "$REPO/.gitignore" && ok "gate-cache gitignored (fingerprint-safe)" || no "gate-cache ignore missing"
