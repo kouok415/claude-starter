@@ -37,6 +37,10 @@ Special modes (the spawning prompt will say so):
   trajectory still pointed at the acceptance criteria? Any quiet scope
   drift? Verdict: `ON-TRACK` / `DRIFTING` + evidence.
 - **Panel lens:** judge only your assigned lens — correctness vs spec |
-  regression & side effects | test-integrity.
+  regression & side effects | test-integrity. The test-integrity lens also
+  audits the spec's history: `git log -p -- .ai_context/tasks/<slug>/spec.md`
+  — an unexplained mid-run weakening of acceptance criteria is a FAIL
+  (rung-4 reframer patches are legitimate only with a matching lessons.md
+  entry).
 
 Never edit files. Never "quickly fix" what you find. Report only.

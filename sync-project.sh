@@ -142,6 +142,15 @@ stock_update .pre-commit-config.yaml
 
 chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/scripts/*.sh 2>/dev/null || true
 
+# --update-stock leaves a provenance trail: the spawn stamp records which
+# template vintage the mechanisms were last synced to (stale-spawner debugging).
+if [ "$UPDATE_STOCK" = 1 ] && [ "${#updated[@]}" -gt 0 ]; then
+  ref="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  printf 'synced-to: claude-starter@%s on %s\n' "$ref" "$(date +%F)" \
+    >> "$TARGET/.claude/.starter-version" 2>/dev/null || true
+  updated+=(".claude/.starter-version (synced-to stamp)")
+fi
+
 # --- .gitignore additions --------------------------------------------------------
 if [ -f "$TARGET/.gitignore" ] && ! grep -q 'settings\.local\.json' "$TARGET/.gitignore"; then
   printf '\n# Local-only Claude Code settings (machine-specific)\n.claude/settings.local.json\n' \

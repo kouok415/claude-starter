@@ -21,11 +21,12 @@ deltas, not summaries of what they read.
 ## 0 · Intake
 
 0. **Resume, not restart.** If `.ai_context/tasks/CURRENT` names a task,
-   this is a resume — `brief.md`, `plan.md`, `lessons.md` are ALREADY in
-   your context (SessionStart injects them; don't re-read unless they
-   changed during this session). Find the `[in_progress]` milestone and
+   this is a resume — `spec.md`, `brief.md`, `plan.md`, `lessons.md` are
+   ALREADY in your context (SessionStart injects them; don't re-read unless
+   they changed during this session). Find the `[in_progress]` milestone and
    re-enter §3. Never re-interview or re-plan. If the user is clearly
-   asking for a *different* task, ask whether to finish, abandon (delete
+   asking for a *different* task, ask whether to finish, abandon (run
+   `/wrap` — abandoned tasks still get their scoreboard row — then delete
    `CURRENT`), or defer the new one. One active task at a time.
 1. Derive a short kebab-case `<slug>`.
 2. If scope, constraints, or "what does done mean" are genuinely

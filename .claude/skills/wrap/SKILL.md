@@ -31,12 +31,20 @@ preamble before writing to it):
 
 4. **Active `/task`** — if `.ai_context/tasks/CURRENT` exists:
    - Task finished: write its journal entry with the scoreboard — profile,
-     size, milestones total, gate failures **counted from
-     `tasks/<slug>/gatelog`** (never from memory), highest escalation rung
-     used, human interventions — and append the same numbers as one row to
+     size, milestones total, gate_failures = **count of `FAIL` rows in
+     `tasks/<slug>/gatelog`** (never from memory; note any `INTEGRITY`
+     rows separately in the journal — each is a caught dark-gate state),
+     highest escalation rung used, human interventions, and duration_min =
+     minutes between the first and last commit on `task/<slug>` (git
+     timestamps, not memory) — and append one row to
      `.ai_context/scoreboard.csv` (create it with header
-     `date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,outcome`
-     if absent). Then delete `CURRENT` (keep the task directory).
+     `date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome`
+     if absent). `outcome` is exactly one of `success` | `failed` |
+     `abandoned`. Then delete `CURRENT` (keep the task directory).
+   - Task abandoned (dropped or superseded): same journal entry + scoreboard
+     row with `outcome=abandoned` — failed and dropped runs must reach the
+     dataset too, or the A/B data is survivor-biased. Then delete `CURRENT`
+     (keep the directory).
    - Task unfinished: leave `CURRENT` in place; make sure `state.md`'s
      Now/Next points at the `[in_progress]` milestone so the next session
      resumes cold from the checkpoint. If `lessons.md` or `brief.md`
