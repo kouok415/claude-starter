@@ -97,6 +97,7 @@ copy_if_missing .claude/agents/verifier.md
 copy_if_missing .claude/agents/reframer.md
 copy_if_missing .ai_context/tasks/.gitkeep
 copy_if_missing scripts/check-state-size.sh
+copy_if_missing scripts/harness-report.sh
 copy_if_missing scripts/precommit-gitleaks.sh
 copy_if_missing .pre-commit-config.yaml
 
