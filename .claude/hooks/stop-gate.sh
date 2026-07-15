@@ -34,6 +34,18 @@
 # so the gate never gets weaker — only cheaper. Non-git trees never cache.
 # Skips are silent (no gatelog row) so scoreboard counts stay meaningful.
 #
+# Zero-stop sweep (v3.6): a task completed inside ONE turn never arms the
+# gate — the Stop hook first fires when plan.md is already all-[done], a
+# legitimate no-op, so the gatelog stays empty and "0 gate failures" is
+# vacuous. At the all-[done] state (and via an explicit `--sweep` call from
+# /wrap before CURRENT is deleted) every [done] milestone lacking a PASS row
+# is accounted for: the LAST one — whose point-in-time is exactly now — has
+# its verify RUN (PASS/FAIL rows, red blocks every time); earlier ones get
+# an UNARMED row (their verifies are point-in-time gates, not permanent
+# invariants — later milestones may legitimately supersede them, so honest
+# vacuity is recorded instead of fake evidence). A quiet gatelog again
+# means "clean run": no FAIL, no INTEGRITY, and no unrecorded dark gates.
+#
 # Loop protection: when a previous Stop was already blocked by this hook,
 # Claude Code sets "stop_hook_active": true — that stop is allowed through.
 
@@ -42,17 +54,24 @@ set -uo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-.}"
 TASKS="$ROOT/.ai_context/tasks"
 
-payload="$(cat 2>/dev/null || true)"
-if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
-  exit 0
+MODE=stop
+[ "${1:-}" = "--sweep" ] && MODE=sweep
+
+if [ "$MODE" = stop ]; then
+  payload="$(cat 2>/dev/null || true)"
+  if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+    exit 0
+  fi
+  sid="$(printf '%s' "$payload" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+else
+  sid=""
 fi
-sid="$(printf '%s' "$payload" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 
 # --- Gate 1: first-session setup -------------------------------------------
 # Sentinel first (v3.3 templates); legacy placeholder patterns kept for
 # projects spawned before the sentinel existed. Keep this pattern in sync
 # with session-start.sh — the two layers of one mechanism must agree.
-if [ -f "$ROOT/CLAUDE.md" ] && \
+if [ "$MODE" = stop ] && [ -f "$ROOT/CLAUDE.md" ] && \
    grep -qE 'claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit' "$ROOT/CLAUDE.md"; then
   marker="${TMPDIR:-/tmp}/claude-setup-nudge-${sid:-nosession}"
   if [ ! -f "$marker" ]; then
@@ -102,8 +121,93 @@ case "$branch" in
 esac
 
 plan="$TASKS/$slug/plan.md"
+gatelog="$TASKS/$slug/gatelog"
 [ -f "$plan" ] || integrity_stop '?' "tasks/CURRENT names '$slug' but its plan.md is missing — mid-intake pause, renamed dir, or stale CURRENT"
 grep -q '^## ' "$plan" || integrity_stop '?' 'plan.md has no milestone headings — malformed plan, the gate has nothing to check'
+
+# --- Zero-stop sweep ---------------------------------------------------------
+# Shared by the all-[done] Stop state and the explicit --sweep mode (called
+# by /wrap before CURRENT is deleted, incl. on abandoned tasks).
+TAB="$(printf '\t')"
+
+verify_of() { # $1 = milestone id -> prints its `- verify:` command (may be empty)
+  awk -v want="## $1:" '
+    index($0, want) == 1 { take = 1; next }
+    /^## / { take = 0 }
+    take && /^- verify:/ {
+      sub(/^- verify:[[:space:]]*/, "")
+      gsub(/^`|`$/, "")
+      print
+      exit
+    }
+  ' "$plan"
+}
+
+run_cmd() { # $1 = command; bounded so a hung verify cannot wedge the session
+  cd "$ROOT" || return 1
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 540 bash -c "$1"
+  else
+    bash -c "$1"
+  fi
+}
+
+sweep_done_milestones() { # $1 = 1 when the plan is all-[done] (last verify runs)
+  run_last="$1"
+  last_id="$(grep '^## .*\[done\]' "$plan" | tail -1 | sed -n 's/^## \([^:]*\):.*/\1/p')"
+  grep '^## .*\[done\]' "$plan" | sed -n 's/^## \([^:]*\):.*/\1/p' | while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    grep -qF "${TAB}${id}${TAB}PASS" "$gatelog" 2>/dev/null && continue
+    vcmd="$(verify_of "$id")"
+    vlog="$(printf '%s' "$vcmd" | tr '\t' ' ')"
+    if [ "$id" = "$last_id" ] && [ "$run_last" = 1 ] && [ -n "$vcmd" ]; then
+      case " $vcmd " in
+        *' sudo '*|*'git push'*|*'rm -rf /'*)
+          printf '%s\t%s\tINTEGRITY\tforbidden verify, not executed: %s\n' \
+            "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
+          {
+            printf 'GATE REFUSED — the verify command contains a forbidden operation and was NOT run:\n'
+            printf '$ %s\n' "$vcmd"
+            printf 'Rewrite this milestone verify in plan.md, then finish.\n'
+          } >&2
+          echo BLOCK
+          ;;
+        *)
+          if out="$(run_cmd "$vcmd" 2>&1)"; then
+            printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
+          else
+            printf '%s\t%s\tFAIL\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
+            {
+              printf 'GATE SWEEP FAILED — %s is marked [done] but its verify fails NOW (zero-stop run: the gate never saw it pass).\n' "$id"
+              printf '$ %s\n' "$vcmd"
+              printf '%s\n' "$out" | tail -n 50
+              printf 'The task cannot wrap red: fix it, or mark %s back to [in_progress] and re-enter the loop.\n' "$id"
+            } >&2
+            echo BLOCK
+          fi
+          ;;
+      esac
+    else
+      # Earlier [done] milestones (or verify-less ones): their point-in-time
+      # has passed — record honest vacuity exactly once, never fake evidence.
+      grep -qF "${TAB}${id}${TAB}UNARMED" "$gatelog" 2>/dev/null && continue
+      printf '%s\t%s\tUNARMED\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" \
+        "${vlog:-(no verify command)}" >> "$gatelog" 2>/dev/null || true
+    fi
+  done | grep -q BLOCK && exit 2
+  return 0
+}
+
+if [ "$MODE" = sweep ]; then
+  n_done="$(grep -c '^## .*\[done\]' "$plan" || true)"
+  [ "${n_done:-0}" -gt 0 ] || exit 0
+  all_done=0
+  if ! grep -q '^## .*\[in_progress\]' "$plan" && ! grep -q '^## .*\[pending\]' "$plan"; then
+    all_done=1
+  fi
+  sweep_done_milestones "$all_done"
+  exit 0
+fi
 
 # Exactly one [in_progress] milestone is the contract — corrupted statuses
 # would poison the compaction anchor, so block until fixed. Anchor to
@@ -121,11 +225,15 @@ if [ "${n_inprog:-0}" -eq 0 ]; then
   if grep -q '^## .*\[done\]' "$plan" && grep -q '^## .*\[pending\]' "$plan"; then
     integrity_stop '?' 'milestones are [done] and [pending] but none [in_progress] — a status typo has the gate OFF; mark the next milestone [in_progress]'
   fi
+  # All-[done] wrap-up: account for gates a zero-stop run never armed —
+  # verify the final milestone now, record UNARMED for earlier rowless ones.
+  if grep -q '^## .*\[done\]' "$plan"; then
+    sweep_done_milestones 1
+  fi
   exit 0
 fi
 
 ms="$(grep -m1 '^## .*\[in_progress\]' "$plan" | sed -n 's/^## \([^:]*\):.*/\1/p')"
-gatelog="$TASKS/$slug/gatelog"
 gatecache="$TASKS/$slug/.gate-cache"
 
 # Extract the `- verify:` command of the [in_progress] milestone.
@@ -199,18 +307,7 @@ if [ -n "$fp" ] && [ -f "$gatecache" ] && \
   exit 0
 fi
 
-# Bound the verify run so a hung command cannot wedge the session
-# (the hook-level timeout in settings.json is 600s; stay under it).
-run_verify() {
-  cd "$ROOT" || return 1
-  if command -v timeout >/dev/null 2>&1; then
-    timeout 540 bash -c "$cmd"
-  else
-    bash -c "$cmd"
-  fi
-}
-
-if out="$(run_verify 2>&1)"; then
+if out="$(run_cmd "$cmd" 2>&1)"; then
   printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
   # Fingerprint AFTER the run: verify itself may write artifacts; caching the
   # post-run state lets the next no-op stop hit the cache.

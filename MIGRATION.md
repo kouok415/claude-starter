@@ -1,12 +1,16 @@
 # Migration guide
 
-Six migrations live here (docs are bilingual elsewhere; this file and the
+Seven migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
-- **[0. claude-starter v3.4 → v3.5](#0-claude-starter-v34--v35)** — the
+- **[0. claude-starter v3.5 → v3.6](#0-claude-starter-v35--v36)** — the
+  audit-honesty release: zero-stop sweep (final `[done]` milestone verified
+  at wrap, earlier rowless gates recorded `UNARMED`), `stop-gate.sh --sweep`
+  for `/wrap`.
+- **[1. claude-starter v3.4 → v3.5](#1-claude-starter-v34--v35)** — the
   scoring-loop release: version-attributed scoreboard rows, structured
   friction capture, deterministic `harness-report.sh`.
-- **[1. claude-starter v3.3 → v3.4](#1-claude-starter-v33--v34)** — the
+- **[2. claude-starter v3.3 → v3.4](#2-claude-starter-v33--v34)** — the
   gate-integrity release: no silent gate-off states, content-hashed
   PASS-cache, gatelog command provenance, decision-grade scoreboard.
 - **[A. claude-starter v3.x → v3.3](#a-claude-starter-v3x--v33)** — the
@@ -22,7 +26,38 @@ English README are the authority when translations drift):
 
 ---
 
-## 0. claude-starter v3.4 → v3.5
+## 0. claude-starter v3.5 → v3.6
+
+v3.6 closes the audit blind spot the first real `/task` run exposed: a task
+completed inside ONE turn never armed the Stop gate, so its gatelog was
+empty and `gate_failures=0` was vacuous — indistinguishable from an
+evidential clean run.
+
+### What changed, and why
+
+| v3.5 | v3.6 | Reason |
+|---|---|---|
+| all-`[done]` at turn end was an unconditional no-op | zero-stop sweep: the FINAL `[done]` milestone's verify runs if it has no PASS row (its point-in-time is exactly now; red blocks every time, forbidden ops refused as before); earlier rowless `[done]` milestones get an `UNARMED` gatelog row | earlier milestones' verifies are point-in-time gates, not permanent invariants — later work may legitimately supersede them, so honest vacuity is recorded instead of fake evidence or false blocks |
+| `/wrap` could delete `CURRENT` in the same turn, bypassing even the wrap-up stop | new `stop-gate.sh --sweep` mode; `/wrap` runs it BEFORE deleting `CURRENT` (finished and abandoned tasks both) | the sweep must be reachable from inside the turn that wraps; abandoned tasks get `UNARMED` evidence for whatever was claimed done |
+| `harness-report.sh` gates section: FAIL + INTEGRITY | + `UNARMED rows: N` (human output only — the 13-column `--csv` contract is frozen) | vacuous gates become visible in per-project and fleet reporting without breaking cross-version fleet aggregation |
+
+### Upgrade steps for a v3.5 project
+
+```bash
+cd <claude-starter>
+./sync-project.sh --update-stock <path-to-project>
+```
+
+That advances `stop-gate.sh`, `/wrap`, and `scripts/harness-report.sh`.
+Nothing else to do: completed task dirs (no `CURRENT`) are never swept, and
+the first wrap-up stop of the next task does the right thing on its own.
+Historical scoreboard rows written before v3.6 keep their ambiguity — a
+`gate_failures=0` from a pre-v3.6 zero-stop run cannot be retro-classified;
+read them with that caveat.
+
+---
+
+## 1. claude-starter v3.4 → v3.5
 
 v3.5 adds the scoring side of the loop the scoreboard only collected for:
 every row now names the harness version that produced it, harness friction
@@ -54,11 +89,11 @@ That advances `/wrap`, ships `scripts/harness-report.sh`, and appends the
 2. `friction.csv` needs nothing — `/wrap` creates it on its first real
    entry (no empty stubs).
 3. A scoreboard whose header still lacks `duration_min` is pre-v3.4:
-   finish section 1's migration first.
+   finish section 2's migration first.
 
 ---
 
-## 1. claude-starter v3.3 → v3.4
+## 2. claude-starter v3.3 → v3.4
 
 v3.4 closes the milestone gate's remaining silent-failure paths and makes
 the scoreboard able to answer its own question ("does the harness earn its

@@ -323,7 +323,7 @@ date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,durat
 2026-07-12,t5,opus-tier,M,4,1,3,2,100,success,aaa1111
 2026-07-08,old1,fable-tier,S,2,1,4,0,?,abandoned
 EOF
-printf '2026-07-11T10:00:00\tM2\tFAIL\tbash t\n2026-07-11T11:00:00\t?\tINTEGRITY\tempty-current\n' > "$D/.ai_context/tasks/t1/gatelog"
+printf '2026-07-11T10:00:00\tM2\tFAIL\tbash t\n2026-07-11T11:00:00\t?\tINTEGRITY\tempty-current\n2026-07-11T12:00:00\tM1\tUNARMED\tbash t\n' > "$D/.ai_context/tasks/t1/gatelog"
 printf '2026-07-15T09:00:00\tM1\tINTEGRITY\ttask-on-main\n' > "$D/.ai_context/tasks/live/gatelog"
 printf 'date,harness,area,severity,summary,ref\n2026-07-12,aaa1111,hooks,blocker,gate blocked wrap turn,journal/x.md\n2026-07-13,bbb2222,sync,papercut,stale stamp,-\n' > "$D/.ai_context/friction.csv"
 out=$(bash "$REPO/scripts/harness-report.sh" "$D")
@@ -332,6 +332,7 @@ echo "$out" | grep -q 'aaa1111 · opus-tier · M : n=5 .* (success 80%)' && ok "
 echo "$out" | grep -q 'unknown(1)' && ok "old 10-field row lands in the unknown bucket" || no "unknown bucket missing"
 echo "$out" | grep -q 'unknown · fable-tier · S : n=1 success=0 failed=0 abandoned=1$' && ok "N<5 cell prints counts only (no %)" || no "N<5 cell printed a percentage"
 echo "$out" | grep -q 'INTEGRITY rows: 2' && ok "INTEGRITY rows joined from gatelogs" || no "INTEGRITY join wrong"
+echo "$out" | grep -q 'UNARMED rows: 1' && ok "UNARMED rows surfaced (vacuous gates visible)" || no "UNARMED count missing"
 echo "$out" | grep -q 'blocker:1 friction:0 papercut:1' && ok "friction severities counted" || no "friction counts wrong"
 csv=$(bash "$REPO/scripts/harness-report.sh" --csv "$D")
 echo "$csv" | head -1 | grep -qxF 'project,harness,n_tasks,n_success,n_failed,n_abandoned,gate_fail_rows,integrity_rows,rung_ge3,interventions_sum,duration_med,friction_total,friction_blockers' && ok "--csv header is the fleet contract" || no "--csv header drifted"
@@ -346,6 +347,52 @@ ck 2 $? "malformed scoreboard header exits 2"
 grep -qF 'date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness' "$REPO/.claude/skills/wrap/SKILL.md" && grep -qF 'col["harness"]' "$REPO/scripts/harness-report.sh" && ok "wrap header and report parser agree on the schema" || no "wrap and report schema drifted apart"
 grep -qF 'date,harness,area,severity,summary,ref' "$REPO/.claude/skills/wrap/SKILL.md" && ok "wrap prose carries the friction schema" || no "friction schema missing from wrap"
 grep -q 'stock_update scripts/harness-report.sh' "$REPO/sync-project.sh" && ok "sync ships harness-report.sh" || no "sync does not ship harness-report.sh"
+
+echo "=== L1-12 · zero-stop sweep: no vacuous gatelogs"
+D="$WORK/l112"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'EOF'
+# Plan: fixture
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: earlier [done]
+- verify: `false`
+- risk: low
+
+## M2: final [done]
+- verify: `true`
+- risk: low
+EOF
+printf '{"session_id": "tsuite-z1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "all-done zero-stop wrap-up passes when the final verify is green"
+grep -q "	M2	PASS" "$D/.ai_context/tasks/demo/gatelog" && ok "final [done] milestone verified at wrap (PASS row)" || no "final milestone not swept"
+grep -q "	M1	UNARMED" "$D/.ai_context/tasks/demo/gatelog" && ok "earlier rowless [done] recorded UNARMED (verify NOT re-run — point-in-time gate)" || no "UNARMED row missing"
+zn=$(grep -c '' "$D/.ai_context/tasks/demo/gatelog")
+printf '{"session_id": "tsuite-z1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+[ "$(grep -c '' "$D/.ai_context/tasks/demo/gatelog")" -eq "$zn" ] && ok "sweep idempotent (no duplicate rows on re-stop)" || no "sweep duplicated rows"
+sed -i.bak 's/## M2: final \[done\]/## M3: red [done]/; s/- verify: `true`/- verify: `false`/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
+printf '{"session_id": "tsuite-z1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "red final [done] verify blocks the wrap-up turn"
+printf '{"session_id": "tsuite-z1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "red sweep keeps blocking (no once-per-session yield)"
+grep -q "	M3	FAIL" "$D/.ai_context/tasks/demo/gatelog" && ok "sweep FAIL row logged with the enforced command" || no "sweep FAIL row missing"
+D2="$WORK/l112b"; mkdir -p "$D2/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D2/CLAUDE.md"
+echo demo > "$D2/.ai_context/tasks/CURRENT"
+write_plan "$D2/.ai_context/tasks/demo/plan.md" "true"
+CLAUDE_PROJECT_DIR="$D2" bash "$GATE" --sweep >/dev/null 2>&1
+ck 0 $? "--sweep exits 0 mid-task (what /wrap calls before deleting CURRENT)"
+grep -q "	M1	UNARMED" "$D2/.ai_context/tasks/demo/gatelog" && ok "--sweep records UNARMED for the rowless earlier [done]" || no "--sweep UNARMED missing"
+grep -q "	M2	" "$D2/.ai_context/tasks/demo/gatelog" && no "--sweep touched a non-[done] milestone" || ok "--sweep leaves [in_progress]/[pending] milestones alone"
+D3="$WORK/l112c"; mkdir -p "$D3/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D3/CLAUDE.md"
+echo demo > "$D3/.ai_context/tasks/CURRENT"
+printf '# Plan: f\n<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->\n\n## M1: only [done]\n- verify: `touch pwned && git push origin main`\n- risk: low\n' > "$D3/.ai_context/tasks/demo/plan.md"
+CLAUDE_PROJECT_DIR="$D3" bash "$GATE" --sweep >/dev/null 2>&1
+ck 2 $? "--sweep refuses a forbidden final verify"
+[ ! -f "$D3/pwned" ] && ok "--sweep forbidden verify was NOT executed" || no "--sweep ran a forbidden verify"
+grep -q 'forbidden verify' "$D3/.ai_context/tasks/demo/gatelog" && ok "--sweep forbidden logged as INTEGRITY" || no "--sweep forbidden row missing"
 
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"

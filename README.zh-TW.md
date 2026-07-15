@@ -85,6 +85,7 @@ v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才
 | 「儀式隨任務規模縮放、驗證隨風險縮放」 | `/task` 把規模(S/M/L)記進 plan 頭部 —— S 直接在主 context 規劃執行;每個里程碑的 `risk:` 決定 只靠閘門 / 輕量 diff 審查 / 完整對抗驗證 |
 | 「一個狀態錯字不能無聲解除閘門」 | session-start 偵測「任務有 `[pending]` 里程碑卻沒有 `[in_progress]`」時警告;Stop gate 對做到一半斷鏈(`[done]`+`[pending]` 卻無 in_progress)的狀態每 session 擋一次 |
 | 「里程碑閘門絕不無聲熄滅」 | 其餘暗閘狀態 —— CURRENT 空白/損毀、plan.md 不存在或無里程碑標題、`[in_progress]` 里程碑缺 verify 指令、任務工作停在 main/master —— 每 session 擋一次,且每次偵測都在 gatelog 追加一行 `INTEGRITY`:安靜的 gatelog 從此可證明等於乾淨的一輪 |
+| 「單一 turn 跑完的任務不能留下空白稽核軌跡」 | 零停頓掃描:在全 `[done]` 狀態(以及 `/wrap` 刪除 `CURRENT` 前呼叫的 `stop-gate.sh --sweep`)——最後一個里程碑的 verify 真的執行(紅了每次都擋),更早的無列閘門補記 `UNARMED` 列:記錄下來的空洞,而非偽造的證據 |
 | 「verify 指令要被稽核,不只是被執行」 | gatelog 每行記錄實際強制執行的指令(中途弱化留下痕跡);final panel 以 `git log -p -- spec.md` 稽核驗收準則是否被悄悄改弱 |
 | 「verify 指令不能無人看管地做災難性操作」 | Stop gate denylist:含 `sudo`、`git push`、絕對路徑 `rm -rf` 的 verify 永不執行 —— 一律擋下、一律記錄 |
 | 「失敗與放棄的任務也要進資料集」 | `/wrap` 在放棄時同樣寫入記分板列(`outcome` 釘死為 `success\|failed\|abandoned`),外加取自 git 時間戳的 `duration_min` —— 不留倖存者偏差 |

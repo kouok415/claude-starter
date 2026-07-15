@@ -74,8 +74,8 @@ normalize() {
       [ -f "$gl" ] || continue
       slug="$(basename "$(dirname "$gl")")"
       awk -F'\t' -v s="$slug" '
-        $3=="FAIL"{fail++} $3=="INTEGRITY"{integ++}
-        END{ printf "GL|%s|%d|%d\n", s, fail, integ }' "$gl"
+        $3=="FAIL"{fail++} $3=="INTEGRITY"{integ++} $3=="UNARMED"{unarm++}
+        END{ printf "GL|%s|%d|%d|%d\n", s, fail, integ, unarm }' "$gl"
     done
   fi
   if [ -f "$FR" ]; then
@@ -121,7 +121,7 @@ $1=="SB" {
   if (isnum(dur)) { dur_size[size]=dur_size[size]" "dur
                     dv_n[h]++; dur_ver[h","dv_n[h]]=dur }
 }
-$1=="GL" { gl_fail[$2]=$3; gl_integ[$2]=$4 }
+$1=="GL" { gl_fail[$2]=$3; gl_integ[$2]=$4; gl_unarm[$2]=$5 }
 $1=="FR" {
   fr++; fh=$3; fa=$4; fs=$5
   fr_ver[fh]++; fr_area[fa]++; fr_sev[fs]++; ver_seen[fh]=1
@@ -132,7 +132,7 @@ END {
   for (s in gl_fail) {
     v=(s in slug2ver ? slug2ver[s] : "unknown")
     glf_ver[v]+=gl_fail[s]; gli_ver[v]+=gl_integ[s]
-    glf+=gl_fail[s]; gli+=gl_integ[s]
+    glf+=gl_fail[s]; gli+=gl_integ[s]; glu+=gl_unarm[s]
   }
   for (v in ver) ver_seen[v]=1
 
@@ -174,7 +174,7 @@ END {
       ni=sortkeys(gli_ver, ik)
       for (i=1;i<=ni;i++) if (gli_ver[ik[i]]>0) line=line sprintf("%s%s:%d", (sub_first++?" ":""), ik[i], gli_ver[ik[i]])
       line=line")" }
-    print line
+    print line sprintf(" · UNARMED rows: %d", glu+0)
     printf "== escalation\nrung>=2: %d of %d · rung>=3: %d of %d\n", r2+0, n, r3+0, n
     print "== cost"
     line="duration_min median:"
