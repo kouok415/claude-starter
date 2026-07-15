@@ -137,6 +137,7 @@ stock_update .claude/agents/verifier.md
 stock_update .claude/agents/reframer.md
 stock_update .ai_context/INDEX.md
 stock_update scripts/check-state-size.sh
+stock_update scripts/harness-report.sh
 stock_update scripts/precommit-gitleaks.sh
 stock_update .pre-commit-config.yaml
 

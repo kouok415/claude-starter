@@ -95,6 +95,9 @@ spec; the mechanism is the guarantee.
 | "Verify commands are audited, not just executed" | every gatelog row records the exact command that was enforced (mid-run weakening is visible); the final panel audits `git log -p -- spec.md` for quietly weakened acceptance criteria |
 | "Verify commands can't do catastrophic ops unattended" | Stop-gate denylist: a verify containing `sudo`, `git push`, or `rm -rf` on an absolute path is never executed — always blocked, always logged |
 | "Failed and abandoned runs reach the dataset too" | `/wrap` writes the scoreboard row on abandonment as well (`outcome` pinned to `success\|failed\|abandoned`), plus `duration_min` from git timestamps — no survivor bias |
+| "Every scoreboard row names the harness that produced it" | `/wrap` fills the `harness` column from the last `claude-starter@<ref>` stamp in `.claude/.starter-version`; releases are git-tagged, so ref→version mapping is mechanical |
+| "Harness friction is data, not vibes" | `/wrap` appends enum rows (`area` × `severity`) to `.ai_context/friction.csv` only when a mechanism actually misbehaved; `harness-report.sh` joins them with the gatelog's `INTEGRITY` rows |
+| "Scoring is computed, never recalled" | `scripts/harness-report.sh` (CI-tested) computes outcome/gate/escalation/cost aggregates per harness version; percentages are suppressed below N=5; no composite score exists, on purpose |
 | "Always-injected files stay small" | 4 KB warnings for `brief.md`/`lessons.md`, 5 KB pre-commit cap + warning for `state.md` (S7), size-guard test on `INDEX.md` itself |
 | "Scoreboard numbers must be real" | the Stop gate writes a `gatelog` per real run; `/wrap` aggregates it into `scoreboard.csv` |
 | "Sessions that die without /wrap lose their state" | session-start warns when commits are newer than `state.md` |

@@ -1,9 +1,12 @@
 # Migration guide
 
-Five migrations live here (docs are bilingual elsewhere; this file and the
+Six migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
-- **[0. claude-starter v3.3 → v3.4](#0-claude-starter-v33--v34)** — the
+- **[0. claude-starter v3.4 → v3.5](#0-claude-starter-v34--v35)** — the
+  scoring-loop release: version-attributed scoreboard rows, structured
+  friction capture, deterministic `harness-report.sh`.
+- **[1. claude-starter v3.3 → v3.4](#1-claude-starter-v33--v34)** — the
   gate-integrity release: no silent gate-off states, content-hashed
   PASS-cache, gatelog command provenance, decision-grade scoreboard.
 - **[A. claude-starter v3.x → v3.3](#a-claude-starter-v3x--v33)** — the
@@ -19,7 +22,43 @@ English README are the authority when translations drift):
 
 ---
 
-## 0. claude-starter v3.3 → v3.4
+## 0. claude-starter v3.4 → v3.5
+
+v3.5 adds the scoring side of the loop the scoreboard only collected for:
+every row now names the harness version that produced it, harness friction
+becomes structured data, and a deterministic report computes the rates —
+"does the harness earn its keep" becomes answerable version-over-version
+instead of by recall.
+
+### What changed, and why
+
+| v3.4 | v3.5 | Reason |
+|---|---|---|
+| scoreboard rows didn't say WHICH harness produced them | new `harness` column — `/wrap` fills it from the last `claude-starter@<ref>` line of `.claude/.starter-version`; releases are git-tagged (`v3.3`+) so ref→version mapping is mechanical | an A/B dataset without its treatment variable can't A/B: "did v3.5 lower the gate-failure rate for M tasks?" was unanswerable |
+| harness pain lived in journal prose, if anywhere | `.ai_context/friction.csv` (`date,harness,area,severity,summary,ref`; enums `setup\|task\|wrap\|hooks\|sync\|skills\|other` × `blocker\|friction\|papercut`), written by a new `/wrap` step only when something actually misbehaved | prose doesn't aggregate across projects; enum rows do — and non-`/task` friction (setup, hooks, sync) had no channel at all |
+| scoreboard.csv had no reader | `scripts/harness-report.sh`: per-(harness, profile, size) outcome cells, gate-failure and escalation rates, duration/intervention medians, INTEGRITY counts, friction matrix; `--csv` emits one aggregate row per version (the fleet-aggregation interface); `/wrap` runs it after appending a row | computed-once, CI-tested numbers beat rates recalled by a model; percentages are suppressed below N=5 and no composite score exists — both on purpose |
+
+### Upgrade steps for a v3.4 project
+
+```bash
+cd <claude-starter>
+./sync-project.sh --update-stock <path-to-project>
+```
+
+That advances `/wrap`, ships `scripts/harness-report.sh`, and appends the
+`synced-to:` stamp. Then:
+
+1. **Existing `scoreboard.csv`** (if any): append `,harness` to the header
+   line. Old rows may stay short — readers treat the missing value as
+   `unknown`; backfill only where the vintage is actually known.
+2. `friction.csv` needs nothing — `/wrap` creates it on its first real
+   entry (no empty stubs).
+3. A scoreboard whose header still lacks `duration_min` is pre-v3.4:
+   finish section 1's migration first.
+
+---
+
+## 1. claude-starter v3.3 → v3.4
 
 v3.4 closes the milestone gate's remaining silent-failure paths and makes
 the scoreboard able to answer its own question ("does the harness earn its

@@ -42,7 +42,9 @@ preamble before writing to it):
      `.ai_context/scoreboard.csv` (create it with header
      `date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness`
      if absent). `outcome` is exactly one of `success` | `failed` |
-     `abandoned`. Then delete `CURRENT` (keep the task directory).
+     `abandoned`. After the row lands, run `bash scripts/harness-report.sh`
+     and include its summary in your wrap reply. Then delete `CURRENT`
+     (keep the task directory).
    - Task abandoned (dropped or superseded): same journal entry + scoreboard
      row with `outcome=abandoned` — failed and dropped runs must reach the
      dataset too, or the A/B data is survivor-biased. Then delete `CURRENT`
@@ -53,15 +55,27 @@ preamble before writing to it):
      exceeds 4 KB, distill now: one line per entry, narratives to
      `journal/` — the next session inherits these files whole.
 
-5. **CLAUDE.md drift** — did this session change commands, stack, or how
+5. **Harness friction** — did a starter mechanism itself (hooks, `/task`
+   machinery, `/setup`, `/wrap`, sync) malfunction, block wrongly, or add
+   friction this session? Append one row per real incident to
+   `.ai_context/friction.csv` (create it with header
+   `date,harness,area,severity,summary,ref` if absent): area is one of
+   `setup|task|wrap|hooks|sync|skills|other`, severity one of
+   `blocker|friction|papercut`, summary a single comma-free clause, ref a
+   journal file / `tasks/<slug>/gatelog` / `-`, harness the same stamp ref
+   as in step 4. Skip the step entirely when nothing happened; never
+   duplicate INTEGRITY events (the gatelog records those; the report
+   joins them).
+
+6. **CLAUDE.md drift** — did this session change commands, stack, or how
    the project is verified? Update CLAUDE.md's Commands/Verify to match
    reality before they mislead the next session.
 
-6. Apply the writing rules as you go: S1 (only what the next session needs),
+7. Apply the writing rules as you go: S1 (only what the next session needs),
    S3 (date every aging claim), S4 (no fluff — the why, not "went well"),
    H1 (no secrets), H2 (don't duplicate what code/git already records).
 
-7. If the project uses git, offer to commit the memory changes as
+8. If the project uses git, offer to commit the memory changes as
    `chore(context): wrap <topic>`.
 
 Finish by replying with a one-line summary of what was persisted and where.

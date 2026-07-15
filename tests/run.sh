@@ -298,6 +298,41 @@ git -C "$D" checkout -qb task/demo
 printf '{"session_id": "tsuite-i9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 0 $? "task branch passes (fresh session)"
 
+echo "=== L1-11 · harness-report.sh (scoring is computed, never recalled)"
+D="$WORK/l111"; mkdir -p "$D/.ai_context/tasks/t1" "$D/.ai_context/tasks/live"
+cat > "$D/.ai_context/scoreboard.csv" <<'EOF'
+date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness
+2026-07-10,t1,opus-tier,M,4,1,1,0,90,success,aaa1111
+2026-07-10,t2,opus-tier,M,3,0,1,0,60,success,aaa1111
+2026-07-11,t3,opus-tier,M,5,2,2,1,120,success,aaa1111
+2026-07-11,t4,opus-tier,M,4,0,1,0,80,failed,aaa1111
+2026-07-12,t5,opus-tier,M,4,1,3,2,100,success,aaa1111
+2026-07-08,old1,fable-tier,S,2,1,4,0,?,abandoned
+EOF
+printf '2026-07-11T10:00:00\tM2\tFAIL\tbash t\n2026-07-11T11:00:00\t?\tINTEGRITY\tempty-current\n' > "$D/.ai_context/tasks/t1/gatelog"
+printf '2026-07-15T09:00:00\tM1\tINTEGRITY\ttask-on-main\n' > "$D/.ai_context/tasks/live/gatelog"
+printf 'date,harness,area,severity,summary,ref\n2026-07-12,aaa1111,hooks,blocker,gate blocked wrap turn,journal/x.md\n2026-07-13,bbb2222,sync,papercut,stale stamp,-\n' > "$D/.ai_context/friction.csv"
+out=$(bash "$REPO/scripts/harness-report.sh" "$D")
+echo "$out" | grep -q 'tasks: 6 (success 4, failed 1, abandoned 1)' && ok "dataset counts computed" || no "dataset counts wrong"
+echo "$out" | grep -q 'aaa1111 · opus-tier · M : n=5 .* (success 80%)' && ok "N>=5 cell prints success rate" || no "N>=5 cell missing its rate"
+echo "$out" | grep -q 'unknown(1)' && ok "old 10-field row lands in the unknown bucket" || no "unknown bucket missing"
+echo "$out" | grep -q 'unknown · fable-tier · S : n=1 success=0 failed=0 abandoned=1$' && ok "N<5 cell prints counts only (no %)" || no "N<5 cell printed a percentage"
+echo "$out" | grep -q 'INTEGRITY rows: 2' && ok "INTEGRITY rows joined from gatelogs" || no "INTEGRITY join wrong"
+echo "$out" | grep -q 'blocker:1 friction:0 papercut:1' && ok "friction severities counted" || no "friction counts wrong"
+csv=$(bash "$REPO/scripts/harness-report.sh" --csv "$D")
+echo "$csv" | head -1 | grep -qxF 'project,harness,n_tasks,n_success,n_failed,n_abandoned,gate_fail_rows,integrity_rows,rung_ge3,interventions_sum,duration_med,friction_total,friction_blockers' && ok "--csv header is the fleet contract" || no "--csv header drifted"
+echo "$csv" | grep -q '^l111,aaa1111,5,4,1,0,4,1,1,3,90,1,1$' && ok "--csv per-version aggregates correct" || no "--csv aggregate row wrong"
+echo "$csv" | grep -q '^l111,bbb2222,0,0,0,0,0,0,0,0,-,1,0$' && ok "--csv covers friction-only versions" || no "friction-only version row missing"
+E="$WORK/l111e"; mkdir -p "$E"
+bash "$REPO/scripts/harness-report.sh" "$E" >/dev/null 2>&1
+ck 0 $? "no data yields a clean exit 0"
+B="$WORK/l111b"; mkdir -p "$B/.ai_context"; echo "garbage,x" > "$B/.ai_context/scoreboard.csv"
+bash "$REPO/scripts/harness-report.sh" "$B" >/dev/null 2>&1
+ck 2 $? "malformed scoreboard header exits 2"
+grep -qF 'date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness' "$REPO/.claude/skills/wrap/SKILL.md" && grep -qF 'col["harness"]' "$REPO/scripts/harness-report.sh" && ok "wrap header and report parser agree on the schema" || no "wrap and report schema drifted apart"
+grep -qF 'date,harness,area,severity,summary,ref' "$REPO/.claude/skills/wrap/SKILL.md" && ok "wrap prose carries the friction schema" || no "friction schema missing from wrap"
+grep -q 'stock_update scripts/harness-report.sh' "$REPO/sync-project.sh" && ok "sync ships harness-report.sh" || no "sync does not ship harness-report.sh"
+
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"
 printf 'Last updated: 2026-07-08\nsmall\n' > "$D/.ai_context/state.md"
@@ -337,7 +372,8 @@ else
            .claude/skills/task/reference.md .claude/skills/setup/SKILL.md \
            .claude/agents/scout.md .claude/agents/planner.md .claude/agents/plan-critic.md \
            .claude/agents/executor.md .claude/agents/verifier.md .claude/agents/reframer.md \
-           .claude/.starter-version .ai_context/INDEX.md .ai_context/tasks/.gitkeep CLAUDE.md README.md; do
+           .claude/.starter-version .ai_context/INDEX.md .ai_context/tasks/.gitkeep \
+           scripts/harness-report.sh CLAUDE.md README.md; do
     [ -e "$P/$f" ] || miss="$miss $f"
   done
   [ -z "$miss" ] && ok "all mechanism files present" || no "missing:$miss"
