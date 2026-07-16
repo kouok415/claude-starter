@@ -20,6 +20,8 @@
       "Read(./**/.env.*)",
       "Read(./**/*.pem)",
       "Read(./**/id_rsa*)",
+      "Read(./.secrets/**)",
+      "Read(./**/.secrets/**)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Edit(./.ai_context/tasks/**/gatelog)",

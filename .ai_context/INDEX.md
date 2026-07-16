@@ -52,7 +52,8 @@ write-back is half a loop. Teams with concurrent ADR writers: switch to
 
 - **H1 — No secrets.** No keys, tokens, passwords, connection strings, or
   internal URLs — not even as placeholders. Write `<redacted>` plus where
-  the real value lives (e.g., "in `.env`, see `.env.example`").
+  the real value lives (e.g., "in `.env`" or "in `.secrets/`" — both are
+  runtime-only: code reads them, Claude and git do not).
 - **H2 — No fact duplication.** If it exists in README, code, type
   signatures, or git history, reference it by path — don't copy it here.
   Duplication creates drift.

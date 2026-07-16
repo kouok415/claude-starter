@@ -75,7 +75,8 @@ v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才
 |---|---|
 | 「每個 session 先讀 INDEX.md 再讀 state.md」 | `SessionStart` hook 自動注入兩者 —— 啟動、resume、`/clear`、壓縮後皆然 |
 | 「停下來之前把記憶寫回去」 | `/wrap` skill 執行寫回儀式 |
-| 「commit 裡不准有密鑰」(H1) | gitleaks pre-commit + `settings.json` 禁止讀取 `.env*` |
+| 「commit 裡不准有密鑰」(H1) | gitleaks pre-commit + `settings.json` 禁止讀取 `.env*` 與 `.secrets/**` |
+| 「密鑰只給 runtime:程式可讀,Claude 和 git 不可」 | `.secrets/` 資料夾 —— Read 工具被 deny(`settings.json`)、Bash 觸及降級為確認提示(`bash-guard.sh`)、git 只看得見佔位檔;執行期讀取(`GOOGLE_APPLICATION_CREDENTIALS=.secrets/sa.json ...`)完全不受影響。Read 工具是硬擋,其餘是絆索 —— 能讀到密鑰的代碼永遠可能洩漏它,所以代碼不要把密鑰印到 stdout |
 | 「state.md 不超過 5 KB」(S7) | pre-commit 大小檢查 + session 開始時警告 |
 | 「會老化的事實要標日期」(S3) | session-start hook 偵測 state.md 過期並警告 |
 | 「驗證過才算完成」 | **Stop gate**:`/task` 進行中時,當前里程碑的 verify 指令不通過,回合就結束不了(樹沒變動則命中 PASS-cache,不重跑);外加 CLAUDE.md 的 **Verify** + **Definition of done** 契約、可選的 `lint.sh` 即時回饋。閘門只在 `/task` 進行中武裝 —— 大到需要閘門的工作,本身就該是一個 `/task` |
@@ -215,6 +216,7 @@ claude-starter/
 │       ├── task/reference.md   worktree 協定 + profile 旋鈕(按需載入)
 │       └── setup/SKILL.md      /setup —— 第一次 session 的出生協定
 ├── .ai_context/                第 3 層(schema v3)
+├── .secrets/                   Runtime-only 憑證(Read 拒讀 · git 不追蹤)
 ├── .pre-commit-config.yaml     H1 密鑰掃描 + S7 大小上限
 ├── scripts/                    pre-commit 輔助腳本(專案保留)
 ├── tests/run.sh                L1+L2 回歸套件(CI 內建執行)
@@ -233,7 +235,8 @@ claude-starter/
 
 ### 硬規則(在每個專案的 `INDEX.md`)
 
-- **H1 — 不寫密鑰。** 機制:gitleaks + 禁讀 `.env*`。
+- **H1 — 不寫密鑰。** 機制:gitleaks + 禁讀 `.env*` 與 `.secrets/`
+  (runtime-only 資料夾:程式讀得到,Claude 和 git 讀不到)。
 - **H2 — 不重複事實。** README 或原始碼裡有的,引用,不複製。
 - **H3 — 推測不當事實。** 未確認的主張標 `[TENTATIVE]`。
 - **H4 — 對的檔案放對的東西。** 現在 → `state.md`;永久 →

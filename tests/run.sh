@@ -124,6 +124,7 @@ elif git -C "$REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true
 else
   OLD_SHA="$(git -C "$REPO" log --format=%H -- .claude/hooks/stop-gate.sh | tail -1)"
   D="$WORK/l14"; mkdir -p "$D/.ai_context" "$D/.claude/hooks"
+  printf '# project ignores\nnode_modules/\n' > "$D/.gitignore"
   cp "$REPO/.ai_context/INDEX.md" "$D/.ai_context/"
   git -C "$REPO" show "$OLD_SHA:.claude/hooks/stop-gate.sh" > "$D/.claude/hooks/stop-gate.sh"
   printf '{"custom": true}\n' > "$D/.claude/settings.json"
@@ -133,6 +134,8 @@ else
   grep -q custom "$D/.claude/settings.json" && ok "customized content preserved" || no "customized content clobbered"
   grep -q 'synced-to: claude-starter@' "$D/.claude/.starter-version" 2>/dev/null && ok "synced-to stamp appended on --update-stock" || no "synced-to stamp missing"
   [ -x "$D/scripts/harness-report.sh" ] && ok "new stock file (harness-report.sh) installed by sync" || no "harness-report.sh not installed — copy_if_missing pair missing"
+  grep -q '^\.secrets/\*' "$D/.gitignore" && grep -q '^node_modules/' "$D/.gitignore" && ok "sync appends the .secrets/ gitignore block (project lines kept)" || no "sync .gitignore appender missed .secrets/"
+  [ -f "$D/.secrets/.gitkeep" ] && ok "sync installs .secrets/.gitkeep" || no "sync did not create .secrets/"
   D5="$WORK/l14b"; mkdir -p "$D5/.ai_context" "$D5/.claude"
   cp -r "$REPO/.claude/hooks" "$REPO/.claude/skills" "$REPO/.claude/agents" "$REPO/.claude/settings.json" "$D5/.claude/"
   cp "$REPO/.ai_context/INDEX.md" "$D5/.ai_context/"
@@ -223,6 +226,10 @@ grep -qF 'duration_min,outcome,harness' "$REPO/.claude/skills/wrap/SKILL.md" && 
 grep -qF 'Read(./**/.env)' "$REPO/.claude/settings.json" && ok "nested .env read-deny present" || no "nested .env deny missing"
 grep -qxF '**/.env' "$REPO/.gitignore" && ok "nested .env gitignored" || no "nested .env gitignore missing"
 grep -q 'gate-cache' "$REPO/.gitignore" && ok "gate-cache gitignored (fingerprint-safe)" || no "gate-cache ignore missing"
+grep -qF 'Read(./.secrets/**)' "$REPO/.claude/settings.json" && grep -qF 'Read(./**/.secrets/**)' "$REPO/.claude/settings.json" && ok "secrets-dir read-deny present (root + nested)" || no "secrets-dir read-deny missing"
+grep -qxF '.secrets/*' "$REPO/.gitignore" && grep -qxF '!.secrets/.gitkeep' "$REPO/.gitignore" && ok "secrets-dir gitignored, placeholder excepted (contents-form)" || no "secrets-dir gitignore block wrong"
+grep -qxF '*.pem' "$REPO/.gitignore" && grep -qxF 'id_rsa*' "$REPO/.gitignore" && ok "key-material gitignored (closes the read-deny asymmetry)" || no "pem/id_rsa gitignore missing"
+[ -f "$REPO/.secrets/.gitkeep" ] && ok "seed ships .secrets/.gitkeep" || no "seed .secrets placeholder missing"
 
 echo "=== L1-7 · stop-gate PASS-cache (git-fingerprinted)"
 D="$WORK/l17"; mkdir -p "$D/.ai_context/tasks/demo"
@@ -439,6 +446,10 @@ out=$(bgp 'cat .env.example' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); 
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok ".env.example exempt" || no ".env.example false positive"
 out=$(bgp 'pip install python-dotenv' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "no false positive on dotenv" || no "dotenv false positive"
+out=$(bgp 'cat .secrets/token.json' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok ".secrets/ access downgraded to ask (H1)" || no ".secrets/ access not asked"
+out=$(bgp 'ls foo.secrets/x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "no false positive on lookalike dir names" || no ".secrets lookalike false positive"
 grep -q '"PreToolUse"' "$REPO/.claude/settings.json" && grep -q 'bash-guard\.sh' "$REPO/.claude/settings.json" && ok "bash-guard wired in settings.json" || no "bash-guard wiring missing"
 grep -qF 'Edit(./.ai_context/tasks/**/gatelog)' "$REPO/.claude/settings.json" && grep -qF 'Write(./.ai_context/tasks/**/gatelog)' "$REPO/.claude/settings.json" && ok "gatelog write-deny present (hook-written only)" || no "gatelog deny entries missing"
 grep -qF '"Bash(git push --force:*)"' "$REPO/.claude/settings.json" && ok "declarative force-push deny present" || no "force-push deny entry missing"
@@ -599,6 +610,7 @@ else
            .claude/agents/scout.md .claude/agents/planner.md .claude/agents/plan-critic.md \
            .claude/agents/executor.md .claude/agents/verifier.md .claude/agents/reframer.md \
            .claude/.starter-version .ai_context/INDEX.md .ai_context/tasks/.gitkeep \
+           .secrets/.gitkeep \
            scripts/harness-report.sh scripts/check-append-only.sh scripts/check-context-bulk.sh \
            CLAUDE.md README.md; do
     [ -e "$P/$f" ] || miss="$miss $f"
@@ -616,6 +628,8 @@ else
   done
   [ -x "$P/.claude/hooks/stop-gate.sh" ] && ok "hooks executable" || no "hooks not executable"
   grep -q 'claude-starter@' "$P/.claude/.starter-version" && ok "provenance stamp present" || no "provenance stamp missing"
+  git -C "$P" check-ignore -q .secrets/cred.json && ok "spawn: .secrets/ contents git-invisible" || no "spawn: .secrets/ contents NOT ignored"
+  git -C "$P" check-ignore -q .secrets/.gitkeep && no "spawn: .secrets placeholder wrongly ignored" || ok "spawn: .secrets placeholder trackable"
 
   echo "=== L2-2 · pre-commit guards (gitleaks + S7)"
   if command -v pre-commit >/dev/null 2>&1; then

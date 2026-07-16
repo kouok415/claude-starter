@@ -1,20 +1,24 @@
 # Migration guide
 
-Eight migrations live here (docs are bilingual elsewhere; this file and the
+Nine migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
-- **[0. claude-starter v3.6 → v3.7](#0-claude-starter-v36--v37)** — the
+- **[0. claude-starter v3.7 → v3.8](#0-claude-starter-v37--v38)** — the
+  runtime-only secrets release: the `.secrets/` folder convention
+  (Read-denied, bash-guard ask, gitignored except placeholder) + pem/id_rsa
+  gitignore asymmetry closed.
+- **[1. claude-starter v3.6 → v3.7](#1-claude-starter-v36--v37)** — the
   guardrail release: `bash-guard.sh` PreToolUse tripwire, append-only +
   S2-bulk pre-commit guards, gatelog write-deny, wrong-branch gate
   integrity, `harness-report.sh` integrity cross-checks.
-- **[1. claude-starter v3.5 → v3.6](#1-claude-starter-v35--v36)** — the
+- **[2. claude-starter v3.5 → v3.6](#2-claude-starter-v35--v36)** — the
   audit-honesty release: zero-stop sweep (final `[done]` milestone verified
   at wrap, earlier rowless gates recorded `UNARMED`), `stop-gate.sh --sweep`
   for `/wrap`.
-- **[2. claude-starter v3.4 → v3.5](#2-claude-starter-v34--v35)** — the
+- **[3. claude-starter v3.4 → v3.5](#3-claude-starter-v34--v35)** — the
   scoring-loop release: version-attributed scoreboard rows, structured
   friction capture, deterministic `harness-report.sh`.
-- **[3. claude-starter v3.3 → v3.4](#3-claude-starter-v33--v34)** — the
+- **[4. claude-starter v3.3 → v3.4](#4-claude-starter-v33--v34)** — the
   gate-integrity release: no silent gate-off states, content-hashed
   PASS-cache, gatelog command provenance, decision-grade scoreboard.
 - **[A. claude-starter v3.x → v3.3](#a-claude-starter-v3x--v33)** — the
@@ -30,7 +34,46 @@ English README are the authority when translations drift):
 
 ---
 
-## 0. claude-starter v3.6 → v3.7
+## 0. claude-starter v3.7 → v3.8
+
+v3.8 adds the missing "bucket" for credentials. The template protected
+secrets by filename pattern (`.env*`, `*.pem`, `id_rsa*`) — enumeration
+leaks (`service-account.json`, `kubeconfig`, token files…). `.secrets/` is
+the opt-in folder where anything dropped in gets all three protections at
+once, with one mental model: **sensitive but Claude-readable →
+`.ai_context/private/`; runtime-only, not even Claude → `.secrets/`;
+git sees neither.**
+
+### What changed, and why
+
+| v3.7 | v3.8 | Reason |
+|---|---|---|
+| secrets protected by filename enumeration only | `.secrets/` folder: `settings.json` denies `Read(./.secrets/**)` (root + nested), `bash-guard.sh` downgrades bash access to a confirmation, `.gitignore` ignores contents (contents-form: `.secrets/*` + `!.secrets/.gitkeep` — ignoring the dir itself would make the negation unreachable) | one folder beats a pattern list: opt-in placement is explicit intent, so the deny has ~zero false positives (ADR-011 bar) |
+| runtime use undocumented | seed ships `.secrets/.gitkeep`; H1 guidance names it; usage: `GOOGLE_APPLICATION_CREDENTIALS=.secrets/sa.json python app.py` | execution-time reads are the point — the folder is runtime-only, not Claude-readable storage |
+| `*.pem` / `id_rsa*` Read-denied but NOT gitignored | both gitignored | closes a v2-era asymmetry |
+
+Honest boundary (unchanged philosophy): the Read-tool deny is hard; the
+bash path is an ask-tier tripwire; and code that reads a secret at runtime
+can always print it — so the convention includes "don't echo secrets to
+stdout". True isolation is the runtime's job (secret managers, sandbox),
+not a repo folder's.
+
+### Upgrade steps for a v3.7 project
+
+```bash
+cd <claude-starter>
+./sync-project.sh --update-stock <path-to-project>
+```
+
+That installs `.secrets/.gitkeep`, appends the `.secrets/` block to your
+`.gitignore` (append-only, project lines untouched), and advances stock
+`settings.json` / `bash-guard.sh`. Customized settings.json: merge the two
+`Read(...secrets...)` deny entries by hand (sync prints a suggestion when
+gatelog/bash-guard wiring is missing; the deny entries ride the same merge).
+
+---
+
+## 1. claude-starter v3.6 → v3.7
 
 v3.7 comes from auditing every prose rule against its mechanism and closing
 the gaps that passed the bar (blocking mechanisms require near-zero false
@@ -80,7 +123,7 @@ bash scripts/harness-report.sh .    # exits 0; prints report or no-data line
 
 ---
 
-## 1. claude-starter v3.5 → v3.6
+## 2. claude-starter v3.5 → v3.6
 
 v3.6 closes the audit blind spot the first real `/task` run exposed: a task
 completed inside ONE turn never armed the Stop gate, so its gatelog was
@@ -111,7 +154,7 @@ read them with that caveat.
 
 ---
 
-## 2. claude-starter v3.4 → v3.5
+## 3. claude-starter v3.4 → v3.5
 
 v3.5 adds the scoring side of the loop the scoreboard only collected for:
 every row now names the harness version that produced it, harness friction
@@ -147,7 +190,7 @@ That advances `/wrap`, ships `scripts/harness-report.sh`, and appends the
 
 ---
 
-## 3. claude-starter v3.3 → v3.4
+## 4. claude-starter v3.3 → v3.4
 
 v3.4 closes the milestone gate's remaining silent-failure paths and makes
 the scoreboard able to answer its own question ("does the harness earn its

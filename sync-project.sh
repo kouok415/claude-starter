@@ -97,6 +97,7 @@ copy_if_missing .claude/agents/executor.md
 copy_if_missing .claude/agents/verifier.md
 copy_if_missing .claude/agents/reframer.md
 copy_if_missing .ai_context/tasks/.gitkeep
+copy_if_missing .secrets/.gitkeep
 copy_if_missing scripts/check-state-size.sh
 copy_if_missing scripts/check-append-only.sh
 copy_if_missing scripts/check-context-bulk.sh
@@ -164,6 +165,11 @@ if [ -f "$TARGET/.gitignore" ] && ! grep -q 'settings\.local\.json' "$TARGET/.gi
   printf '\n# Local-only Claude Code settings (machine-specific)\n.claude/settings.local.json\n' \
     >> "$TARGET/.gitignore"
   added+=(".gitignore (+ .claude/settings.local.json)")
+fi
+if [ -f "$TARGET/.gitignore" ] && ! grep -q '^\.secrets/\*' "$TARGET/.gitignore"; then
+  printf '\n# Runtime-only credentials (claude-starter v3.8): code reads them at\n# execution time; Claude Read-denied; git sees only the placeholder.\n.secrets/*\n**/.secrets/*\n!.secrets/.gitkeep\n' \
+    >> "$TARGET/.gitignore"
+  added+=(".gitignore (+ .secrets/)")
 fi
 
 # --- Report-only checks -----------------------------------------------------------

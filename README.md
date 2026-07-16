@@ -82,7 +82,8 @@ spec; the mechanism is the guarantee.
 |---|---|
 | "Read INDEX.md, then state.md, every session" | `SessionStart` hook injects both — on startup, resume, `/clear`, and after compaction |
 | "Write memory back before you stop" | `/wrap` skill runs the write-back ritual |
-| "No secrets in commits" (H1) | gitleaks pre-commit hook + `settings.json` denies reading `.env*` |
+| "No secrets in commits" (H1) | gitleaks pre-commit hook + `settings.json` denies reading `.env*` and `.secrets/**` |
+| "Secrets are runtime-only: code may read them, Claude and git may not" | the `.secrets/` folder — Read tool denied (`settings.json`), bash access downgraded to a confirmation (`bash-guard.sh`), gitignored except the placeholder; execution-time reads (`GOOGLE_APPLICATION_CREDENTIALS=.secrets/sa.json ...`) untouched. Hard on the Read tool, a tripwire elsewhere — code that can read a secret can always leak it, so don't echo secrets to stdout |
 | "state.md stays under 5 KB" (S7) | pre-commit size check + session-start warning |
 | "Time-stamp aging facts" (S3) | session-start hook warns when `state.md` is stale |
 | "Verify before claiming done" | **Stop gate**: on `/task` runs, the active milestone's verify command must pass before a turn may end (unchanged tree = cached PASS, no re-run); plus the `Verify` + **Definition of done** contract in CLAUDE.md and the optional `lint.sh` post-edit hook. The gate arms only while a `/task` is active — work big enough to need one should *be* a `/task` |
@@ -232,6 +233,7 @@ claude-starter/
 │       ├── task/reference.md   worktree protocol + profile knobs (on demand)
 │       └── setup/SKILL.md      /setup — first-session birth protocol
 ├── .ai_context/                Layer 3 (schema v3) — INDEX, state, decisions…
+├── .secrets/                   Runtime-only credentials (Read-denied · gitignored)
 ├── .pre-commit-config.yaml     H1 secret scan + S7 size cap
 ├── scripts/                    pre-commit helper scripts (kept in projects)
 ├── tests/run.sh                L1+L2 regression suite (runs in CI)
@@ -250,7 +252,8 @@ claude-starter/
 
 ### Hard rules (live in every project's `INDEX.md`)
 
-- **H1 — No secrets.** Enforced: gitleaks + read-deny on `.env*`.
+- **H1 — No secrets.** Enforced: gitleaks + read-deny on `.env*` and
+  `.secrets/` (the runtime-only folder: code reads it, Claude and git don't).
 - **H2 — No fact duplication.** If it's in the README or the source,
   reference it, don't copy it.
 - **H3 — No speculation as fact.** Tag tentative claims `[TENTATIVE]`.

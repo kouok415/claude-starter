@@ -43,6 +43,18 @@ Thumbs.db
 **/.env.local
 **/.env.*.local
 
+# Runtime-only credentials folder: code reads it at execution time; Claude's
+# Read tool is denied on it (settings.json) and bash-guard asks; git sees
+# nothing but the placeholder. Contents-form ignore on purpose — ignoring
+# the directory itself would make the .gitkeep negation unreachable.
+.secrets/*
+**/.secrets/*
+!.secrets/.gitkeep
+
+# Key material (Read-denied in settings.json; ignore closes the asymmetry)
+*.pem
+id_rsa*
+
 # Append your language-specific ignores (node_modules/, __pycache__/, target/,
 # build/, dist/, etc.) here, or use `gh repo create --gitignore <lang>` to
 # generate one.

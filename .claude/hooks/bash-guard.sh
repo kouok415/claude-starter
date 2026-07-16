@@ -88,4 +88,8 @@ if printf '%s' "$stripped" | grep -Eq '(^|[^[:alnum:]_])\.env(\.[[:alnum:]_.-]+)
   ask 'touches .env files (H1: secrets) — confirm this should happen'
 fi
 
+if printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_])\.secrets/'; then
+  ask 'touches .secrets/ (runtime-only credentials, H1) — confirm this should happen'
+fi
+
 exit 0
