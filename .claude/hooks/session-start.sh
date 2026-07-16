@@ -38,6 +38,16 @@ emit_file() {
 emit_file "$CTX/INDEX.md"
 emit_file "$CTX/state.md"
 
+# --- Size (INDEX): injected every session, same 4 KB bar as the task files.
+#     (The template CI guards the seed; this guards the copy that actually
+#     lives — and grows — inside each project.)
+if [ -f "$CTX/INDEX.md" ]; then
+  isize="$(wc -c < "$CTX/INDEX.md" | tr -d ' ')"
+  if [ "$isize" -gt 4096 ]; then
+    printf 'WARNING: INDEX.md is %s bytes (cap 4096) — it is injected into every session; keep it meta-only and move content into the files it points at.\n' "$isize"
+  fi
+fi
+
 # --- Active long-horizon task (/task harness): inject its spec + brief +
 #     plan + lessons so re-anchoring after /clear or compaction lands on the
 #     latest milestone checkpoint WITH its intent (spec carries the ACs and

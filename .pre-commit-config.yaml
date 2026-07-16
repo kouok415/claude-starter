@@ -16,3 +16,17 @@ repos:
         entry: scripts/precommit-gitleaks.sh
         language: system
         pass_filenames: false
+
+      - id: ai-context-append-only
+        name: "append-only: decisions/journal/scoreboard/friction/gatelog"
+        entry: scripts/check-append-only.sh
+        language: system
+        files: ^\.ai_context/(decisions\.md|scoreboard\.csv|friction\.csv|journal/.+\.md|tasks/.+/gatelog)$
+        pass_filenames: false
+
+      - id: ai-context-bulk
+        name: "S2: no bulk dumps in .ai_context (<= 100 KB per file)"
+        entry: scripts/check-context-bulk.sh
+        language: system
+        files: ^\.ai_context/
+        pass_filenames: false

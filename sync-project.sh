@@ -83,6 +83,7 @@ copy_if_missing() {
 copy_if_missing .claude/settings.json
 copy_if_missing .claude/hooks/session-start.sh
 copy_if_missing .claude/hooks/post-edit.sh
+copy_if_missing .claude/hooks/bash-guard.sh
 copy_if_missing .claude/hooks/lint.sh.example
 copy_if_missing .claude/skills/wrap/SKILL.md
 copy_if_missing .claude/hooks/stop-gate.sh
@@ -97,6 +98,8 @@ copy_if_missing .claude/agents/verifier.md
 copy_if_missing .claude/agents/reframer.md
 copy_if_missing .ai_context/tasks/.gitkeep
 copy_if_missing scripts/check-state-size.sh
+copy_if_missing scripts/check-append-only.sh
+copy_if_missing scripts/check-context-bulk.sh
 copy_if_missing scripts/harness-report.sh
 copy_if_missing scripts/precommit-gitleaks.sh
 copy_if_missing .pre-commit-config.yaml
@@ -125,6 +128,7 @@ stock_update() {
 stock_update .claude/settings.json
 stock_update .claude/hooks/session-start.sh
 stock_update .claude/hooks/post-edit.sh
+stock_update .claude/hooks/bash-guard.sh
 stock_update .claude/hooks/stop-gate.sh
 stock_update .claude/skills/wrap/SKILL.md
 stock_update .claude/skills/task/SKILL.md
@@ -138,6 +142,8 @@ stock_update .claude/agents/verifier.md
 stock_update .claude/agents/reframer.md
 stock_update .ai_context/INDEX.md
 stock_update scripts/check-state-size.sh
+stock_update scripts/check-append-only.sh
+stock_update scripts/check-context-bulk.sh
 stock_update scripts/harness-report.sh
 stock_update scripts/precommit-gitleaks.sh
 stock_update .pre-commit-config.yaml
@@ -188,6 +194,15 @@ fi
 # overwrites — so wiring changes are surfaced as suggestions instead.
 if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'stop-gate\.sh' "$TARGET/.claude/settings.json"; then
   suggest+=("settings.json has no Stop-gate wiring — merge the \"Stop\" hook block from the template's .claude/settings.json")
+fi
+
+# v3.7: bash-guard wiring + gatelog write-deny live in settings.json, which
+# customized projects must merge by hand.
+if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'bash-guard\.sh' "$TARGET/.claude/settings.json"; then
+  suggest+=("settings.json has no bash-guard wiring (v3.7) — merge the \"PreToolUse\" hook block from the template's .claude/settings.json")
+fi
+if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'gatelog' "$TARGET/.claude/settings.json"; then
+  suggest+=("settings.json does not deny Edit/Write on tasks/*/gatelog (v3.7) — merge the deny entries from the template's .claude/settings.json")
 fi
 
 if [ -f "$TARGET/.claude/hooks/session-start.sh" ] && ! grep -q 'tasks/CURRENT' "$TARGET/.claude/hooks/session-start.sh"; then

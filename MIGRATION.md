@@ -1,16 +1,20 @@
 # Migration guide
 
-Seven migrations live here (docs are bilingual elsewhere; this file and the
+Eight migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
-- **[0. claude-starter v3.5 → v3.6](#0-claude-starter-v35--v36)** — the
+- **[0. claude-starter v3.6 → v3.7](#0-claude-starter-v36--v37)** — the
+  guardrail release: `bash-guard.sh` PreToolUse tripwire, append-only +
+  S2-bulk pre-commit guards, gatelog write-deny, wrong-branch gate
+  integrity, `harness-report.sh` integrity cross-checks.
+- **[1. claude-starter v3.5 → v3.6](#1-claude-starter-v35--v36)** — the
   audit-honesty release: zero-stop sweep (final `[done]` milestone verified
   at wrap, earlier rowless gates recorded `UNARMED`), `stop-gate.sh --sweep`
   for `/wrap`.
-- **[1. claude-starter v3.4 → v3.5](#1-claude-starter-v34--v35)** — the
+- **[2. claude-starter v3.4 → v3.5](#2-claude-starter-v34--v35)** — the
   scoring-loop release: version-attributed scoreboard rows, structured
   friction capture, deterministic `harness-report.sh`.
-- **[2. claude-starter v3.3 → v3.4](#2-claude-starter-v33--v34)** — the
+- **[3. claude-starter v3.3 → v3.4](#3-claude-starter-v33--v34)** — the
   gate-integrity release: no silent gate-off states, content-hashed
   PASS-cache, gatelog command provenance, decision-grade scoreboard.
 - **[A. claude-starter v3.x → v3.3](#a-claude-starter-v3x--v33)** — the
@@ -26,7 +30,48 @@ English README are the authority when translations drift):
 
 ---
 
-## 0. claude-starter v3.5 → v3.6
+## 0. claude-starter v3.6 → v3.7
+
+v3.7 comes from auditing every prose rule against its mechanism and closing
+the gaps that passed the bar (blocking mechanisms require near-zero false
+positives against the real workflow and must protect something irreversible
+or load-bearing; everything else lands in a warning or the report). Nothing
+about the daily loop changes — what changes is what *cannot silently
+happen*.
+
+### What changed, and why
+
+| v3.6 | v3.7 | Reason |
+|---|---|---|
+| force-push / sudo / `rm -rf` in interactive bash guarded by prose only | `bash-guard.sh` (PreToolUse) denies force-push, `sudo`, `rm -rf /` — absolutely, logged to `.ai_context/private/bash-guard.log`; absolute-path `rm -rf` and `.env` access become a confirmation; `settings.json` gains a declarative `ask` tier plus force-push/gatelog `deny` entries | the global git rules had no mechanism exactly where they matter most — permissive/unattended modes; contains-matching beats prefix rules, but it stays a tripwire, not a sandbox |
+| append-only files (decisions.md, journal/, scoreboard.csv, friction.csv, gatelog) trusted to discipline | `check-append-only.sh` pre-commit rejects staged edits/deletions of existing lines; `settings.json` denies Edit/Write on `tasks/*/gatelog` | the scoring loop's honesty rests on these files (a fake PASS row could even skip the wrap sweep); corrections are appended, never rewritten. `lessons.md`/`brief.md` stay rewritable — `/wrap` distills them by design |
+| a `/task` on a non-task branch ran its verify against the wrong tree, logging junk FAIL rows | any branch other than `task/*` (or main/master, as before) is a blocked INTEGRITY state with a clear reason | better diagnosis than a baffling red gate, and `gate_failures` stats stop being polluted |
+| scoreboard rows trusted as /wrap wrote them | `harness-report.sh` `== integrity`: scoreboard↔gatelog mismatches, orphan task dirs, missing PASS/UNARMED evidence, enum violations (human mode only — the 13-column `--csv` contract is untouched) | "computed, never recalled" now includes cross-checking the model-written rows against ground truth |
+| INDEX.md size guarded only by template CI; nothing capped bulk pastes | session-start warns when a project's INDEX.md exceeds 4 KB; `check-context-bulk.sh` blocks any staged `.ai_context` file over 100 KB (S2) | the injected-every-session files stay small in *projects*, and dumps get referenced instead of pasted |
+| `tests/run.sh` assumed the template repo (spawner/sync present) | template-only sections SKIP gracefully in spawned projects | `bash tests/run.sh` inside a project is now the post-sync smoke test |
+
+### Upgrade steps for a v3.6 project
+
+```bash
+cd <claude-starter>
+./sync-project.sh --update-stock <path-to-project>
+```
+
+That installs `bash-guard.sh` and the two new pre-commit scripts, and
+advances the stock hooks/report/config. Two things sync will not do to a
+*customized* file (it prints suggestions instead):
+
+- **settings.json** — merge by hand: the `PreToolUse` hook block, the
+  `ask` tier, and the new `deny` entries (force-push, `tasks/*/gatelog`).
+- **.pre-commit-config.yaml** — add the `ai-context-append-only` and
+  `ai-context-bulk` hooks, then re-run `pre-commit install`.
+
+After syncing, run `bash tests/run.sh` inside the project: the L1 sections
+exercise the synced hooks on your machine; template-only sections skip.
+
+---
+
+## 1. claude-starter v3.5 → v3.6
 
 v3.6 closes the audit blind spot the first real `/task` run exposed: a task
 completed inside ONE turn never armed the Stop gate, so its gatelog was
@@ -57,7 +102,7 @@ read them with that caveat.
 
 ---
 
-## 1. claude-starter v3.4 → v3.5
+## 2. claude-starter v3.4 → v3.5
 
 v3.5 adds the scoring side of the loop the scoreboard only collected for:
 every row now names the harness version that produced it, harness friction
@@ -93,7 +138,7 @@ That advances `/wrap`, ships `scripts/harness-report.sh`, and appends the
 
 ---
 
-## 2. claude-starter v3.3 → v3.4
+## 3. claude-starter v3.3 → v3.4
 
 v3.4 closes the milestone gate's remaining silent-failure paths and makes
 the scoreboard able to answer its own question ("does the harness earn its

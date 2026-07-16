@@ -117,7 +117,9 @@ echo "$out" | grep -q 'days ago' && no "body date shadowed the Last-updated line
 echo "$out" | grep -q 'plan.md is missing' && ok "dangling CURRENT warned" || no "dangling CURRENT not warned"
 
 echo "=== L1-4 · sync: --update-stock + --adopt"
-if git -C "$REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
+if [ ! -f "$REPO/sync-project.sh" ]; then
+  skp "update-stock history test (spawned project — template-repo only)"
+elif git -C "$REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
   skp "update-stock history test (shallow clone — set fetch-depth: 0)"
 else
   OLD_SHA="$(git -C "$REPO" log --format=%H -- .claude/hooks/stop-gate.sh | tail -1)"
@@ -139,18 +141,22 @@ else
   "$REPO/sync-project.sh" --update-stock "$D5" >/dev/null 2>&1
   grep -q 'synced-to: claude-starter@' "$D5/.claude/.starter-version" 2>/dev/null && ok "added-only sync still appends the synced-to stamp (attribution integrity)" || no "added-only sync left no stamp — harness column would mis-attribute"
 fi
-unpaired=""
-while IFS= read -r f; do
-  case "$f" in .ai_context/*) continue ;; esac # the .ai_context seed loop installs these when absent
-  grep -q "^copy_if_missing $f\$" "$REPO/sync-project.sh" || unpaired="$unpaired $f"
-done < <(grep -o '^stock_update [^ ]*' "$REPO/sync-project.sh" | awk '{print $2}')
-[ -z "$unpaired" ] && ok "every stock_update file is installable when absent (copy_if_missing pair)" || no "stock_update without copy_if_missing pair:$unpaired"
-D="$WORK/l14a/existing"; mkdir -p "$D/src"; echo 'x=1' > "$D/src/m.py"
-"$REPO/sync-project.sh" "$D" >/dev/null 2>&1 && no "non-starter accepted without --adopt" || ok "non-starter rejected without --adopt"
-out=$("$REPO/sync-project.sh" --adopt "$D" 2>&1)
-{ [ -f "$D/.ai_context/INDEX.md" ] && [ -f "$D/CLAUDE.md" ] && [ -d "$D/.ai_context/tasks" ]; } && ok "adopt creates skeleton" || no "adopt skeleton incomplete"
-echo "$out" | grep -q 'run /setup' && ok "adopt hands off to /setup" || no "adopt handoff missing"
-{ [ -f "$D/.claude/agents/scout.md" ] && [ -f "$D/.claude/skills/task/reference.md" ]; } && ok "v3.3 files (scout, reference) land via sync" || no "scout/reference missing after sync"
+if [ -f "$REPO/sync-project.sh" ]; then
+  unpaired=""
+  while IFS= read -r f; do
+    case "$f" in .ai_context/*) continue ;; esac # the .ai_context seed loop installs these when absent
+    grep -q "^copy_if_missing $f\$" "$REPO/sync-project.sh" || unpaired="$unpaired $f"
+  done < <(grep -o '^stock_update [^ ]*' "$REPO/sync-project.sh" | awk '{print $2}')
+  [ -z "$unpaired" ] && ok "every stock_update file is installable when absent (copy_if_missing pair)" || no "stock_update without copy_if_missing pair:$unpaired"
+  D="$WORK/l14a/existing"; mkdir -p "$D/src"; echo 'x=1' > "$D/src/m.py"
+  "$REPO/sync-project.sh" "$D" >/dev/null 2>&1 && no "non-starter accepted without --adopt" || ok "non-starter rejected without --adopt"
+  out=$("$REPO/sync-project.sh" --adopt "$D" 2>&1)
+  { [ -f "$D/.ai_context/INDEX.md" ] && [ -f "$D/CLAUDE.md" ] && [ -d "$D/.ai_context/tasks" ]; } && ok "adopt creates skeleton" || no "adopt skeleton incomplete"
+  echo "$out" | grep -q 'run /setup' && ok "adopt hands off to /setup" || no "adopt handoff missing"
+  { [ -f "$D/.claude/agents/scout.md" ] && [ -f "$D/.claude/skills/task/reference.md" ]; } && ok "v3.3 files (scout, reference) land via sync" || no "scout/reference missing after sync"
+else
+  skp "sync pairing + adopt tests (spawned project — template-repo only)"
+fi
 
 echo "=== L1-5 · v3.3: sentinel gate, status warning, brief injection, caps"
 D="$WORK/l15"; mkdir -p "$D/.ai_context/tasks/demo"
@@ -159,8 +165,12 @@ printf '{"session_id": "tsuite-s1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/de
 ck 2 $? "sentinel-only CLAUDE.md arms the setup gate"
 out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
 echo "$out" | grep -q 'SETUP REQUIRED' && ok "sentinel arms session-start instruction" || no "sentinel missed by session-start"
-n=$(grep -l 'claude-starter: UNCONFIGURED' "$REPO"/templates/CLAUDE.md.* | wc -l)
-[ "$n" -eq 3 ] && ok "all 3 templates carry the sentinel" || no "only $n/3 templates carry the sentinel"
+if [ -d "$REPO/templates" ]; then
+  n=$(grep -l 'claude-starter: UNCONFIGURED' "$REPO"/templates/CLAUDE.md.* | wc -l)
+  [ "$n" -eq 3 ] && ok "all 3 templates carry the sentinel" || no "only $n/3 templates carry the sentinel"
+else
+  skp "template sentinel census (spawned project — template-repo only)"
+fi
 
 printf '# ok\n## Commands\n- Test: \`true\`\n' > "$D/CLAUDE.md"
 echo demo > "$D/.ai_context/tasks/CURRENT"
@@ -346,7 +356,11 @@ bash "$REPO/scripts/harness-report.sh" "$B" >/dev/null 2>&1
 ck 2 $? "malformed scoreboard header exits 2"
 grep -qF 'date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness' "$REPO/.claude/skills/wrap/SKILL.md" && grep -qF 'col["harness"]' "$REPO/scripts/harness-report.sh" && ok "wrap header and report parser agree on the schema" || no "wrap and report schema drifted apart"
 grep -qF 'date,harness,area,severity,summary,ref' "$REPO/.claude/skills/wrap/SKILL.md" && ok "wrap prose carries the friction schema" || no "friction schema missing from wrap"
-grep -q 'stock_update scripts/harness-report.sh' "$REPO/sync-project.sh" && ok "sync ships harness-report.sh" || no "sync does not ship harness-report.sh"
+if [ -f "$REPO/sync-project.sh" ]; then
+  grep -q 'stock_update scripts/harness-report.sh' "$REPO/sync-project.sh" && ok "sync ships harness-report.sh" || no "sync does not ship harness-report.sh"
+else
+  skp "sync ships harness-report.sh (spawned project — template-repo only)"
+fi
 
 echo "=== L1-12 · zero-stop sweep: no vacuous gatelogs"
 D="$WORK/l112"; mkdir -p "$D/.ai_context/tasks/demo"
@@ -394,6 +408,143 @@ ck 2 $? "--sweep refuses a forbidden final verify"
 [ ! -f "$D3/pwned" ] && ok "--sweep forbidden verify was NOT executed" || no "--sweep ran a forbidden verify"
 grep -q 'forbidden verify' "$D3/.ai_context/tasks/demo/gatelog" && ok "--sweep forbidden logged as INTEGRITY" || no "--sweep forbidden row missing"
 
+echo "=== L1-13 · bash-guard: catastrophic-op tripwire (PreToolUse)"
+BG="$REPO/.claude/hooks/bash-guard.sh"
+bgp() { printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1"; }
+D="$WORK/l113"; mkdir -p "$D/.ai_context"
+bgp 'git push --force origin main' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "force-push denied"
+bgp 'git push --force-with-lease origin main' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "force-with-lease denied"
+bgp 'git push -f' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "short -f push denied"
+bgp 'git push origin main' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 0 $? "plain push passes the guard (ask-tier lives in settings.json)"
+bgp 'tail -f app.log; git push origin main' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 0 $? "-f outside the push segment is not miscounted"
+bgp 'sudo apt-get install jq' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "sudo denied"
+grep -q "	DENY	sudo	" "$D/.ai_context/private/bash-guard.log" && ok "deny logged to private/bash-guard.log" || no "deny log row missing"
+bgp 'rm -rf /' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "rm -rf / denied"
+bgp 'rm -rf /*' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "rm -rf /* denied"
+out=$(bgp 'rm -rf /tmp/scratch' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "absolute-path rm -rf downgraded to ask" || no "absolute rm -rf not asked"
+out=$(bgp 'rm -rf build/' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "relative rm -rf passes silently" || no "relative rm -rf flagged"
+out=$(bgp 'cat .env' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok ".env access downgraded to ask (H1)" || no ".env access not asked"
+out=$(bgp 'cat .env.example' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok ".env.example exempt" || no ".env.example false positive"
+out=$(bgp 'pip install python-dotenv' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "no false positive on dotenv" || no "dotenv false positive"
+grep -q '"PreToolUse"' "$REPO/.claude/settings.json" && grep -q 'bash-guard\.sh' "$REPO/.claude/settings.json" && ok "bash-guard wired in settings.json" || no "bash-guard wiring missing"
+grep -qF 'Edit(./.ai_context/tasks/**/gatelog)' "$REPO/.claude/settings.json" && grep -qF 'Write(./.ai_context/tasks/**/gatelog)' "$REPO/.claude/settings.json" && ok "gatelog write-deny present (hook-written only)" || no "gatelog deny entries missing"
+grep -qF '"Bash(git push --force:*)"' "$REPO/.claude/settings.json" && ok "declarative force-push deny present" || no "force-push deny entry missing"
+grep -qF '"ask"' "$REPO/.claude/settings.json" && grep -qF '"Bash(git push:*)"' "$REPO/.claude/settings.json" && ok "ask tier present (push/reset/clean/sudo/rm)" || no "ask tier missing"
+
+echo "=== L1-14 · pre-commit guards: append-only + S2 bulk"
+D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$D/.ai_context/knowledge"
+printf 'preamble\n' > "$D/.ai_context/decisions.md"
+printf 'date,slug\n2026-07-01,t1\n' > "$D/.ai_context/scoreboard.csv"
+printf '2026-07-01T00:00:00\tM1\tPASS\ttrue\n' > "$D/.ai_context/tasks/demo/gatelog"
+printf 'first line\n' > "$D/.ai_context/journal/2026-07-01-x.md"
+printf 'lesson 1\n' > "$D/.ai_context/tasks/demo/lessons.md"
+git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm base
+printf '## ADR-001: x\n' >> "$D/.ai_context/decisions.md"
+printf '2026-07-02,t2\n' >> "$D/.ai_context/scoreboard.csv"
+printf '2026-07-02T00:00:00\tM2\tPASS\ttrue\n' >> "$D/.ai_context/tasks/demo/gatelog"
+git -C "$D" add -A
+( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
+ck 0 $? "pure appends pass"
+git -C "$D" commit -qm appends
+sed -i.bak 's/t1/t1-edited/' "$D/.ai_context/scoreboard.csv" && rm -f "$D/.ai_context/scoreboard.csv.bak"
+git -C "$D" add -A
+( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
+ck 1 $? "edited scoreboard row blocks"
+( cd "$D" && git reset -q && git checkout -q -- .ai_context/scoreboard.csv )
+sed -i.bak '1d' "$D/.ai_context/tasks/demo/gatelog" && rm -f "$D/.ai_context/tasks/demo/gatelog.bak"
+git -C "$D" add -A
+( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
+ck 1 $? "gatelog row removal blocks"
+( cd "$D" && git reset -q && git checkout -q -- .ai_context/tasks/demo/gatelog )
+git -C "$D" mv -f .ai_context/journal/2026-07-01-x.md .ai_context/journal/renamed.md
+( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
+ck 1 $? "journal rename blocks"
+( cd "$D" && git reset -q && git checkout -q -- .ai_context/journal && rm -f .ai_context/journal/renamed.md )
+printf 'distilled to one line\n' > "$D/.ai_context/tasks/demo/lessons.md"
+git -C "$D" add -A
+( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
+ck 0 $? "lessons.md rewrite passes (wrap distills it — deliberately not covered)"
+( cd "$D" && git reset -q && git checkout -q -- . )
+python3 - "$D/.ai_context/knowledge/dump.txt" <<'PY'
+import sys; open(sys.argv[1],'w').write('x'*150000)
+PY
+git -C "$D" add -A
+( cd "$D" && bash "$REPO/scripts/check-context-bulk.sh" ) >/dev/null 2>&1
+ck 1 $? "150 KB dump into .ai_context blocks (S2)"
+( cd "$D" && git reset -q ) && rm -f "$D/.ai_context/knowledge/dump.txt"
+python3 - "$D/big-outside.bin" <<'PY'
+import sys; open(sys.argv[1],'w').write('y'*150000)
+PY
+git -C "$D" add -A
+( cd "$D" && bash "$REPO/scripts/check-context-bulk.sh" ) >/dev/null 2>&1
+ck 0 $? "big files outside .ai_context are not the bulk guard's business"
+grep -q 'ai-context-append-only' "$REPO/.pre-commit-config.yaml" && grep -q 'ai-context-bulk' "$REPO/.pre-commit-config.yaml" && ok "both guards wired in .pre-commit-config.yaml" || no "pre-commit wiring missing"
+
+echo "=== L1-15 · gate integrity: wrong-branch task work"
+D="$WORK/l115"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+git -C "$D" init -q && git -C "$D" checkout -qb wip && git -C "$D" add -A && git -C "$D" commit -qm base
+printf '{"session_id": "tsuite-w1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "task on a non-task branch blocks (integrity)"
+grep -q "branch 'wip'" "$D/.ai_context/tasks/demo/gatelog" && ok "wrong-branch INTEGRITY row names the branch" || no "wrong-branch row missing"
+grep -q "	FAIL	" "$D/.ai_context/tasks/demo/gatelog" && no "wrong branch polluted the gatelog with a junk FAIL" || ok "no junk FAIL row from the wrong-branch stop"
+printf '{"session_id": "tsuite-w1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "wrong-branch integrity yields on second stop (marker)"
+git -C "$D" checkout -qb task/demo
+printf '{"session_id": "tsuite-w2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "task/ branch passes (fresh session)"
+
+echo "=== L1-16 · session-start: INDEX size warning"
+D="$WORK/l116"; mkdir -p "$D/.ai_context"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+printf '# s\n\n_Last updated: %s_\n' "$(date +%F)" > "$D/.ai_context/state.md"
+python3 - "$D/.ai_context/INDEX.md" <<'PY'
+import sys; open(sys.argv[1],'w').write('meta\n'*1000)
+PY
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'INDEX.md is .* bytes (cap 4096)' && ok "bloated INDEX warned at session start" || no "INDEX size warning missing"
+printf 'small index\n' > "$D/.ai_context/INDEX.md"
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'INDEX.md is .* bytes (cap 4096)' && no "small INDEX falsely warned" || ok "small INDEX stays quiet"
+
+echo "=== L1-17 · harness-report: integrity cross-checks"
+D="$WORK/l117"; mkdir -p "$D/.ai_context/tasks/bad" "$D/.ai_context/tasks/orphan" "$D/.ai_context/tasks/cur"
+cat > "$D/.ai_context/scoreboard.csv" <<'EOF'
+date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness
+2026-07-10,bad,opus-tier,M,2,0,1,0,50,success,ccc3333
+2026-07-11,weird,opus-tier,M,2,0,1,0,30,succeeded,ccc3333
+EOF
+printf '2026-07-10T10:00:00\tM1\tFAIL\ttrue\n2026-07-10T11:00:00\tM1\tFAIL\ttrue\n' > "$D/.ai_context/tasks/bad/gatelog"
+printf '# Plan: bad\n\n## M1: a [done]\n- verify: `true`\n\n## M2: b [done]\n- verify: `true`\n' > "$D/.ai_context/tasks/bad/plan.md"
+printf '# Plan: orphan\n\n## M1: a [done]\n- verify: `true`\n' > "$D/.ai_context/tasks/orphan/plan.md"
+printf '# Plan: cur\n\n## M1: a [in_progress]\n- verify: `true`\n' > "$D/.ai_context/tasks/cur/plan.md"
+echo cur > "$D/.ai_context/tasks/CURRENT"
+out=$(bash "$REPO/scripts/harness-report.sh" "$D")
+echo "$out" | grep -q 'gate_failures mismatch: bad — scoreboard says 0, gatelog has 2' && ok "scoreboard↔gatelog mismatch surfaced" || no "mismatch not surfaced"
+echo "$out" | grep -q 'orphan task: tasks/orphan/' && ok "orphan task dir surfaced (survivor-bias net)" || no "orphan not surfaced"
+echo "$out" | grep -q 'gate evidence gap: tasks/bad/' && ok "missing PASS/UNARMED evidence surfaced" || no "evidence gap not surfaced"
+echo "$out" | grep -q 'enum violation: scoreboard weird: outcome="succeeded"' && ok "outcome enum violation surfaced" || no "enum violation not surfaced"
+echo "$out" | grep -q 'orphan task: tasks/cur/' && no "in-flight CURRENT task misflagged as orphan" || ok "in-flight CURRENT task not flagged"
+csv=$(bash "$REPO/scripts/harness-report.sh" --csv "$D")
+echo "$csv" | grep -q 'mismatch' && no "--csv polluted by integrity lines (13-col contract)" || ok "--csv untouched by integrity section"
+out2=$(bash "$REPO/scripts/harness-report.sh" "$WORK/l111")
+echo "$out2" | grep -q 'clean — scoreboard, gatelogs and task dirs agree' && ok "healthy dataset reports clean" || no "healthy dataset not reported clean"
+
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"
 printf 'Last updated: 2026-07-08\nsmall\n' > "$D/.ai_context/state.md"
@@ -421,20 +572,28 @@ else
 fi
 
 echo "=== L2-1 · spawn completeness (--local)"
-( cd "$WORK" && "$REPO/start_project.sh" --local --kind code lab ) >/dev/null 2>&1
+if [ -x "$REPO/start_project.sh" ]; then
+  ( cd "$WORK" && "$REPO/start_project.sh" --local --kind code lab ) >/dev/null 2>&1
+fi
 P="$WORK/lab"
 if [ ! -d "$P" ]; then
-  no "spawn failed — remaining L2 tests skipped"
+  if [ -x "$REPO/start_project.sh" ]; then
+    no "spawn failed — remaining L2 tests skipped"
+  else
+    skp "L2 spawn tests (spawned project — template-repo only)"
+  fi
 else
   ok "spawn succeeded"
   miss=""
   for f in .claude/settings.json .claude/hooks/session-start.sh .claude/hooks/stop-gate.sh \
-           .claude/hooks/post-edit.sh .claude/skills/wrap/SKILL.md .claude/skills/task/SKILL.md \
+           .claude/hooks/post-edit.sh .claude/hooks/bash-guard.sh \
+           .claude/skills/wrap/SKILL.md .claude/skills/task/SKILL.md \
            .claude/skills/task/reference.md .claude/skills/setup/SKILL.md \
            .claude/agents/scout.md .claude/agents/planner.md .claude/agents/plan-critic.md \
            .claude/agents/executor.md .claude/agents/verifier.md .claude/agents/reframer.md \
            .claude/.starter-version .ai_context/INDEX.md .ai_context/tasks/.gitkeep \
-           scripts/harness-report.sh CLAUDE.md README.md; do
+           scripts/harness-report.sh scripts/check-append-only.sh scripts/check-context-bulk.sh \
+           CLAUDE.md README.md; do
     [ -e "$P/$f" ] || miss="$miss $f"
   done
   [ -z "$miss" ] && ok "all mechanism files present" || no "missing:$miss"
@@ -445,7 +604,7 @@ else
   done
   [ -z "$left" ] && ok "template leftovers all removed" || no "leftovers:$left"
   python3 -m json.tool "$P/.claude/settings.json" >/dev/null 2>&1 && ok "settings.json valid JSON" || no "settings.json invalid"
-  for k in SessionStart PostToolUse Stop; do
+  for k in SessionStart PreToolUse PostToolUse Stop; do
     grep -q "\"$k\"" "$P/.claude/settings.json" && ok "hook wired: $k" || no "hook missing: $k"
   done
   [ -x "$P/.claude/hooks/stop-gate.sh" ] && ok "hooks executable" || no "hooks not executable"
@@ -465,6 +624,9 @@ PY
     ( cd "$P" && git add .ai_context/state.md && git commit -qm big ) >/dev/null 2>&1 && no "S7 let >5KB state.md through" || ok "S7 blocks oversized state.md"
     ( cd "$P" && git checkout -q -- .ai_context/state.md 2>/dev/null || git reset -q 2>/dev/null )
     ( cd "$P" && git checkout -q -- .ai_context/state.md 2>/dev/null || true )
+    sed -i.bak '1s/.*/EDITED-BY-TEST/' "$P/.ai_context/decisions.md" && rm -f "$P/.ai_context/decisions.md.bak"
+    ( cd "$P" && git add .ai_context/decisions.md && git commit -qm edit-adr ) >/dev/null 2>&1 && no "append-only let an ADR edit through" || ok "append-only blocks ADR edits end-to-end"
+    ( cd "$P" && git reset -q 2>/dev/null; git checkout -q -- .ai_context/decisions.md 2>/dev/null || true )
   else
     skp "pre-commit not installed — gitleaks/S7 guard tests"
   fi
@@ -493,10 +655,16 @@ PY
 fi
 
 echo "=== L2-4 · research kind + artifact verify"
-( cd "$WORK" && "$REPO/start_project.sh" --local --kind research rlab ) >/dev/null 2>&1
+if [ -x "$REPO/start_project.sh" ]; then
+  ( cd "$WORK" && "$REPO/start_project.sh" --local --kind research rlab ) >/dev/null 2>&1
+fi
 R="$WORK/rlab"
 if [ ! -d "$R" ]; then
-  no "research spawn failed"
+  if [ -x "$REPO/start_project.sh" ]; then
+    no "research spawn failed"
+  else
+    skp "research spawn tests (spawned project — template-repo only)"
+  fi
 else
   grep -q 'research project' "$R/CLAUDE.md" && ok "research CLAUDE.md in place" || no "research template wrong"
   grep -q '## Long-horizon tasks' "$R/CLAUDE.md" && ok "research template carries /task section" || no "research /task section missing"
@@ -512,13 +680,17 @@ else
 fi
 
 echo "=== L2-6 · spawning via a symlink resolves the real template"
-ln -s "$REPO/start_project.sh" "$WORK/spawn-link"
-( cd "$WORK" && "$WORK/spawn-link" --local --kind code symlab ) >/dev/null 2>&1
-if [ -d "$WORK/symlab" ]; then
-  [ -f "$WORK/symlab/CLAUDE.md" ] && ok "symlink spawn produced a project" || no "symlink spawn missing CLAUDE.md"
-  [ -e "$WORK/symlab/l11" ] && no "symlink spawn copied the link's PARENT directory (SCRIPT_DIR bug regressed)" || ok "no parent-directory copy artifact"
+if [ -x "$REPO/start_project.sh" ]; then
+  ln -s "$REPO/start_project.sh" "$WORK/spawn-link"
+  ( cd "$WORK" && "$WORK/spawn-link" --local --kind code symlab ) >/dev/null 2>&1
+  if [ -d "$WORK/symlab" ]; then
+    [ -f "$WORK/symlab/CLAUDE.md" ] && ok "symlink spawn produced a project" || no "symlink spawn missing CLAUDE.md"
+    [ -e "$WORK/symlab/l11" ] && no "symlink spawn copied the link's PARENT directory (SCRIPT_DIR bug regressed)" || ok "no parent-directory copy artifact"
+  else
+    no "symlink spawn failed entirely"
+  fi
 else
-  no "symlink spawn failed entirely"
+  skp "symlink spawn (spawned project — template-repo only)"
 fi
 
 echo ""

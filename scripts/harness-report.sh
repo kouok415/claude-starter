@@ -77,6 +77,26 @@ normalize() {
         $3=="FAIL"{fail++} $3=="INTEGRITY"{integ++} $3=="UNARMED"{unarm++}
         END{ printf "GL|%s|%d|%d|%d\n", s, fail, integ, unarm }' "$gl"
     done
+    # Task-dir census for the integrity cross-checks: CURRENT slug, plus
+    # per-dir [done]-milestone counts and how many have gate evidence.
+    cur=""
+    [ -f "$AI/tasks/CURRENT" ] && cur="$(tr -d '[:space:]' < "$AI/tasks/CURRENT")"
+    printf 'CUR|%s\n' "$cur"
+    T="$(printf '\t')"
+    for pl in "$AI"/tasks/*/plan.md; do
+      [ -f "$pl" ] || continue
+      tdir="${pl%/plan.md}"; tslug="$(basename "$tdir")"
+      dn=0; cv=0
+      while IFS= read -r mid; do
+        [ -n "$mid" ] || continue
+        dn=$((dn+1))
+        if [ -f "$tdir/gatelog" ] && { grep -qF "${T}${mid}${T}PASS" "$tdir/gatelog" \
+             || grep -qF "${T}${mid}${T}UNARMED" "$tdir/gatelog"; }; then
+          cv=$((cv+1))
+        fi
+      done < <(sed -n 's/^## \([^:]*\):.*\[done\].*/\1/p' "$pl")
+      printf 'TD|%s|%d|%d\n' "$tslug" "$dn" "$cv"
+    done
   fi
   if [ -f "$FR" ]; then
     awk -F, '
@@ -113,6 +133,13 @@ $1=="SB" {
   miles=$6; gf=$7; rung=$8; iv=$9; dur=$10; out=$11; h=$12
   o[out]++; ver[h]++; vout[h","out]++
   slug2ver[slug]=h
+  sb_seen[slug]=1; sb_gf[slug]=gf
+  if (out!="success" && out!="failed" && out!="abandoned")
+    enum_bad[++neb]="scoreboard " slug ": outcome=\"" out "\""
+  if (prof!="opus-tier" && prof!="fable-tier" && prof!="mixed" && prof!="?")
+    enum_bad[++neb]="scoreboard " slug ": profile=\"" prof "\""
+  if (size!="S" && size!="M" && size!="L" && size!="?")
+    enum_bad[++neb]="scoreboard " slug ": size=\"" size "\""
   ck=h" · "prof" · "size; cell_n[ck]++; cell[ck","out]++
   if (isnum(miles)) mile_sum+=miles
   if (isnum(gf)) { gf_sum+=gf; gf_ver[h]+=gf }
@@ -122,10 +149,16 @@ $1=="SB" {
                     dv_n[h]++; dur_ver[h","dv_n[h]]=dur }
 }
 $1=="GL" { gl_fail[$2]=$3; gl_integ[$2]=$4; gl_unarm[$2]=$5 }
+$1=="CUR" { cur=$2 }
+$1=="TD" { td_done[$2]=$3; td_cov[$2]=$4 }
 $1=="FR" {
   fr++; fh=$3; fa=$4; fs=$5
   fr_ver[fh]++; fr_area[fa]++; fr_sev[fs]++; ver_seen[fh]=1
   if (fs=="blocker") { fb++; fb_ver[fh]++; blk[fb]=$2"  "fa"  "$6"  ("$7")" }
+  if (fa!="setup" && fa!="task" && fa!="wrap" && fa!="hooks" && fa!="sync" && fa!="skills" && fa!="other")
+    enum_bad[++neb]="friction " $2 ": area=\"" fa "\""
+  if (fs!="blocker" && fs!="friction" && fs!="papercut")
+    enum_bad[++neb]="friction " $2 ": severity=\"" fs "\""
 }
 END {
   # attribute gatelog rows to versions via the slug map
@@ -183,6 +216,26 @@ END {
     for (i=1;i<=ns;i++) { m=split(dur_size[sk[i]], dl, " "); line=line sprintf(" %s=%d", sk[i], median(dl, m)) }
     print line sprintf(" · interventions median: %s", median(iv_all, iv_n+0))
   }
+
+  # Cross-checks: the scoreboard is model-written at /wrap; the gatelog and
+  # task dirs are ground truth. Disagreements are surfaced, never repaired.
+  print "== integrity"
+  nix=0
+  for (s in sb_seen) if (s in gl_fail) {
+    if (isnum(sb_gf[s]) && (sb_gf[s]+0) != (gl_fail[s]+0)) {
+      print "  gate_failures mismatch: " s " — scoreboard says " sb_gf[s] ", gatelog has " gl_fail[s] " FAIL row(s)"; nix++
+    }
+  }
+  for (s in td_done) {
+    if (s == cur) continue
+    if (!(s in sb_seen)) {
+      print "  orphan task: tasks/" s "/ has a plan but no scoreboard row — wrap it (abandoned runs count too)"; nix++
+    } else if (td_cov[s]+0 < td_done[s]+0) {
+      print "  gate evidence gap: tasks/" s "/ — " td_cov[s] " of " td_done[s] " [done] milestones have a PASS/UNARMED row (pre-v3.6 run?)"; nix++
+    }
+  }
+  for (i=1; i<=neb; i++) { print "  enum violation: " enum_bad[i]; nix++ }
+  if (nix==0) print "clean — scoreboard, gatelogs and task dirs agree"
 
   print "== friction"
   if (fr==0) print "none recorded"

@@ -41,7 +41,7 @@ factual reference (contracts, glossaries) in `knowledge/`.
 | `tasks/<slug>/brief.md` | scout-written map; others append dated corrections; ≤4 KB |
 | `tasks/<slug>/lessons.md` | append-only; one line per lesson; ≤4 KB |
 | `tasks/<slug>/gatelog` | hook-written only, never hand-edited |
-| `scoreboard.csv` | append-only; one row per completed `/task` — the harness A/B dataset |
+| `scoreboard.csv` | append-only (A/B dataset); corrections are appended, never edited |
 | `private/*` | free-form; gitignored |
 
 End significant sessions with `/wrap` — a reading protocol without

@@ -85,22 +85,27 @@ spec; the mechanism is the guarantee.
 | "No secrets in commits" (H1) | gitleaks pre-commit hook + `settings.json` denies reading `.env*` |
 | "state.md stays under 5 KB" (S7) | pre-commit size check + session-start warning |
 | "Time-stamp aging facts" (S3) | session-start hook warns when `state.md` is stale |
-| "Verify before claiming done" | **Stop gate**: on `/task` runs, the active milestone's verify command must pass before a turn may end (unchanged tree = cached PASS, no re-run); plus the `Verify` + **Definition of done** contract in CLAUDE.md and the optional `lint.sh` post-edit hook |
+| "Verify before claiming done" | **Stop gate**: on `/task` runs, the active milestone's verify command must pass before a turn may end (unchanged tree = cached PASS, no re-run); plus the `Verify` + **Definition of done** contract in CLAUDE.md and the optional `lint.sh` post-edit hook. The gate arms only while a `/task` is active — work big enough to need one should *be* a `/task` |
 | "Long tasks decay — drift, silent errors, lost state" | `/task` harness: milestone plan with executable gates, fresh executor context per milestone, adversarial verifier, escalation ladder, commit per gate |
 | "A new project's first session sets it up" | session-start `SETUP REQUIRED` instruction + Stop gate blocks the first turn-end (once per session); both key on the `claude-starter: UNCONFIGURED` sentinel in CLAUDE.md, which `/setup` deletes when the draft lands |
 | "Discovery is paid once, not once per subagent" | `scout` agent writes `tasks/<slug>/brief.md` at intake; session-start injects it; every later context navigates by it and appends corrections instead of re-surveying |
 | "Ceremony scales with the task, verification with the risk" | `/task` records size (S/M/L) in the plan header — S plans and executes inline; each milestone's `risk:` picks gate-only / light / full verification |
 | "A status typo must not silently disarm the gate" | session-start warns on `[pending]`-without-`[in_progress]`; the Stop gate blocks the mid-flight case (`[done]`+`[pending]`, none in progress) once per session |
-| "The milestone gate can never be silently off" | every other dark-gate state — empty/corrupt `CURRENT`, missing or heading-less plan.md, an `[in_progress]` milestone with no verify command, task work on main/master — blocks once per session, and each detection appends an `INTEGRITY` gatelog row: a quiet gatelog provably means a clean run |
+| "The milestone gate can never be silently off" | every other dark-gate state — empty/corrupt `CURRENT`, missing or heading-less plan.md, an `[in_progress]` milestone with no verify command, task work off `task/*` branches (main/master or any other: the verify would run against the wrong tree) — blocks once per session, and each detection appends an `INTEGRITY` gatelog row: a quiet gatelog provably means a clean run |
 | "A one-turn task must not leave an empty audit trail" | zero-stop sweep at the all-`[done]` state (and via `stop-gate.sh --sweep`, which `/wrap` runs before deleting `CURRENT`): the final milestone's verify RUNS — red blocks every time — and earlier rowless gates get `UNARMED` rows: recorded vacuity, never fake evidence |
 | "Verify commands are audited, not just executed" | every gatelog row records the exact command that was enforced (mid-run weakening is visible); the final panel audits `git log -p -- spec.md` for quietly weakened acceptance criteria |
 | "Verify commands can't do catastrophic ops unattended" | Stop-gate denylist: a verify containing `sudo`, `git push`, or `rm -rf` on an absolute path is never executed — always blocked, always logged |
+| "Catastrophic bash never runs unattended" (never force-push, no sudo) | `bash-guard.sh` PreToolUse tripwire: force-push / `sudo` / `rm -rf /` denied and logged to `private/bash-guard.log`; absolute-path `rm -rf` and `.env` access downgraded to a confirmation; declarative `ask`/`deny` mirrors in `settings.json`. Contains-matching beats prefix rules — but it is a tripwire, not a sandbox |
 | "Failed and abandoned runs reach the dataset too" | `/wrap` writes the scoreboard row on abandonment as well (`outcome` pinned to `success\|failed\|abandoned`), plus `duration_min` from git timestamps — no survivor bias |
 | "Every scoreboard row names the harness that produced it" | `/wrap` fills the `harness` column from the last `claude-starter@<ref>` stamp in `.claude/.starter-version`; releases are git-tagged, so ref→version mapping is mechanical |
 | "Harness friction is data, not vibes" | `/wrap` appends enum rows (`area` × `severity`) to `.ai_context/friction.csv` only when a mechanism actually misbehaved; `harness-report.sh` joins them with the gatelog's `INTEGRITY` rows |
 | "Scoring is computed, never recalled" | `scripts/harness-report.sh` (CI-tested) computes outcome/gate/escalation/cost aggregates per harness version; percentages are suppressed below N=5; no composite score exists, on purpose |
-| "Always-injected files stay small" | 4 KB warnings for `brief.md`/`lessons.md`, 5 KB pre-commit cap + warning for `state.md` (S7), size-guard test on `INDEX.md` itself |
+| "Scoring data is cross-checked, not trusted" | `harness-report.sh` `== integrity` section: scoreboard↔gatelog `gate_failures` mismatches, orphan task dirs (runs that never reached the scoreboard), missing PASS/UNARMED evidence, enum violations — surfaced, never auto-repaired |
+| "Always-injected files stay small" | 4 KB warnings for `brief.md`/`lessons.md`, 5 KB pre-commit cap + warning for `state.md` (S7), size-guard test on `INDEX.md` itself + a session-start warning when a project's copy outgrows 4 KB |
+| "Externalize bulk" (S2) | `check-context-bulk.sh` pre-commit: any staged `.ai_context` file over 100 KB blocks — dumps are referenced, not pasted |
 | "Scoreboard numbers must be real" | the Stop gate writes a `gatelog` per real run; `/wrap` aggregates it into `scoreboard.csv` |
+| "Append-only files are never rewritten" (decisions, journal, scoreboard, friction, gatelog) | `check-append-only.sh` pre-commit: staged edits or deletions of existing lines are rejected; corrections happen by appending. `lessons.md`/`brief.md` stay rewritable — `/wrap` distills them by design |
+| "gatelog is hook-written only" | `settings.json` denies Edit/Write on `tasks/*/gatelog`; the append-only pre-commit backstops it (raw Bash appends remain possible — tripwire, not sandbox) |
 | "Sessions that die without /wrap lose their state" | session-start warns when commits are newer than `state.md` |
 
 ---
@@ -216,6 +221,7 @@ claude-starter/
 │   ├── hooks/
 │   │   ├── session-start.sh    Injects INDEX+state (+ active task plan)
 │   │   ├── post-edit.sh        Instant lint feedback (delegates to lint.sh)
+│   │   ├── bash-guard.sh       PreToolUse tripwire (force-push/sudo/rm -rf /)
 │   │   ├── stop-gate.sh        /task milestone gate — no stop on red verify
 │   │   └── lint.sh.example     Fill in your linter after language init
 │   ├── agents/                 /task crew: scout, planner, plan-critic,

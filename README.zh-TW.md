@@ -78,22 +78,27 @@ v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才
 | 「commit 裡不准有密鑰」(H1) | gitleaks pre-commit + `settings.json` 禁止讀取 `.env*` |
 | 「state.md 不超過 5 KB」(S7) | pre-commit 大小檢查 + session 開始時警告 |
 | 「會老化的事實要標日期」(S3) | session-start hook 偵測 state.md 過期並警告 |
-| 「驗證過才算完成」 | **Stop gate**:`/task` 進行中時,當前里程碑的 verify 指令不通過,回合就結束不了(樹沒變動則命中 PASS-cache,不重跑);外加 CLAUDE.md 的 **Verify** + **Definition of done** 契約、可選的 `lint.sh` 即時回饋 |
+| 「驗證過才算完成」 | **Stop gate**:`/task` 進行中時,當前里程碑的 verify 指令不通過,回合就結束不了(樹沒變動則命中 PASS-cache,不重跑);外加 CLAUDE.md 的 **Verify** + **Definition of done** 契約、可選的 `lint.sh` 即時回饋。閘門只在 `/task` 進行中武裝 —— 大到需要閘門的工作,本身就該是一個 `/task` |
 | 「長任務會衰變:漂移、無聲錯誤、狀態流失」 | `/task` harness —— 帶可執行閘門的里程碑計畫、每個里程碑全新 executor context、對抗式 verifier、升級梯、過關即 commit |
 | 「新專案的第一個 session 要完成設置」 | session-start 的 `SETUP REQUIRED` 指令 + Stop gate 擋住第一次回合結束(每 session 一次);兩者都認 CLAUDE.md 裡的 `claude-starter: UNCONFIGURED` sentinel,`/setup` 起草完成時刪掉它 |
 | 「發現(discovery)只付一次,不是每個子代理付一次」 | `scout` agent 在 intake 寫出 `tasks/<slug>/brief.md`;session-start 自動注入;之後所有 context 按圖導航、發現地圖錯就附註修正,不再重新調查 |
 | 「儀式隨任務規模縮放、驗證隨風險縮放」 | `/task` 把規模(S/M/L)記進 plan 頭部 —— S 直接在主 context 規劃執行;每個里程碑的 `risk:` 決定 只靠閘門 / 輕量 diff 審查 / 完整對抗驗證 |
 | 「一個狀態錯字不能無聲解除閘門」 | session-start 偵測「任務有 `[pending]` 里程碑卻沒有 `[in_progress]`」時警告;Stop gate 對做到一半斷鏈(`[done]`+`[pending]` 卻無 in_progress)的狀態每 session 擋一次 |
-| 「里程碑閘門絕不無聲熄滅」 | 其餘暗閘狀態 —— CURRENT 空白/損毀、plan.md 不存在或無里程碑標題、`[in_progress]` 里程碑缺 verify 指令、任務工作停在 main/master —— 每 session 擋一次,且每次偵測都在 gatelog 追加一行 `INTEGRITY`:安靜的 gatelog 從此可證明等於乾淨的一輪 |
+| 「里程碑閘門絕不無聲熄滅」 | 其餘暗閘狀態 —— CURRENT 空白/損毀、plan.md 不存在或無里程碑標題、`[in_progress]` 里程碑缺 verify 指令、任務工作不在 `task/*` 分支上(main/master 或其他分支:verify 會對著錯的樹跑)—— 每 session 擋一次,且每次偵測都在 gatelog 追加一行 `INTEGRITY`:安靜的 gatelog 從此可證明等於乾淨的一輪 |
 | 「單一 turn 跑完的任務不能留下空白稽核軌跡」 | 零停頓掃描:在全 `[done]` 狀態(以及 `/wrap` 刪除 `CURRENT` 前呼叫的 `stop-gate.sh --sweep`)——最後一個里程碑的 verify 真的執行(紅了每次都擋),更早的無列閘門補記 `UNARMED` 列:記錄下來的空洞,而非偽造的證據 |
 | 「verify 指令要被稽核,不只是被執行」 | gatelog 每行記錄實際強制執行的指令(中途弱化留下痕跡);final panel 以 `git log -p -- spec.md` 稽核驗收準則是否被悄悄改弱 |
 | 「verify 指令不能無人看管地做災難性操作」 | Stop gate denylist:含 `sudo`、`git push`、絕對路徑 `rm -rf` 的 verify 永不執行 —— 一律擋下、一律記錄 |
+| 「災難性 bash 絕不無人看管地執行」(永不 force-push、不 sudo) | `bash-guard.sh` PreToolUse 絆索:force-push / `sudo` / `rm -rf /` 一律拒絕並記錄到 `private/bash-guard.log`;絕對路徑 `rm -rf` 與 `.env` 存取降級為確認提示;`settings.json` 另有宣告式 `ask`/`deny` 對照。contains 匹配強過前綴規則 —— 但它是絆索,不是沙箱 |
 | 「失敗與放棄的任務也要進資料集」 | `/wrap` 在放棄時同樣寫入記分板列(`outcome` 釘死為 `success\|failed\|abandoned`),外加取自 git 時間戳的 `duration_min` —— 不留倖存者偏差 |
 | 「每筆記分板列都標明產生它的 harness 版本」 | `/wrap` 從 `.claude/.starter-version` 最後一行的 `claude-starter@<ref>` 戳記填入 `harness` 欄;release 都打 git tag,ref→版本的對映是機械的 |
 | 「harness 的摩擦是資料,不是體感」 | `/wrap` 只在機制真的出問題時把枚舉列(`area` × `severity`)寫進 `.ai_context/friction.csv`;`harness-report.sh` 把它跟 gatelog 的 `INTEGRITY` 列 join 起來 |
 | 「評分是算出來的,不是回憶出來的」 | `scripts/harness-report.sh`(CI 有測)按 harness 版本計算 outcome/gate/escalation/成本聚合;N<5 不印百分比;刻意不存在綜合分數 |
-| 「常駐注入的檔案必須保持小」 | `brief.md`/`lessons.md` 超過 4 KB 警告、`state.md` 5 KB pre-commit 上限 + 警告(S7)、`INDEX.md` 自身有大小守衛測試 |
+| 「評分資料要交叉核對,不是照單全收」 | `harness-report.sh` 的 `== integrity` 節:記分板↔gatelog 的 `gate_failures` 不一致、孤兒任務目錄(從未進記分板的 run)、缺 PASS/UNARMED 證據、枚舉違規 —— 一律列出,永不自動修復 |
+| 「常駐注入的檔案必須保持小」 | `brief.md`/`lessons.md` 超過 4 KB 警告、`state.md` 5 KB pre-commit 上限 + 警告(S7)、`INDEX.md` 自身有大小守衛測試 + 專案內超過 4 KB 時 session-start 警告 |
+| 「大塊資料外部化」(S2) | `check-context-bulk.sh` pre-commit:任何 staged 的 `.ai_context` 檔案超過 100 KB 即擋下 —— dump 用引用,不用貼上 |
 | 「記分板數字必須是真的」 | Stop gate 每次真實執行寫入 `gatelog`;`/wrap` 彙總成 `scoreboard.csv` |
+| 「append-only 檔案永不改寫」(decisions、journal、scoreboard、friction、gatelog) | `check-append-only.sh` pre-commit:staged 變更若修改或刪除既有行即拒絕;更正靠追加。`lessons.md`/`brief.md` 保持可改寫 —— `/wrap` 蒸餾它們是設計行為 |
+| 「gatelog 只由 hook 寫入」 | `settings.json` 對 `tasks/*/gatelog` 禁用 Edit/Write;append-only pre-commit 做後盾(raw Bash 追加仍可能 —— 絆索,不是沙箱) |
 | 「沒跑 /wrap 就死掉的 session」 | session-start 偵測 commit 比 `state.md` 新時發出警告 |
 
 ---
@@ -199,6 +204,7 @@ claude-starter/
 │   ├── hooks/
 │   │   ├── session-start.sh    注入 INDEX+state(+ 進行中任務的 plan)
 │   │   ├── post-edit.sh        編輯後即時 lint 回饋(委派 lint.sh)
+│   │   ├── bash-guard.sh       PreToolUse 絆索(force-push/sudo/rm -rf /)
 │   │   ├── stop-gate.sh        /task 里程碑閘門 —— verify 紅燈不准停
 │   │   └── lint.sh.example     語言 init 之後填入你的 linter
 │   ├── agents/                 /task 班底:scout、planner、plan-critic、

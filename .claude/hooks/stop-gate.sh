@@ -112,11 +112,18 @@ integrity_stop() { # $1 = milestone id or '?', $2 = reason
 
 [ -n "$slug" ] || integrity_stop '?' 'tasks/CURRENT exists but is empty/corrupt — restore the slug or delete the file'
 
-# Task work never sits on the default branch (non-git / detached HEAD: skip).
+# Task work sits on a task/* branch, never the default one (non-git /
+# detached HEAD: skip). Any other branch is also a dark state: the gate
+# would run the milestone verify against the wrong tree, logging junk FAIL
+# rows — block with a clear reason instead.
 branch="$(git -C "$ROOT" branch --show-current 2>/dev/null || true)"
 case "$branch" in
   main|master)
     integrity_stop '?' "active task '$slug' but the session is on '$branch' — task work belongs on a task/ branch"
+    ;;
+  ''|task/*) ;;
+  *)
+    integrity_stop '?' "active task '$slug' but the session is on branch '$branch' — task work belongs on task/<slug>; a verify here would run against the wrong tree"
     ;;
 esac
 
