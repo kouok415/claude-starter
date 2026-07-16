@@ -150,7 +150,7 @@ $1=="SB" {
 }
 $1=="GL" { gl_fail[$2]=$3; gl_integ[$2]=$4; gl_unarm[$2]=$5 }
 $1=="CUR" { cur=$2 }
-$1=="TD" { td_done[$2]=$3; td_cov[$2]=$4 }
+$1=="TD" { td_done[$2]=$3; td_cov[$2]=$4; ntd++ }
 $1=="FR" {
   fr++; fh=$3; fa=$4; fs=$5
   fr_ver[fh]++; fr_area[fa]++; fr_sev[fs]++; ver_seen[fh]=1
@@ -183,7 +183,10 @@ END {
   }
 
   printf "harness-report · %s\n", project
-  if (n==0 && fr==0) { print "no harness data yet (scoreboard.csv and friction.csv absent or empty)"; exit 0 }
+  # Early exit only when there is truly nothing: task dirs without any
+  # scoreboard are exactly the orphan case the integrity section exists
+  # for, so their presence must not short-circuit it.
+  if (n==0 && fr==0 && ntd==0) { print "no harness data yet (scoreboard.csv and friction.csv absent or empty)"; exit 0 }
 
   print "== dataset"
   line=sprintf("tasks: %d (success %d, failed %d, abandoned %d) · versions:", n, o["success"]+0, o["failed"]+0, o["abandoned"]+0)

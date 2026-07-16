@@ -544,6 +544,13 @@ csv=$(bash "$REPO/scripts/harness-report.sh" --csv "$D")
 echo "$csv" | grep -q 'mismatch' && no "--csv polluted by integrity lines (13-col contract)" || ok "--csv untouched by integrity section"
 out2=$(bash "$REPO/scripts/harness-report.sh" "$WORK/l111")
 echo "$out2" | grep -q 'clean — scoreboard, gatelogs and task dirs agree' && ok "healthy dataset reports clean" || no "healthy dataset not reported clean"
+D2="$WORK/l117b"; mkdir -p "$D2/.ai_context/tasks/ghost"
+printf '# Plan: g\n\n## M1: a [done]\n- verify: `true`\n' > "$D2/.ai_context/tasks/ghost/plan.md"
+out3=$(bash "$REPO/scripts/harness-report.sh" "$D2"); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out3" | grep -q 'orphan task: tasks/ghost/'; } && ok "orphan surfaces even with an empty scoreboard (cold-start case)" || no "cold-start orphan hidden by the no-data early exit"
+D3="$WORK/l117c"; mkdir -p "$D3/.ai_context"
+out4=$(bash "$REPO/scripts/harness-report.sh" "$D3")
+echo "$out4" | grep -q 'no harness data yet' && ok "truly-empty project still gets the no-data line" || no "no-data early exit regressed"
 
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"
