@@ -48,7 +48,7 @@ happen*.
 | a `/task` on a non-task branch ran its verify against the wrong tree, logging junk FAIL rows | any branch other than `task/*` (or main/master, as before) is a blocked INTEGRITY state with a clear reason | better diagnosis than a baffling red gate, and `gate_failures` stats stop being polluted |
 | scoreboard rows trusted as /wrap wrote them | `harness-report.sh` `== integrity`: scoreboard↔gatelog mismatches, orphan task dirs, missing PASS/UNARMED evidence, enum violations (human mode only — the 13-column `--csv` contract is untouched) | "computed, never recalled" now includes cross-checking the model-written rows against ground truth |
 | INDEX.md size guarded only by template CI; nothing capped bulk pastes | session-start warns when a project's INDEX.md exceeds 4 KB; `check-context-bulk.sh` blocks any staged `.ai_context` file over 100 KB (S2) | the injected-every-session files stay small in *projects*, and dumps get referenced instead of pasted |
-| `tests/run.sh` assumed the template repo (spawner/sync present) | template-only sections SKIP gracefully in spawned projects | `bash tests/run.sh` inside a project is now the post-sync smoke test |
+| `tests/run.sh` assumed the template repo (spawner/sync present) | template-only sections SKIP gracefully in projects that carry `tests/` (spawns inherit it; sync deliberately never ships it — `tests/` may be *your* test dir) | the suite doubles as the post-sync smoke test where present; synced projects smoke the hooks directly (see upgrade steps) |
 
 ### Upgrade steps for a v3.6 project
 
@@ -66,8 +66,17 @@ advances the stock hooks/report/config. Two things sync will not do to a
 - **.pre-commit-config.yaml** — add the `ai-context-append-only` and
   `ai-context-bulk` hooks, then re-run `pre-commit install`.
 
-After syncing, run `bash tests/run.sh` inside the project: the L1 sections
-exercise the synced hooks on your machine; template-only sections skip.
+Post-sync smoke: if the project carries `tests/run.sh` (spawned from the
+template — sync deliberately never ships it, since `tests/` may be your
+own test directory), run `bash tests/run.sh`; template-only sections skip.
+Otherwise exercise the synced hooks directly:
+
+```bash
+printf '{"tool_input":{"command":"git push --force"}}' \
+  | bash .claude/hooks/bash-guard.sh; echo "rc=$? (want 2)"
+bash .claude/hooks/stop-gate.sh --sweep; echo "rc=$? (want 0)"
+bash scripts/harness-report.sh .    # exits 0; prints report or no-data line
+```
 
 ---
 
