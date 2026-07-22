@@ -10,8 +10,9 @@
 #
 # Gate 2 (milestone verify, every stop while a /task is active): runs the
 # [in_progress] milestone's `- verify:` command; on failure exits 2 with the
-# output on stderr so the turn cannot end red. Every real run is appended to
-# the task's gatelog so scoreboards read a file, not model memory.
+# output on stderr so the turn cannot end red (first two attempts — see
+# Counted yields below). Every real run is appended to the task's gatelog so
+# scoreboards read a file, not model memory.
 #
 # Gate-2 integrity (v3.4): any state in which the milestone gate would
 # otherwise be silently OFF — empty/corrupt CURRENT, missing or heading-less
@@ -46,8 +47,17 @@
 # vacuity is recorded instead of fake evidence). A quiet gatelog again
 # means "clean run": no FAIL, no INTEGRITY, and no unrecorded dark gates.
 #
-# Loop protection: when a previous Stop was already blocked by this hook,
-# Claude Code sets "stop_hook_active": true — that stop is allowed through.
+# Counted yields (v3.9): a red verify blocks at most TWICE per milestone per
+# session; the third consecutive red stop YIELDS — exit 0 with a STUCK gatelog
+# row and a {"systemMessage"} to the human. Rationale: the 2026-07-22 v_trader
+# incident — the gate caught a skipped-executor milestone, blocked once, then
+# the old unconditional stop_hook_active pass-through let the red turn end
+# silently; the human found it by hand half a day later. Three failed attempts
+# = the three-strikes rule: stop resampling, hand off. Model-fixable block
+# states (status corruption, forbidden verify) keep blocking every attempt —
+# the platform's own consecutive-block cap (default 8) is the backstop.
+# stop_hook_active is honored only by Gate 1 (setup nudge); the milestone
+# gate does its own counting instead.
 
 set -uo pipefail
 
@@ -59,21 +69,26 @@ MODE=stop
 
 if [ "$MODE" = stop ]; then
   payload="$(cat 2>/dev/null || true)"
+  stop_active=0
   if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
-    exit 0
+    stop_active=1
   fi
   sid="$(printf '%s' "$payload" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 else
   sid=""
+  stop_active=0
 fi
+# Filename-safe session id for this hook's own marker/counter files.
+sid_s="$(printf '%s' "${sid:-nosession}" | tr -cd 'A-Za-z0-9._-')"
+[ -n "$sid_s" ] || sid_s=nosession
 
 # --- Gate 1: first-session setup -------------------------------------------
 # Sentinel first (v3.3 templates); legacy placeholder patterns kept for
 # projects spawned before the sentinel existed. Keep this pattern in sync
 # with session-start.sh — the two layers of one mechanism must agree.
-if [ "$MODE" = stop ] && [ -f "$ROOT/CLAUDE.md" ] && \
+if [ "$MODE" = stop ] && [ "$stop_active" = 0 ] && [ -f "$ROOT/CLAUDE.md" ] && \
    grep -qE 'claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit' "$ROOT/CLAUDE.md"; then
-  marker="${TMPDIR:-/tmp}/claude-setup-nudge-${sid:-nosession}"
+  marker="${TMPDIR:-/tmp}/claude-setup-nudge-${sid_s}"
   if [ ! -f "$marker" ]; then
     : > "$marker" 2>/dev/null || true
     {
@@ -93,7 +108,7 @@ slug="$(tr -d '[:space:]' < "$TASKS/CURRENT")"
 # --- Gate-2 integrity: no silent disarm --------------------------------------
 # One integrity interruption per session (shared marker); every detection
 # leaves an INTEGRITY gatelog row, so dark-gate states are always on record.
-imarker="${TMPDIR:-/tmp}/claude-gate-integrity-${sid:-nosession}"
+imarker="${TMPDIR:-/tmp}/claude-gate-integrity-${sid_s}"
 
 integrity_stop() { # $1 = milestone id or '?', $2 = reason
   if [ ! -f "$imarker" ] && [ -n "$slug" ] && [ -d "$TASKS/$slug" ]; then
@@ -131,6 +146,40 @@ plan="$TASKS/$slug/plan.md"
 gatelog="$TASKS/$slug/gatelog"
 [ -f "$plan" ] || integrity_stop '?' "tasks/CURRENT names '$slug' but its plan.md is missing — mid-intake pause, renamed dir, or stale CURRENT"
 grep -q '^## ' "$plan" || integrity_stop '?' 'plan.md has no milestone headings — malformed plan, the gate has nothing to check'
+
+# --- Counted red blocks ------------------------------------------------------
+# Consecutive red *blocks* per (session, milestone), kept in a tmp counter.
+# Session-scoped on purpose: gatelog FAIL rows survive across sessions, so
+# counting those would carry yesterday's blocks into today's first attempt.
+red_file() { # $1 = key -> prints the counter path
+  printf '%s/claude-gate-red-%s-%s' "${TMPDIR:-/tmp}" "$sid_s" \
+    "$(printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '_')"
+}
+
+red_count() { # $1 = key -> increments and prints the new count
+  rcf="$(red_file "$1")"
+  n="$(cat "$rcf" 2>/dev/null || true)"
+  case "$n" in (''|*[!0-9]*) n=0 ;; esac
+  n=$((n + 1))
+  printf '%s' "$n" > "$rcf" 2>/dev/null || true
+  printf '%s' "$n"
+}
+
+red_reset() { # $1 = key
+  rm -f "$(red_file "$1")" 2>/dev/null || true
+}
+
+# NOTE: $3 lands inside a JSON string — pass fixed ASCII without quotes only.
+yield_stuck() { # $1 = milestone id, $2 = consecutive count, $3 = extra note ('' ok)
+  printf '%s\t%s\tSTUCK\tyielded to the human after %s consecutive red blocks%s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S')" "$1" "$2" "${3:+ — $3}" \
+    >> "$gatelog" 2>/dev/null || true
+  slug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
+  ms_j="$(printf '%s' "$1" | tr -cd 'A-Za-z0-9._-')"
+  printf '{"systemMessage":"claude-starter gate: task %s / %s is RED — blocked %s stops in a row without a green verify, yielding now.%s A human needs to look: .ai_context/tasks/%s/gatelog"}\n' \
+    "$slug_j" "$ms_j" "$2" "${3:+ (${3})}" "$slug_j"
+  exit 0
+}
 
 # --- Zero-stop sweep ---------------------------------------------------------
 # Shared by the all-[done] Stop state and the explicit --sweep mode (called
@@ -201,7 +250,7 @@ sweep_done_milestones() { # $1 = 1 when the plan is all-[done] (last verify runs
       printf '%s\t%s\tUNARMED\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" \
         "${vlog:-(no verify command)}" >> "$gatelog" 2>/dev/null || true
     fi
-  done | grep -q BLOCK && exit 2
+  done | grep -q BLOCK && return 1
   return 0
 }
 
@@ -212,7 +261,8 @@ if [ "$MODE" = sweep ]; then
   if ! grep -q '^## .*\[in_progress\]' "$plan" && ! grep -q '^## .*\[pending\]' "$plan"; then
     all_done=1
   fi
-  sweep_done_milestones "$all_done"
+  # Explicit /wrap sweep: strict, never yields — /wrap must not wrap red.
+  sweep_done_milestones "$all_done" || exit 2
   exit 0
 fi
 
@@ -234,8 +284,14 @@ if [ "${n_inprog:-0}" -eq 0 ]; then
   fi
   # All-[done] wrap-up: account for gates a zero-stop run never armed —
   # verify the final milestone now, record UNARMED for earlier rowless ones.
+  # Red sweeps are counted like any red verify: two blocks, third yields.
   if grep -q '^## .*\[done\]' "$plan"; then
-    sweep_done_milestones 1
+    if ! sweep_done_milestones 1; then
+      swn="$(red_count "${slug}-sweep")"
+      [ "$swn" -ge 3 ] && yield_stuck sweep "$swn" 'final-milestone verify red at wrap-up'
+      exit 2
+    fi
+    red_reset "${slug}-sweep"
   fi
   exit 0
 fi
@@ -316,6 +372,7 @@ fi
 
 if out="$(run_cmd "$cmd" 2>&1)"; then
   printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
+  red_reset "${slug}-${ms:-?}"
   # Fingerprint AFTER the run: verify itself may write artifacts; caching the
   # post-run state lets the next no-op stop hit the cache.
   fp="$(fingerprint || true)"
@@ -327,8 +384,10 @@ fi
 
 rm -f "$gatecache" 2>/dev/null || true
 printf '%s\t%s\tFAIL\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
+rn="$(red_count "${slug}-${ms:-?}")"
+[ "$rn" -ge 3 ] && yield_stuck "${ms:-?}" "$rn" ''
 {
-  printf 'GATE FAILED — the [in_progress] milestone did not pass verify; this turn cannot end.\n'
+  printf 'GATE FAILED (red block %s of 2 — one more red stop hands off to the human) — the [in_progress] milestone did not pass verify; this turn cannot end.\n' "$rn"
   printf '$ %s\n' "$cmd"
   printf '%s\n' "$out" | tail -n 50
   printf 'Fix and re-verify, or record the failure in lessons.md and escalate per the /task ladder.\n'

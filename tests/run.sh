@@ -25,7 +25,7 @@ skp()  { SKIP=$((SKIP+1)); echo "SKIP: $*"; }
 ck()   { local want="$1" got="$2"; shift 2; if [ "$want" = "$got" ]; then ok "$*"; else no "$* (want rc=$want got rc=$got)"; fi; }
 
 WORK="$(mktemp -d)"
-cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* ; }
+cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* ; }
 trap cleanup EXIT
 
 # Spec-faithful plan fixture: format header INCLUDED, one in_progress.
@@ -84,6 +84,57 @@ echo "$err" | grep -q '2 milestones' && ok "counts heading lines only (2, not 3)
 rm -f "$D/.ai_context/tasks/CURRENT"
 printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 0 $? "no active task => no-op"
+
+echo "=== L1-2b · stop-gate: counted red blocks — third stop yields to the human"
+D="$WORK/l12b"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
+printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "red block 1 still blocks"
+printf '{"stop_hook_active": true, "session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "red block 2 blocks despite stop_hook_active (gate counts for itself)"
+out=$(printf '{"stop_hook_active": true, "session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "third consecutive red stop yields"
+echo "$out" | grep -q '"systemMessage"' && ok "yield carries a systemMessage for the human" || no "yield lacks systemMessage"
+echo "$out" | grep -q 'demo / M2 is RED' && ok "systemMessage names task and milestone" || no "systemMessage vague"
+grep -q "	M2	STUCK	" "$D/.ai_context/tasks/demo/gatelog" && ok "gatelog STUCK row written" || no "STUCK row missing"
+n_fail=$(grep -c "	M2	FAIL" "$D/.ai_context/tasks/demo/gatelog")
+[ "$n_fail" = 3 ] && ok "each attempt logged a FAIL row (3)" || no "FAIL rows: want 3 got $n_fail"
+# PASS resets the streak: fix the verify, pass once, break it again — blocks anew
+write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "green verify passes after yield"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
+printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "PASS reset the counter — new red streak blocks again"
+# a fresh session also starts a fresh streak
+printf '{"session_id": "tsuite-red2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "new session counts from zero"
+
+echo "=== L1-2c · stop-gate: red wrap-up sweep counted; /wrap --sweep stays strict"
+D="$WORK/l12c"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
+# Plan: fixture
+<!-- profile: opus-tier ; size: S -->
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: only [done]
+- verify: `false`
+- risk: low
+PEOF
+printf '{"session_id": "tsuite-swp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "all-done red sweep blocks (1)"
+printf '{"session_id": "tsuite-swp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "all-done red sweep blocks (2)"
+out=$(printf '{"session_id": "tsuite-swp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "third red sweep yields"
+echo "$out" | grep -q '"systemMessage"' && ok "sweep yield pings the human" || no "sweep yield silent"
+grep -q "	sweep	STUCK	" "$D/.ai_context/tasks/demo/gatelog" && ok "sweep STUCK row" || no "sweep STUCK row missing"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+ck 2 $? "explicit /wrap --sweep never yields (still strict after counted yields)"
 
 echo "=== L1-3 · session-start: injection + warnings"
 D="$WORK/l13"; mkdir -p "$D/.ai_context/tasks/demo"
