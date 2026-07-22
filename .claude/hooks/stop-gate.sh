@@ -384,12 +384,32 @@ fi
 
 rm -f "$gatecache" 2>/dev/null || true
 printf '%s\t%s\tFAIL\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
+
+# No-spawn diagnosis: on M/L, a red milestone with NO executor spawn row means
+# §3.2 was skipped — the right move is rung 1, not the escalation ladder.
+# Claims are made only when spawnlog is non-empty (capability handshake: M/L
+# intake spawns scout/planner first, so any row proves the event fires here;
+# on Claude Code versions without SubagentStart the file stays absent and
+# this stays silent). Explicit size M/L only — S runs in-context by design.
+spawn_hint=''
+spawnlog="$TASKS/$slug/spawnlog"
+psize="$(sed -n 's/.*;[[:space:]]*size:[[:space:]]*\([SML]\).*/\1/p' "$plan" | head -n1)"
+if { [ "$psize" = M ] || [ "$psize" = L ]; } && [ -s "$spawnlog" ] && \
+   ! awk -F'\t' -v m="${ms:-?}" '$2==m && $3=="executor" {f=1} END {exit !f}' "$spawnlog"; then
+  spawn_hint='no executor spawn recorded for this milestone'
+fi
+
 rn="$(red_count "${slug}-${ms:-?}")"
-[ "$rn" -ge 3 ] && yield_stuck "${ms:-?}" "$rn" ''
+[ "$rn" -ge 3 ] && yield_stuck "${ms:-?}" "$rn" "$spawn_hint"
 {
   printf 'GATE FAILED (red block %s of 2 — one more red stop hands off to the human) — the [in_progress] milestone did not pass verify; this turn cannot end.\n' "$rn"
   printf '$ %s\n' "$cmd"
   printf '%s\n' "$out" | tail -n 50
-  printf 'Fix and re-verify, or record the failure in lessons.md and escalate per the /task ladder.\n'
+  if [ -n "$spawn_hint" ]; then
+    printf 'NOTE — spawnlog has no executor row for %s: it looks like §3.2 (spawn the executor) was skipped.\n' "${ms:-?}"
+    printf 'Spawn the executor for this milestone (rung 1) before escalating; do not enter the ladder.\n'
+  else
+    printf 'Fix and re-verify, or record the failure in lessons.md and escalate per the /task ladder.\n'
+  fi
 } >&2
 exit 2

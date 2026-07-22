@@ -136,6 +136,70 @@ grep -q "	sweep	STUCK	" "$D/.ai_context/tasks/demo/gatelog" && ok "sweep STUCK r
 CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
 ck 2 $? "explicit /wrap --sweep never yields (still strict after counted yields)"
 
+echo "=== L1-2d · spawn-log + no-spawn diagnosis"
+SL="$REPO/.claude/hooks/spawn-log.sh"
+D="$WORK/l12d"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+# unit: no active task => no rows anywhere
+printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" executor
+ck 0 $? "spawn-log without CURRENT is a no-op"
+[ ! -e "$D/.ai_context/tasks/demo/spawnlog" ] && ok "no spawnlog created without a task" || no "stray spawnlog"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+# intake state: scout spawned before any milestone arms -> ms '-'
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
+# Plan: fixture
+<!-- profile: opus-tier ; size: M -->
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: groundwork [pending]
+- verify: `false`
+- risk: low
+
+## M2: current [pending]
+- verify: `false`
+- risk: low
+PEOF
+printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" other
+grep -q "	-	other$" "$D/.ai_context/tasks/demo/spawnlog" && ok "intake spawn rows carry '-' (capability handshake)" || no "intake row wrong"
+# arm M2, spawn executor => attributed row
+sed -i.bak 's/## M2: current \[pending\]/## M2: current [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
+printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" executor
+grep -q "	M2	executor$" "$D/.ai_context/tasks/demo/spawnlog" && ok "executor row attributed to the armed milestone" || no "executor row wrong"
+# gate red with executor row present => ladder message, no accusation
+err=$(printf '{"session_id": "tsuite-sl1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
+echo "$err" | grep -q 'no executor spawn' && no "false no-spawn accusation despite executor row" || ok "executor row suppresses the hint"
+echo "$err" | grep -q 'escalate per the /task ladder' && ok "ladder guidance kept when spawn evidence exists" || no "ladder guidance missing"
+# arm M1 instead (no executor row for it) => diagnosis fires
+sed -i.bak -e 's/## M2: current \[in_progress\]/## M2: current [pending]/' -e 's/## M1: groundwork \[pending\]/## M1: groundwork [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
+err=$(printf '{"session_id": "tsuite-sl2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
+echo "$err" | grep -q 'no executor row for M1' && ok "no-spawn diagnosis fires for the armed milestone" || no "no-spawn diagnosis missing"
+echo "$err" | grep -q 'rung 1' && ok "diagnosis redirects to rung 1, not the ladder" || no "redirect missing"
+# the third red carries the note into the human ping
+printf '{"session_id": "tsuite-sl2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+out=$(printf '{"session_id": "tsuite-sl2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "third red still yields with diagnosis active"
+echo "$out" | grep -q 'no executor spawn recorded' && ok "systemMessage carries the no-spawn note" || no "note missing from systemMessage"
+# empty spawnlog (event never fired) => silence, never accusation
+: > "$D/.ai_context/tasks/demo/spawnlog"
+err=$(printf '{"session_id": "tsuite-sl3"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
+echo "$err" | grep -q 'no executor' && no "accusation from an empty spawnlog" || ok "empty spawnlog stays silent (old-CC safety)"
+# missing spawnlog => same silence
+rm -f "$D/.ai_context/tasks/demo/spawnlog"
+err=$(printf '{"session_id": "tsuite-sl4"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
+echo "$err" | grep -q 'no executor' && no "accusation without spawnlog" || ok "missing spawnlog stays silent"
+# size S (in-context execution by design) => no accusation even with rows
+D="$WORK/l12ds"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
+printf '%s\t-\tother\n' "2026-07-22T00:00:00" > "$D/.ai_context/tasks/demo/spawnlog"
+err=$(printf '{"session_id": "tsuite-sl5"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
+echo "$err" | grep -q 'no executor' && no "S-size task accused of not spawning" || ok "S size suppresses the diagnosis"
+# wiring: settings.json routes SubagentStart and denies hand edits
+grep -q '"SubagentStart"' "$REPO/.claude/settings.json" && ok "settings routes SubagentStart" || no "SubagentStart missing from settings"
+grep -q 'spawn-log.sh\\" executor' "$REPO/.claude/settings.json" && ok "executor matcher wired" || no "executor matcher missing"
+grep -q 'Edit(./.ai_context/tasks/\*\*/spawnlog)' "$REPO/.claude/settings.json" && ok "spawnlog Edit-denied" || no "spawnlog not Edit-denied"
+
 echo "=== L1-3 · session-start: injection + warnings"
 D="$WORK/l13"; mkdir -p "$D/.ai_context/tasks/demo"
 printf '# n\n- **Dev:** `<command>`\n' > "$D/CLAUDE.md"

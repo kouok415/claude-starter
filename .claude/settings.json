@@ -25,10 +25,32 @@
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Edit(./.ai_context/tasks/**/gatelog)",
-      "Write(./.ai_context/tasks/**/gatelog)"
+      "Write(./.ai_context/tasks/**/gatelog)",
+      "Edit(./.ai_context/tasks/**/spawnlog)",
+      "Write(./.ai_context/tasks/**/spawnlog)"
     ]
   },
   "hooks": {
+    "SubagentStart": [
+      {
+        "matcher": "executor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/spawn-log.sh\" executor"
+          }
+        ]
+      },
+      {
+        "matcher": "scout|planner|plan-critic|verifier|reframer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/spawn-log.sh\" other"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
