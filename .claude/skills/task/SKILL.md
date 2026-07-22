@@ -21,10 +21,13 @@ deltas, not summaries of what they read.
 ## 0 · Intake
 
 0. **Resume, not restart.** If `.ai_context/tasks/CURRENT` names a task,
-   this is a resume — `spec.md`, `brief.md`, `plan.md`, `lessons.md` are
-   ALREADY in your context (SessionStart injects them; don't re-read unless
-   they changed during this session). Find the `[in_progress]` milestone and
-   re-enter §3. Never re-interview or re-plan. If the user is clearly
+   this is a resume — `spec.md`, `brief.md`, `plan.md` (filtered: full text
+   for the current milestone only), `lessons.md` are ALREADY in your context
+   (SessionStart injects them; don't re-read unless they changed during this
+   session). Find the `[in_progress]` milestone — but `[in_progress]` alone
+   never proves §3.2 ran: on M/L check `spawnlog` (hook-written) for an
+   `executor` row for it. None ⇒ re-enter §3 at step 2 (spawn); else at
+   step 3. Never re-interview or re-plan. If the user is clearly
    asking for a *different* task, ask whether to finish, abandon (run
    `/wrap` — abandoned tasks still get their scoreboard row — then delete
    `CURRENT`), or defer the new one. One active task at a time.
@@ -191,8 +194,12 @@ and the mid-task model-switch protocol: `reference.md` §Profiles.
 
 - Never claim done while a verify is red — the gate blocks it anyway.
 - `plan.md` statuses are the compaction anchor: update them at every
-  transition. SessionStart re-injects brief + plan + lessons after /clear
-  and after compaction — stale statuses poison the re-anchor.
+  transition. SessionStart re-injects brief + lessons + a filtered plan
+  after /clear and after compaction — stale statuses poison the re-anchor.
+- A discovery that constrains a FUTURE milestone: append a dated line into
+  THAT milestone's comment block in plan.md — it resurfaces exactly when
+  the milestone arms. lessons.md is for approach lessons, not forward
+  constraints (it is injected every session; plan comments are lazy).
 - `brief.md` and `lessons.md` are capped at 4 KB (the hook warns): keep
   one line per entry, move narratives to `journal/`.
 - Scoreboard (written by /wrap on completion): profile, size, milestones,
