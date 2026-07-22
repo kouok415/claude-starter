@@ -54,7 +54,7 @@ fi
 
 # --- normalize the three sources into one pipe-delimited stream ------------
 # SB|date|slug|profile|size|milestones|gate_failures|rung|interv|duration|outcome|harness
-# GL|slug|fail_rows|integrity_rows
+# GL|slug|fail_rows|integrity_rows|unarmed_rows|stuck_rows
 # FR|date|harness|area|severity|summary|ref
 normalize() {
   if [ -f "$SB" ]; then
@@ -75,7 +75,8 @@ normalize() {
       slug="$(basename "$(dirname "$gl")")"
       awk -F'\t' -v s="$slug" '
         $3=="FAIL"{fail++} $3=="INTEGRITY"{integ++} $3=="UNARMED"{unarm++}
-        END{ printf "GL|%s|%d|%d|%d\n", s, fail, integ, unarm }' "$gl"
+        $3=="STUCK"{stuck++}
+        END{ printf "GL|%s|%d|%d|%d|%d\n", s, fail, integ, unarm, stuck }' "$gl"
     done
     # Task-dir census for the integrity cross-checks: CURRENT slug, plus
     # per-dir [done]-milestone counts and how many have gate evidence.
@@ -148,7 +149,7 @@ $1=="SB" {
   if (isnum(dur)) { dur_size[size]=dur_size[size]" "dur
                     dv_n[h]++; dur_ver[h","dv_n[h]]=dur }
 }
-$1=="GL" { gl_fail[$2]=$3; gl_integ[$2]=$4; gl_unarm[$2]=$5 }
+$1=="GL" { gl_fail[$2]=$3; gl_integ[$2]=$4; gl_unarm[$2]=$5; gl_stuck[$2]=$6 }
 $1=="CUR" { cur=$2 }
 $1=="TD" { td_done[$2]=$3; td_cov[$2]=$4; ntd++ }
 $1=="FR" {
@@ -166,6 +167,7 @@ END {
     v=(s in slug2ver ? slug2ver[s] : "unknown")
     glf_ver[v]+=gl_fail[s]; gli_ver[v]+=gl_integ[s]
     glf+=gl_fail[s]; gli+=gl_integ[s]; glu+=gl_unarm[s]
+    if (gl_stuck[s]+0 > 0) { gls+=gl_stuck[s]; gls_slugs=gls_slugs (gls_slugs?" ":"") s ":" gl_stuck[s] }
   }
   for (v in ver) ver_seen[v]=1
 
@@ -193,6 +195,10 @@ END {
   nv=sortkeys(ver, vk)
   for (i=1;i<=nv;i++) line=line sprintf(" %s(%d)", vk[i], ver[vk[i]])
   print line
+  # STUCK = the gate yielded a red milestone to the human (v3.9 counted
+  # yields). Printed OUTSIDE the scoreboard-gated sections on purpose: the
+  # handoff happens mid-task, before any wrap writes a scoreboard row.
+  if (gls+0 > 0) print "!! gatelog STUCK yields: " gls " (" gls_slugs ") — the gate handed a red milestone to the human"
 
   if (n>0) {
     print "== cells (harness · profile · size — % only when N>=5)"

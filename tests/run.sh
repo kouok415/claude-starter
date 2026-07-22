@@ -515,6 +515,14 @@ echo "$out" | grep -q 'unknown(1)' && ok "old 10-field row lands in the unknown 
 echo "$out" | grep -q 'unknown · fable-tier · S : n=1 success=0 failed=0 abandoned=1$' && ok "N<5 cell prints counts only (no %)" || no "N<5 cell printed a percentage"
 echo "$out" | grep -q 'INTEGRITY rows: 2' && ok "INTEGRITY rows joined from gatelogs" || no "INTEGRITY join wrong"
 echo "$out" | grep -q 'UNARMED rows: 1' && ok "UNARMED rows surfaced (vacuous gates visible)" || no "UNARMED count missing"
+# STUCK yields surface even mid-flight (no scoreboard row yet) — the handoff
+# happens before any wrap can write one.
+S2="$WORK/l111s"; mkdir -p "$S2/.ai_context/tasks/live"
+printf '2026-07-22T01:00:00\tM6\tFAIL\tfalse\n2026-07-22T01:05:00\tM6\tSTUCK\tyielded to the human after 3 consecutive red blocks\n' > "$S2/.ai_context/tasks/live/gatelog"
+printf '# Plan: x\n## M6: c [in_progress]\n- verify: `false`\n- risk: high\n' > "$S2/.ai_context/tasks/live/plan.md"
+echo live > "$S2/.ai_context/tasks/CURRENT"
+out2=$(bash "$REPO/scripts/harness-report.sh" "$S2")
+echo "$out2" | grep -q 'STUCK yields: 1 (live:1)' && ok "mid-flight STUCK yield surfaces without scoreboard data" || no "mid-flight STUCK invisible"
 echo "$out" | grep -q 'blocker:1 friction:0 papercut:1' && ok "friction severities counted" || no "friction counts wrong"
 csv=$(bash "$REPO/scripts/harness-report.sh" --csv "$D")
 echo "$csv" | head -1 | grep -qxF 'project,harness,n_tasks,n_success,n_failed,n_abandoned,gate_fail_rows,integrity_rows,rung_ge3,interventions_sum,duration_med,friction_total,friction_blockers' && ok "--csv header is the fleet contract" || no "--csv header drifted"
