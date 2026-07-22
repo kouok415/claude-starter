@@ -231,6 +231,56 @@ out=$(CLAUDE_PROJECT_DIR="$D3" bash "$SS" </dev/null 2>&1)
 echo "$out" | grep -q 'days ago' && no "body date shadowed the Last-updated line (anchoring broken)" || ok "freshness anchored to the Last-updated line"
 echo "$out" | grep -q 'plan.md is missing' && ok "dangling CURRENT warned" || no "dangling CURRENT not warned"
 
+echo "=== L1-3b · session-start: filtered plan view"
+D="$WORK/l13d"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# n\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+printf '_Last updated: %s_\n' "$(date +%F)" > "$D/.ai_context/state.md"
+printf 'idx\n' > "$D/.ai_context/INDEX.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
+# Plan: fixture
+<!-- profile: opus-tier ; size: L -->
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+HEADER-NOTE-KEEP
+
+## M1: groundwork [done]
+- verify: `true`
+- risk: low
+
+<!-- DONE-NOTE-HIDE: long retrospective commentary -->
+
+## M2: current [in_progress]
+- verify: `true`
+- risk: high
+
+<!-- CURRENT-NOTE-KEEP: exactly what the executor needs -->
+
+## M3: future [pending]
+- verify: `test -s artifact.md`
+- risk: med
+
+<!-- FUTURE-NOTE-HIDE: design ahead of its time -->
+PEOF
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q '(filtered view' && ok "filtered view self-declares" || no "no filter declaration"
+echo "$out" | grep -q 'HEADER-NOTE-KEEP' && ok "plan header block kept" || no "header block lost"
+echo "$out" | grep -q 'CURRENT-NOTE-KEEP' && ok "armed milestone keeps its full section" || no "armed section truncated"
+echo "$out" | grep -q 'DONE-NOTE-HIDE' && no "done-milestone commentary leaked" || ok "done-milestone commentary filtered"
+echo "$out" | grep -q 'FUTURE-NOTE-HIDE' && no "future-milestone commentary leaked" || ok "future-milestone commentary filtered"
+echo "$out" | grep -q '## M3: future \[pending\]' && ok "all milestone headings survive" || no "heading lost"
+echo "$out" | grep -c 'test -s artifact.md' >/dev/null && ok "non-current verify lines survive (gate contract visible)" || no "verify line lost"
+# oversized armed section still warns
+python3 - "$D/.ai_context/tasks/demo/plan.md" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('<!-- CURRENT-NOTE-KEEP: exactly what the executor needs -->',
+              '<!-- CURRENT-NOTE-KEEP ' + 'x' * 9000 + ' -->')
+open(p, 'w').write(s)
+PY
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'filtered plan view is' && ok "oversized filtered view warns" || no "no size warning on bloated armed section"
+
 echo "=== L1-4 · sync: --update-stock + --adopt"
 if [ ! -f "$REPO/sync-project.sh" ]; then
   skp "update-stock history test (spawned project — template-repo only)"

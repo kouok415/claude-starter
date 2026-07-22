@@ -35,6 +35,27 @@ emit_file() {
   printf '\n'
 }
 
+emit_plan() { # filtered plan view — the re-anchor needs the CURRENT milestone,
+  # not 20 milestones of design commentary (a 40 KB plan.md re-paid on every
+  # compaction was itself a compaction driver, and the armed milestone was
+  # 3.7% of the bytes). Full text only for the [in_progress] section; other
+  # milestones keep heading + verify/risk (the gate's contract, one line each).
+  [ -f "$1" ] || return 0
+  pv="$(awk '
+    BEGIN { inhdr = 1 }
+    /^## / { inhdr = 0; cur = ($0 ~ /\[in_progress\]/); print; next }
+    inhdr  { print; next }
+    cur    { print; next }
+    /^- (verify|risk):/ { print }
+  ' "$1")"
+  printf '=== %s (filtered view: full section only for [in_progress]; other milestones heading+verify/risk. Full file on disk) ===\n' "${1#"$ROOT"/}"
+  printf '%s\n\n' "$pv"
+  pvsize="$(printf '%s' "$pv" | wc -c | tr -d ' ')"
+  if [ "$pvsize" -gt 8192 ]; then
+    printf 'WARNING: even the filtered plan view is %s bytes (cap 8192) — the armed milestone section is bloated; move narrative into the task journal.\n' "$pvsize"
+  fi
+}
+
 emit_file "$CTX/INDEX.md"
 emit_file "$CTX/state.md"
 
@@ -66,7 +87,7 @@ if [ -f "$CTX/tasks/CURRENT" ]; then
   else
     emit_file "$tdir/spec.md"
     emit_file "$tdir/brief.md"
-    emit_file "$tdir/plan.md"
+    emit_plan "$tdir/plan.md"
     emit_file "$tdir/lessons.md"
 
     # Status corruption / resume nudge: [pending] milestones but none
