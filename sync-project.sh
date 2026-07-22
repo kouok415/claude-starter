@@ -84,6 +84,7 @@ copy_if_missing .claude/settings.json
 copy_if_missing .claude/hooks/session-start.sh
 copy_if_missing .claude/hooks/post-edit.sh
 copy_if_missing .claude/hooks/bash-guard.sh
+copy_if_missing .claude/hooks/spawn-log.sh
 copy_if_missing .claude/hooks/lint.sh.example
 copy_if_missing .claude/skills/wrap/SKILL.md
 copy_if_missing .claude/hooks/stop-gate.sh
@@ -130,6 +131,7 @@ stock_update .claude/settings.json
 stock_update .claude/hooks/session-start.sh
 stock_update .claude/hooks/post-edit.sh
 stock_update .claude/hooks/bash-guard.sh
+stock_update .claude/hooks/spawn-log.sh
 stock_update .claude/hooks/stop-gate.sh
 stock_update .claude/skills/wrap/SKILL.md
 stock_update .claude/skills/task/SKILL.md
@@ -209,6 +211,15 @@ if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'bash-guard\.sh' "$TARGET
 fi
 if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'gatelog' "$TARGET/.claude/settings.json"; then
   suggest+=("settings.json does not deny Edit/Write on tasks/*/gatelog (v3.7) — merge the deny entries from the template's .claude/settings.json")
+fi
+
+# v3.9: spawn evidence — SubagentStart wiring + spawnlog write-deny live in
+# settings.json; customized projects merge by hand.
+if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'spawn-log\.sh' "$TARGET/.claude/settings.json"; then
+  suggest+=("settings.json has no SubagentStart/spawn-log wiring (v3.9) — merge the \"SubagentStart\" hooks block from the template's .claude/settings.json")
+fi
+if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'spawnlog' "$TARGET/.claude/settings.json"; then
+  suggest+=("settings.json does not deny Edit/Write on tasks/*/spawnlog (v3.9) — merge the deny entries from the template's .claude/settings.json")
 fi
 
 if [ -f "$TARGET/.claude/hooks/session-start.sh" ] && ! grep -q 'tasks/CURRENT' "$TARGET/.claude/hooks/session-start.sh"; then
