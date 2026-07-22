@@ -1,8 +1,12 @@
 # Migration guide
 
-Nine migrations live here (docs are bilingual elsewhere; this file and the
+Ten migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[-1. claude-starter v3.8 → v3.9](#-1-claude-starter-v38--v39)** — the
+  handoff release: a red gate reaches the human (counted blocks → `STUCK` +
+  `systemMessage`), spawn evidence (`spawnlog` + no-spawn diagnosis),
+  filtered plan injection.
 - **[0. claude-starter v3.7 → v3.8](#0-claude-starter-v37--v38)** — the
   runtime-only secrets release: the `.secrets/` folder convention
   (Read-denied, bash-guard ask, gitignored except placeholder) + pem/id_rsa
@@ -31,6 +35,45 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## -1. claude-starter v3.8 → v3.9
+
+v3.9 exists because of one incident shape: a `/task` orchestrator marked a
+milestone `[in_progress]`, never spawned its executor, and the gate — which
+correctly caught the red verify — blocked once, then let the next stop pass
+through silently. The harness *detected* and did not *hand off*; a human
+found the stall by hand half a day later. Every v3.9 mechanism is one link
+of that chain closed.
+
+### What changed, and why
+
+| v3.8 | v3.9 | Reason |
+|---|---|---|
+| Stop gate blocks a red verify once, then `stop_hook_active` passes the next stop through silently | counted yields: two red blocks per (session, milestone); the **third** consecutive red stop exits 0 with a `STUCK` gatelog row and a `{"systemMessage"}` the human sees in the UI. `PASS` resets the streak; `/wrap --sweep` stays strict (wrap never wraps red); model-fixable blocks (status corruption, forbidden verify) still block every attempt | "a red gate cannot be narrated over" was prose, not mechanism — the pass-through made it false on the second stop. Three failed attempts = the three-strikes rule: stop resampling, hand off *visibly* |
+| `[in_progress]` conflates "armed, executor not yet spawned" with "executor ran, verifying" — indistinguishable after compaction | `spawn-log.sh` (`SubagentStart`, matcher-routed, reads nothing from the payload) appends `ts/milestone/class` rows to `tasks/<slug>/spawnlog` (Edit/Write-denied like gatelog); on red, size-M/L, non-empty spawnlog and no executor row for the armed milestone, the gate redirects to **rung 1** ("spawn the executor") instead of the escalation ladder | the resume path read `[in_progress]` as "step 2 already happened" and skipped the spawn; without spawn evidence the gate's "escalate" advice was actively wrong for never-started milestones |
+| full plan.md re-injected every session start / compaction (40 KB on a real L task; the armed milestone was 3.7% of it) | filtered view: header + every heading + verify/risk lines + the full `[in_progress]` section only (same task: 9.4 KB, armed share 16%); self-declares as filtered; warns past 8 KB | the file meant to survive compaction was feeding compaction; the re-anchor needs the current milestone, not 20 milestones of design commentary |
+| forward constraints discovered mid-task accumulate in lessons.md (injected every session) | SKILL rule: a discovery constraining a FUTURE milestone is appended, dated, into THAT milestone's plan.md comment block — it resurfaces exactly when the milestone arms | lessons.md is a resident cost paid every session; plan comments are lazy-loaded at the right moment |
+
+Old-Claude-Code safety: on CC versions without the `SubagentStart` event the
+spawnlog never materializes, and a gate that sees no spawnlog (or an empty
+one) says nothing about spawning — the diagnosis only arms once intake rows
+(scout/planner) prove the event fires in this environment.
+
+### Upgrade steps for a v3.8 project
+
+```bash
+cd <claude-starter>
+./sync-project.sh --update-stock <path-to-project>
+```
+
+That advances stock `stop-gate.sh` / `session-start.sh` / `spawn-log.sh` /
+`settings.json` and the `/task` skill. Customized settings.json: hand-merge
+the `SubagentStart` hooks block and the two `spawnlog` deny entries.
+Mid-flight `/task`s: the counter starts on the next red stop; spawnlog
+starts recording on the next spawn — earlier milestones simply have no rows,
+which the diagnosis treats as silence, never as an accusation.
 
 ---
 
