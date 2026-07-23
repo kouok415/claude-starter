@@ -14,14 +14,15 @@
 # Counted yields below). Every real run is appended to the task's gatelog so
 # scoreboards read a file, not model memory.
 #
-# Gate-2 integrity (v3.4): any state in which the milestone gate would
-# otherwise be silently OFF — empty/corrupt CURRENT, missing or heading-less
-# plan.md, work mid-flight ([done]+[pending]) with no [in_progress], an
-# [in_progress] milestone with no verify command, task work sitting on
-# main/master — blocks once per session (shared marker) and appends an
-# INTEGRITY row to the gatelog. A quiet gatelog therefore provably means
-# "clean run", never "the gate was dark". All-[pending] (intake pause) and
-# all-[done] (completion wrap-up) stay legitimate no-ops.
+# Gate-2 integrity (v3.4, log-always since v3.10): any state in which the
+# milestone gate would otherwise be silently OFF — empty/corrupt CURRENT,
+# missing or heading-less plan.md, work mid-flight ([done]+[pending]) with
+# no [in_progress], an [in_progress] milestone with no verify command, task
+# work sitting on main/master — appends an INTEGRITY row on EVERY detection
+# and interrupts once per session (the shared marker gates the interrupt
+# only). A quiet gatelog therefore provably means "clean run", never "the
+# gate was dark". All-[pending] (intake pause) and all-[done] (completion
+# wrap-up) stay legitimate no-ops.
 #
 # Forbidden verify ops: verify commands execute unattended at every turn
 # end, so catastrophic operations (sudo, git push, rm -rf on an absolute
@@ -49,7 +50,8 @@
 #
 # Counted yields (v3.9): a red verify blocks at most TWICE per milestone per
 # session; the third consecutive red stop YIELDS — exit 0 with a STUCK gatelog
-# row and a {"systemMessage"} to the human. Rationale: the 2026-07-22 v_trader
+# row and a {"systemMessage"} to the human. ONE row per (session, milestone)
+# however many stops follow (v3.10) — a PASS re-arms both counter and row. Rationale: the 2026-07-22 v_trader
 # incident — the gate caught a skipped-executor milestone, blocked once, then
 # the old unconditional stop_hook_active pass-through let the red turn end
 # silently; the human found it by hand half a day later. Three failed attempts
@@ -121,12 +123,14 @@ fi
 slug="$(tr -d '[:space:]' < "$TASKS/CURRENT")"
 
 # --- Gate-2 integrity: no silent disarm --------------------------------------
-# One integrity interruption per session (shared marker); every detection
-# leaves an INTEGRITY gatelog row, so dark-gate states are always on record.
+# Log-always, interrupt-once (F9): EVERY detection appends an INTEGRITY row
+# — the session marker gates only the stderr interrupt — so a second dark
+# state in the same session still reaches the audit trail and a quiet
+# gatelog provably means "clean run", never "the gate went dark quietly".
 imarker="${TMPDIR:-/tmp}/claude-gate-integrity-${sid_s}"
 
 integrity_stop() { # $1 = milestone id or '?', $2 = reason
-  if [ ! -f "$imarker" ] && [ -n "$slug" ] && [ -d "$TASKS/$slug" ]; then
+  if [ -n "$slug" ] && [ -d "$TASKS/$slug" ]; then
     printf '%s\t%s\tINTEGRITY\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$1" "$2" \
       >> "$TASKS/$slug/gatelog" 2>/dev/null || true
   fi
@@ -180,15 +184,27 @@ red_count() { # $1 = key -> increments and prints the new count
   printf '%s' "$n"
 }
 
-red_reset() { # $1 = key
-  rm -f "$(red_file "$1")" 2>/dev/null || true
+stuck_file() { # $1 = key -> prints the once-per-(session,milestone) marker path
+  printf '%s/claude-gate-stuck-%s-%s' "${TMPDIR:-/tmp}" "$sid_s" \
+    "$(printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '_')"
+}
+
+red_reset() { # $1 = key — a PASS also re-arms the STUCK row for a fresh streak
+  rm -f "$(red_file "$1")" "$(stuck_file "$1")" 2>/dev/null || true
 }
 
 # NOTE: $3 lands inside a JSON string — pass fixed ASCII without quotes only.
+# One STUCK row per (session, milestone) — the yield is one handoff event,
+# however many stops follow it (F10); the systemMessage keeps repeating so
+# the human signal survives, but the scoreboard count stays truthful.
 yield_stuck() { # $1 = milestone id, $2 = consecutive count, $3 = extra note ('' ok)
-  printf '%s\t%s\tSTUCK\tyielded to the human after %s consecutive red blocks%s\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S')" "$1" "$2" "${3:+ — $3}" \
-    >> "$gatelog" 2>/dev/null || true
+  smk="$(stuck_file "${slug}-$1")"
+  if [ ! -f "$smk" ]; then
+    : > "$smk" 2>/dev/null || true
+    printf '%s\t%s\tSTUCK\tyielded to the human after %s consecutive red blocks%s\n' \
+      "$(date '+%Y-%m-%dT%H:%M:%S')" "$1" "$2" "${3:+ — $3}" \
+      >> "$gatelog" 2>/dev/null || true
+  fi
   slug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
   ms_j="$(printf '%s' "$1" | tr -cd 'A-Za-z0-9._-')"
   printf '{"systemMessage":"claude-starter gate: task %s / %s is RED — blocked %s stops in a row without a green verify, yielding now.%s A human needs to look: .ai_context/tasks/%s/gatelog"}\n' \

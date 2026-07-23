@@ -25,7 +25,7 @@ skp()  { SKIP=$((SKIP+1)); echo "SKIP: $*"; }
 ck()   { local want="$1" got="$2"; shift 2; if [ "$want" = "$got" ]; then ok "$*"; else no "$* (want rc=$want got rc=$got)"; fi; }
 
 WORK="$(mktemp -d)"
-cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
+cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-stuck-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
 trap cleanup EXIT
 
 # Spec-faithful plan fixture: format header INCLUDED, one in_progress.
@@ -101,6 +101,13 @@ echo "$out" | grep -q 'demo / M2 is RED' && ok "systemMessage names task and mil
 grep -q "	M2	STUCK	" "$D/.ai_context/tasks/demo/gatelog" && ok "gatelog STUCK row written" || no "STUCK row missing"
 n_fail=$(grep -c "	M2	FAIL" "$D/.ai_context/tasks/demo/gatelog")
 [ "$n_fail" = 3 ] && ok "each attempt logged a FAIL row (3)" || no "FAIL rows: want 3 got $n_fail"
+# F10: the yield is ONE handoff event — stop 4 keeps yielding (and keeps
+# the human signal) but appends no second STUCK row.
+out=$(printf '{"stop_hook_active": true, "session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "fourth red stop still yields"
+echo "$out" | grep -q '"systemMessage"' && ok "repeat yield keeps pinging the human" || no "repeat yield lost the systemMessage"
+n_stuck=$(grep -c "	M2	STUCK	" "$D/.ai_context/tasks/demo/gatelog")
+[ "$n_stuck" = 1 ] && ok "exactly one STUCK row after four red stops (no over-count)" || no "STUCK rows: want 1 got $n_stuck"
 # PASS resets the streak: fix the verify, pass once, break it again — blocks anew
 write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
 printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
@@ -108,6 +115,14 @@ ck 0 $? "green verify passes after yield"
 write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
 printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 2 $? "PASS reset the counter — new red streak blocks again"
+# ...and re-armed the STUCK row: a post-PASS streak that yields again is a
+# genuinely new handoff, so it logs a second row.
+printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "second streak: red block 2"
+printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "second streak: third stop yields again"
+n_stuck=$(grep -c "	M2	STUCK	" "$D/.ai_context/tasks/demo/gatelog")
+[ "$n_stuck" = 2 ] && ok "a PASS re-armed the STUCK row (new handoff logged)" || no "post-PASS re-yield rows: want 2 got $n_stuck"
 # a fresh session also starts a fresh streak
 printf '{"session_id": "tsuite-red2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 2 $? "new session counts from zero"
@@ -133,6 +148,10 @@ out=$(printf '{"session_id": "tsuite-swp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GAT
 ck 0 $rc "third red sweep yields"
 echo "$out" | grep -q '"systemMessage"' && ok "sweep yield pings the human" || no "sweep yield silent"
 grep -q "	sweep	STUCK	" "$D/.ai_context/tasks/demo/gatelog" && ok "sweep STUCK row" || no "sweep STUCK row missing"
+printf '{"session_id": "tsuite-swp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "fourth red sweep still yields"
+n_sw=$(grep -c "	sweep	STUCK	" "$D/.ai_context/tasks/demo/gatelog")
+[ "$n_sw" = 1 ] && ok "one sweep STUCK row after repeat stops (F10)" || no "sweep STUCK rows: want 1 got $n_sw"
 CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
 ck 2 $? "explicit /wrap --sweep never yields (still strict after counted yields)"
 
@@ -513,6 +532,19 @@ ck 2 $? "near-miss spelling git<double-space>push blocks"
 write_plan "$D/.ai_context/tasks/demo/plan.md" 'mkdir -p scratch-dir && rm -rf scratch-dir'
 printf '{"session_id": "tsuite-f7"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 0 $? "relative rm -rf verify passes (no matcher false positive)"
+
+# F9: log-always / interrupt-once — a second distinct dark state in the
+# SAME session still reaches the audit trail (one interrupt, two rows).
+D="$WORK/l110f9"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+printf '{"session_id": "tsuite-f9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "dark state 1 (missing plan) interrupts"
+printf 'not a plan\n' > "$D/.ai_context/tasks/demo/plan.md"
+printf '{"session_id": "tsuite-f9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "dark state 2 (heading-less plan) yields — interrupt already spent"
+n_int=$(grep -c "	INTEGRITY	" "$D/.ai_context/tasks/demo/gatelog")
+[ "$n_int" = 2 ] && ok "both dark states left INTEGRITY rows (log-always)" || no "INTEGRITY rows: want 2 got $n_int — second dark state went unrecorded"
 
 D="$WORK/l110b"; mkdir -p "$D/.ai_context/tasks/demo"
 printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
