@@ -2,6 +2,10 @@
 
 **English** · [繁體中文](./TUTORIAL.zh-TW.md)
 
+> Documents claude-starter **v3.10** (2026-07-23). If the version here
+> trails the newest section in [MIGRATION.md](./MIGRATION.md), mechanisms
+> have moved since this walkthrough was stamped — MIGRATION is the authority.
+
 The hands-on walkthrough: from zero to a gated long-horizon run. For the
 architecture rationale, read [README.md](./README.md); for upgrading older
 projects, [MIGRATION.md](./MIGRATION.md).

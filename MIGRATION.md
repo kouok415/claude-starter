@@ -60,8 +60,10 @@ the guardrails true to their own headers.
 | five silent failure modes: no `timeout` binary = verify bound silently void; present-but-non-executable `lint.sh` = lint loop silently dark; `spawnlog` rewritable at commit time while `gatelog` is guarded; `check-state-size` died (errexit) before its own worktree fallback and mislabeled the fallback as staged; the setup-sentinel pattern lived as two hand-synced copies with no equality test | each becomes visible or correct: one-line warnings for missing `timeout` and non-exec `lint.sh` (warning layer, never blocking); `spawnlog` joins the append-only pre-commit guard; `check-state-size` measures staged via `git cat-file -s`, falls back to a labeled worktree measurement; the sentinel lives once in `guard-patterns.sh` with per-token both-layer fixtures | a guard that can go dark without a signal is the exact failure class the stop-gate's integrity layer exists to prevent — the auxiliary guards now meet their own bar |
 | only `--update-stock` appended the `synced-to:` stamp, so a default sync that ADDED new-version mechanism files kept the old vintage; GitHub-mode spawns stamped the LOCAL spawner checkout's rev while the clone content came from the server-side template head | any sync whose added+updated count is non-zero stamps (no-op syncs never stamp); GitHub-mode spawns resolve the template head via `gh api` — unresolvable falls back to the local rev explicitly labeled as the spawner-checkout ref | the per-version fleet cells the release gate reads (ADR-007/009) were mixing vintages; a stamp that misstates the mechanism vintage sends stale-spawner debugging to the wrong ref |
 
-*(Sections land per implementation phase; this table is complete at the
-v3.10 tag.)*
+Docs got a freshness floor in the same release (the audit's F24): an L1
+smoke requires the newest MIGRATION version token to appear in
+`README.zh-TW.md`, and both TUTORIALs carry a dated version banner — doc
+lag is now visible instead of compounding silently, one release per release.
 
 ---
 

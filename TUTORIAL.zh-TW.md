@@ -2,6 +2,10 @@
 
 [English](./TUTORIAL.md) · **繁體中文**
 
+> 本教程對應 claude-starter **v3.10**(2026-07-23)。若此處版本落後
+> [MIGRATION.md](./MIGRATION.md) 最新一節,表示機制已經前進 ——
+> 以 MIGRATION 為準。
+
 實戰走一遍:從零到一次帶閘門的長程 run。架構原理見
 [README.zh-TW.md](./README.zh-TW.md);舊專案升級見
 [MIGRATION.md](./MIGRATION.md)。

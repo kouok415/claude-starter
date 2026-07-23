@@ -879,6 +879,21 @@ D3="$WORK/l117c"; mkdir -p "$D3/.ai_context"
 out4=$(bash "$REPO/scripts/harness-report.sh" "$D3")
 echo "$out4" | grep -q 'no harness data yet' && ok "truly-empty project still gets the no-data line" || no "no-data early exit regressed"
 
+echo "=== L1-18 · doc freshness floor (F24)"
+if [ -f "$REPO/MIGRATION.md" ] && [ -f "$REPO/README.zh-TW.md" ]; then
+  newest="$(grep -m1 '^## .*claude-starter v.* → v' "$REPO/MIGRATION.md" | grep -o 'v[0-9][0-9.]*' | tail -1)"
+  if [ -n "$newest" ]; then
+    grep -qF "$newest" "$REPO/README.zh-TW.md" && ok "README.zh-TW mentions the newest release ($newest)" || no "README.zh-TW.md lags MIGRATION: no $newest token (doc parity, F24)"
+  else
+    no "could not extract the newest version token from MIGRATION.md"
+  fi
+  for t in TUTORIAL.md TUTORIAL.zh-TW.md; do
+    head -8 "$REPO/$t" | grep -qE 'v[0-9]+\.[0-9]+.*20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]' && ok "$t carries a dated version banner" || no "$t missing its dated version banner (F24)"
+  done
+else
+  skp "doc freshness smoke (spawned project — template-repo only)"
+fi
+
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"
 printf 'Last updated: 2026-07-08\nsmall\n' > "$D/.ai_context/state.md"
