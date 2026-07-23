@@ -110,7 +110,7 @@ spec; the mechanism is the guarantee.
 | "Externalize bulk" (S2) | `check-context-bulk.sh` pre-commit: any staged `.ai_context` file over 100 KB blocks — dumps are referenced, not pasted |
 | "Scoreboard numbers must be real" | the Stop gate writes a `gatelog` per real run; `/wrap` aggregates it into `scoreboard.csv` |
 | "Append-only files are never rewritten" (decisions, journal, scoreboard, friction, gatelog) | `check-append-only.sh` pre-commit: staged edits or deletions of existing lines are rejected; corrections happen by appending. `lessons.md`/`brief.md` stay rewritable — `/wrap` distills them by design |
-| "gatelog and spawnlog are hook-written only" | `settings.json` denies Edit/Write on `tasks/*/gatelog` and `tasks/*/spawnlog`; the append-only pre-commit backstops both (v3.10 — the two evidence trails get equal protection at both layers; raw Bash appends remain possible — tripwire, not sandbox) |
+| "gatelog and spawnlog are hook-written only" | `settings.json` denies `Edit(...)` on `tasks/*/gatelog` and `tasks/*/spawnlog` — Edit rules cover every file-editing tool, Write included (a separate `Write(...)` rule is a dead rule Claude Code warns about; v3.11 removed the pair); the append-only pre-commit backstops both (raw Bash appends remain possible — tripwire, not sandbox) |
 | "Sessions that die without /wrap lose their state" | session-start warns when commits are newer than `state.md` |
 
 ---

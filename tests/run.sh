@@ -794,7 +794,8 @@ else
   skp "sync ships guard-patterns.sh (spawned project — template-repo only)"
 fi
 grep -q '"PreToolUse"' "$REPO/.claude/settings.json" && grep -q 'bash-guard\.sh' "$REPO/.claude/settings.json" && ok "bash-guard wired in settings.json" || no "bash-guard wiring missing"
-grep -qF 'Edit(./.ai_context/tasks/**/gatelog)' "$REPO/.claude/settings.json" && grep -qF 'Write(./.ai_context/tasks/**/gatelog)' "$REPO/.claude/settings.json" && ok "gatelog write-deny present (hook-written only)" || no "gatelog deny entries missing"
+grep -qF 'Edit(./.ai_context/tasks/**/gatelog)' "$REPO/.claude/settings.json" && ok "gatelog Edit-deny present (covers all file-editing tools)" || no "gatelog deny entry missing"
+grep -qF 'Write(./.ai_context/tasks/**/' "$REPO/.claude/settings.json" && no "dead Write() deny rule present — CC matches only Edit(path) for file edits and warns every session (F25)" || ok "no dead Write() deny rules (F25)"
 grep -qF '"Bash(git push --force:*)"' "$REPO/.claude/settings.json" && ok "declarative force-push deny present" || no "force-push deny entry missing"
 grep -qF '"ask"' "$REPO/.claude/settings.json" && grep -qF '"Bash(git push:*)"' "$REPO/.claude/settings.json" && ok "ask tier present (push/reset/clean/sudo/rm)" || no "ask tier missing"
 

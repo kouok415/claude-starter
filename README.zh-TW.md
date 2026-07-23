@@ -103,7 +103,7 @@ v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才
 | 「大塊資料外部化」(S2) | `check-context-bulk.sh` pre-commit:任何 staged 的 `.ai_context` 檔案超過 100 KB 即擋下 —— dump 用引用,不用貼上 |
 | 「記分板數字必須是真的」 | Stop gate 每次真實執行寫入 `gatelog`;`/wrap` 彙總成 `scoreboard.csv` |
 | 「append-only 檔案永不改寫」(decisions、journal、scoreboard、friction、gatelog) | `check-append-only.sh` pre-commit:staged 變更若修改或刪除既有行即拒絕;更正靠追加。`lessons.md`/`brief.md` 保持可改寫 —— `/wrap` 蒸餾它們是設計行為 |
-| 「gatelog 與 spawnlog 只由 hook 寫入」 | `settings.json` 對 `tasks/*/gatelog` 與 `tasks/*/spawnlog` 都禁用 Edit/Write;append-only pre-commit 兩者都做後盾(v3.10 —— 兩條證據軌跡在兩層都獲得同等保護;raw Bash 追加仍可能 —— 絆索,不是沙箱) |
+| 「gatelog 與 spawnlog 只由 hook 寫入」 | `settings.json` 對 `tasks/*/gatelog` 與 `tasks/*/spawnlog` 禁用 `Edit(...)` —— Edit 規則涵蓋所有檔案編輯工具(含 Write;獨立的 `Write(...)` 規則是 Claude Code 會警告的死規則,v3.11 移除);append-only pre-commit 做後盾(raw Bash 追加仍可能 —— 絆索,不是沙箱) |
 | 「沒跑 /wrap 就死掉的 session」 | session-start 偵測 commit 比 `state.md` 新時發出警告 |
 
 ---
