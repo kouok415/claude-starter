@@ -88,6 +88,7 @@ copy_if_missing .claude/hooks/guard-patterns.sh
 copy_if_missing .claude/hooks/spawn-log.sh
 copy_if_missing .claude/hooks/lint.sh.example
 copy_if_missing .claude/skills/wrap/SKILL.md
+copy_if_missing .claude/skills/wrap/reference.md
 copy_if_missing .claude/hooks/stop-gate.sh
 copy_if_missing .claude/skills/task/SKILL.md
 copy_if_missing .claude/skills/task/reference.md
@@ -136,6 +137,7 @@ stock_update .claude/hooks/guard-patterns.sh
 stock_update .claude/hooks/spawn-log.sh
 stock_update .claude/hooks/stop-gate.sh
 stock_update .claude/skills/wrap/SKILL.md
+stock_update .claude/skills/wrap/reference.md
 stock_update .claude/skills/task/SKILL.md
 stock_update .claude/skills/task/reference.md
 stock_update .claude/skills/setup/SKILL.md

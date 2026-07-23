@@ -452,8 +452,10 @@ sz=$(wc -c < "$REPO/.ai_context/INDEX.md")
 sz=$(wc -c < "$REPO/.claude/skills/task/SKILL.md")
 [ "$sz" -le 11264 ] && ok "task SKILL.md within 11 KB ($sz B)" || no "task SKILL.md bloated ($sz B) — move detail to reference.md"
 sz=$(wc -c < "$REPO/.claude/skills/wrap/SKILL.md")
-[ "$sz" -le 6144 ] && ok "wrap SKILL.md within 6 KB ($sz B)" || no "wrap SKILL.md bloated ($sz B)"
-grep -qF 'duration_min,outcome,harness' "$REPO/.claude/skills/wrap/SKILL.md" && ok "wrap scoreboard header carries the harness column" || no "wrap scoreboard header missing the harness column"
+[ "$sz" -le 2560 ] && ok "wrap SKILL.md within 2.5 KB ($sz B — task machinery lives in reference.md)" || no "wrap SKILL.md bloated ($sz B > 2560)"
+[ -f "$REPO/.claude/skills/wrap/reference.md" ] && ok "wrap reference.md exists (on-demand task close-out)" || no "wrap reference.md missing"
+grep -q 'reference.md' "$REPO/.claude/skills/wrap/SKILL.md" && ok "wrap body points at the reference" || no "wrap body lost its reference pointer"
+grep -qF 'duration_min,outcome,harness' "$REPO/.claude/skills/wrap/reference.md" && ok "wrap reference carries the scoreboard header (harness column)" || no "wrap reference missing the scoreboard header"
 grep -qF 'Read(./**/.env)' "$REPO/.claude/settings.json" && ok "nested .env read-deny present" || no "nested .env deny missing"
 grep -qxF '**/.env' "$REPO/.gitignore" && ok "nested .env gitignored" || no "nested .env gitignore missing"
 grep -q 'gate-cache' "$REPO/.gitignore" && ok "gate-cache gitignored (fingerprint-safe)" || no "gate-cache ignore missing"
@@ -645,8 +647,8 @@ ck 0 $? "no data yields a clean exit 0"
 B="$WORK/l111b"; mkdir -p "$B/.ai_context"; echo "garbage,x" > "$B/.ai_context/scoreboard.csv"
 bash "$REPO/scripts/harness-report.sh" "$B" >/dev/null 2>&1
 ck 2 $? "malformed scoreboard header exits 2"
-grep -qF 'date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness' "$REPO/.claude/skills/wrap/SKILL.md" && grep -qF 'col["harness"]' "$REPO/scripts/harness-report.sh" && ok "wrap header and report parser agree on the schema" || no "wrap and report schema drifted apart"
-grep -qF 'date,harness,area,severity,summary,ref' "$REPO/.claude/skills/wrap/SKILL.md" && ok "wrap prose carries the friction schema" || no "friction schema missing from wrap"
+grep -qF 'date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness' "$REPO/.claude/skills/wrap/reference.md" && grep -qF 'col["harness"]' "$REPO/scripts/harness-report.sh" && ok "wrap reference and report parser agree on the schema" || no "wrap and report schema drifted apart"
+grep -qF 'date,harness,area,severity,summary,ref' "$REPO/.claude/skills/wrap/reference.md" && ok "wrap reference carries the friction schema" || no "friction schema missing from wrap reference"
 if [ -f "$REPO/sync-project.sh" ]; then
   grep -q 'stock_update scripts/harness-report.sh' "$REPO/sync-project.sh" && ok "sync ships harness-report.sh" || no "sync does not ship harness-report.sh"
 else
@@ -963,7 +965,8 @@ else
   miss=""
   for f in .claude/settings.json .claude/hooks/session-start.sh .claude/hooks/stop-gate.sh \
            .claude/hooks/post-edit.sh .claude/hooks/bash-guard.sh .claude/hooks/guard-patterns.sh \
-           .claude/skills/wrap/SKILL.md .claude/skills/task/SKILL.md \
+           .claude/skills/wrap/SKILL.md .claude/skills/wrap/reference.md \
+           .claude/skills/task/SKILL.md \
            .claude/skills/task/reference.md .claude/skills/setup/SKILL.md \
            .claude/agents/scout.md .claude/agents/planner.md .claude/agents/plan-critic.md \
            .claude/agents/executor.md .claude/agents/verifier.md .claude/agents/reframer.md \

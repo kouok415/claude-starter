@@ -65,14 +65,10 @@ deltas, not summaries of what they read.
 ## 0.5 · Scout → brief.md (M and L only)
 
 Spawn `scout` with the goal + repo areas the task touches. It surveys ONCE
-and writes `tasks/<slug>/brief.md` (≤150 lines / 4 KB): file map, key
-interfaces, commands, conventions, gotchas. Downstream rules:
-
-- planners / executors / verifiers read brief.md FIRST, then open only
-  files they will modify or must quote — never re-survey the repo;
-- whoever finds the map wrong appends a dated one-line correction to it —
-  discovery accumulates across contexts instead of being re-bought;
-- the brief is navigation, not truth: gate and verifiers check reality.
+and writes `tasks/<slug>/brief.md`: file map, key interfaces, commands,
+conventions, gotchas. Downstream contexts navigate by it instead of
+re-surveying — that discipline lives in their own agent bodies; brief
+corrections are appended per INDEX's writing protocol.
 
 ## 1 · Spec — acceptance criteria must be executable
 
@@ -133,8 +129,8 @@ For each milestone in order:
 
 1. Mark it `[in_progress]` in `plan.md` (exactly one at a time).
 2. **S:** execute it yourself; run its verify; continue at 4.
-   **M/L:** spawn `executor` with the task paths + the milestone text +
-   a reminder to read brief.md first, then spec + lessons.
+   **M/L:** spawn `executor` with the task paths + the milestone text
+   (its own body carries the reading order).
 3. **Verification depth = the milestone's `risk:`** —
    - `low`: no model verifier. The mechanical gate re-runs the verify at
      turn-end; that strength was policed at plan time.

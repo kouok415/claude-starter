@@ -5,83 +5,44 @@ description: End-of-session memory writeback for .ai_context — update state.md
 
 # Session wrap — write project memory back
 
-Work through these steps against `.ai_context/` (read each file's HTML-comment
-preamble before writing to it):
+Steps, against `.ai_context/` (INDEX.md §Writing protocol governs each
+file):
 
-1. **`state.md`** — rewrite so it reflects *now* only:
-   - Set `Last updated:` to today's date.
+1. **`state.md`** — rewrite to reflect *now* only; `Last updated:` = today:
    - **Now**: what is actively in progress after this session.
-   - **Next steps**: the first 1–3 concrete actions the next session should
-     take. This is the resumability contract — any session can die; the next
-     one starts here.
+   - **Next steps**: the first 1–3 concrete actions for the next session —
+     the resumability contract: any session can die; the next starts here.
    - **Open questions**: decisions blocked on the human.
-   - Remove sections that are no longer true. If a resolved section is worth
-     preserving, move it to `journal/YYYY-MM-DD-<topic>.md` first.
-   - Keep the file under 5 KB (S7).
+   - Remove sections no longer true; archive resolved ones worth keeping
+     to `journal/YYYY-MM-DD-<topic>.md`. Keep under 5 KB (S7).
 
-2. **`decisions.md`** — if this session made a decision that shapes the
-   project (dependency choice, architecture, an approach rejected after real
-   investigation), append an ADR using the template at the top of the file.
-   Number it last + 1. Skip if nothing was decided — don't manufacture ADRs.
+2. **`decisions.md`** — if this session decided something that shapes the
+   project (dependency, architecture, an approach rejected after real
+   investigation), append an ADR per the template at the top of the file,
+   numbered last + 1. Nothing decided → no ADR; don't manufacture.
 
-3. **`journal/`** — if this session contained a notable event (debugging
-   hunt, incident, analysis with findings, debate), write ONE dated entry
-   `YYYY-MM-DD-<topic>.md` whose first line is a one-sentence summary.
-   Skip routine sessions.
+3. **`journal/`** — notable event this session (debugging hunt, incident,
+   analysis with findings, debate)? ONE dated entry `YYYY-MM-DD-<topic>.md`,
+   first line a one-sentence summary. Skip routine sessions.
 
-4. **Active `/task`** — if `.ai_context/tasks/CURRENT` exists:
-   - Task finished: FIRST run `bash .claude/hooks/stop-gate.sh --sweep` —
-     it closes zero-stop gaps mechanically (verifies the final `[done]`
-     milestone if unproven, records `UNARMED` rows for earlier gates that
-     never fired); a FAIL means the task is NOT finished. Then write its
-     journal entry with the scoreboard — profile,
-     size, milestones total, gate_failures = **count of `FAIL` rows in
-     `tasks/<slug>/gatelog`** (never from memory; note any `INTEGRITY` or
-     `UNARMED` rows separately in the journal — INTEGRITY is a caught
-     dark-gate state, UNARMED a gate that never fired),
-     highest escalation rung used, human interventions, duration_min =
-     minutes between the first and last commit on `task/<slug>` (git
-     timestamps, not memory), and harness = the ref after
-     `claude-starter@` on the LAST line of `.claude/.starter-version`
-     (`unknown` if that file is missing) — and append one row to
-     `.ai_context/scoreboard.csv` (create it with header
-     `date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness`
-     if absent). `outcome` is exactly one of `success` | `failed` |
-     `abandoned`. After the row lands, run `bash scripts/harness-report.sh`
-     and include its summary in your wrap reply. Then delete `CURRENT`
-     (keep the task directory).
-   - Task abandoned (dropped or superseded): run the `--sweep` here too
-     (it records `UNARMED` evidence for whatever was claimed done), then
-     the same journal entry + scoreboard row with `outcome=abandoned` —
-     failed and dropped runs must reach the dataset too, or the A/B data
-     is survivor-biased. Then delete `CURRENT` (keep the directory).
-   - Task unfinished: leave `CURRENT` in place; make sure `state.md`'s
-     Now/Next points at the `[in_progress]` milestone so the next session
-     resumes cold from the checkpoint. If `lessons.md` or `brief.md`
-     exceeds 4 KB, distill now: one line per entry, narratives to
-     `journal/` — the next session inherits these files whole.
+4. **Active `/task`** — if `.ai_context/tasks/CURRENT` exists, STOP: read
+   `reference.md` (this directory) **§Task close-out** and follow it — the
+   mandatory `--sweep`, scoreboard row, and finished/abandoned/unfinished
+   procedures live there. Never improvise them from memory — skipping the
+   reference loses the run's evidence.
 
-5. **Harness friction** — did a starter mechanism itself (hooks, `/task`
-   machinery, `/setup`, `/wrap`, sync) malfunction, block wrongly, or add
-   friction this session? Append one row per real incident to
-   `.ai_context/friction.csv` (create it with header
-   `date,harness,area,severity,summary,ref` if absent): area is one of
-   `setup|task|wrap|hooks|sync|skills|other`, severity one of
-   `blocker|friction|papercut`, summary a single comma-free clause, ref a
-   journal file / `tasks/<slug>/gatelog` / `-`, harness the same stamp ref
-   as in step 4. Skip the step entirely when nothing happened; never
-   duplicate INTEGRITY events (the gatelog records those; the report
-   joins them).
+5. **Harness friction** — did a starter mechanism (hooks, `/task`
+   machinery, `/setup`, `/wrap`, sync) malfunction or block wrongly this
+   session? One row per real incident into `.ai_context/friction.csv` —
+   schema + enums: `reference.md` **§Friction rows**. Skip when clean.
 
-6. **CLAUDE.md drift** — did this session change commands, stack, or how
-   the project is verified? Update CLAUDE.md's Commands/Verify to match
-   reality before they mislead the next session.
+6. **CLAUDE.md drift** — commands, stack, or verify changed this session?
+   Update Commands/Verify before they mislead the next session.
 
-7. Apply the writing rules as you go: S1 (only what the next session needs),
-   S3 (date every aging claim), S4 (no fluff — the why, not "went well"),
-   H1 (no secrets), H2 (don't duplicate what code/git already records).
+7. Writing rules throughout: S1 (only what the next session needs), S3
+   (date aging claims), S4 (no fluff), H1 (no secrets), H2 (don't
+   duplicate code/git).
 
-8. If the project uses git, offer to commit the memory changes as
-   `chore(context): wrap <topic>`.
+8. Using git? Offer to commit as `chore(context): wrap <topic>`.
 
-Finish by replying with a one-line summary of what was persisted and where.
+Finish with a one-line summary of what was persisted and where.
