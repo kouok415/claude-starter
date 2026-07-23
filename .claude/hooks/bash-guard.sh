@@ -27,6 +27,18 @@
 set -uo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-.}"
+
+# Shared destructive-op matchers — one source with stop-gate.sh (F8/F12).
+# Fallback: the v3.7–v3.9 built-ins, so a partially-synced project
+# degrades to the old tripwire, never to none.
+_GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
+# shellcheck source=guard-patterns.sh
+[ -f "$_GP" ] && . "$_GP"
+: "${GUARD_SUDO:=(^|[[:space:];&|(])sudo([[:space:]]|\$)}"
+: "${GUARD_FORCE_PUSH:=git[[:space:]]+push[^|;&]*[[:space:]](--force(-with-lease[^[:space:]]*)?|-f)([[:space:]]|\$)}"
+: "${GUARD_RM_RF_ROOT:=(^|[[:space:];&|(])rm[[:space:]]+-(rf|fr)[[:alnum:]]*[[:space:]]+/([[:space:]]|\*|\$)}"
+: "${GUARD_RM_RF_ABS:=(^|[[:space:];&|(])rm[[:space:]]+-(rf|fr)[[:alnum:]]*[[:space:]]+/[^[:space:]]}"
+
 payload="$(cat 2>/dev/null || true)"
 
 # Extract tool_input.command; fall back to matching the raw payload (a
@@ -65,21 +77,24 @@ ask() { # $1 = reason shown in the confirmation prompt (static text only)
 }
 
 # --- deny tier ---------------------------------------------------------------
-if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|(])sudo([[:space:]]|$)'; then
+if printf '%s' "$cmd" | grep -Eq "$GUARD_SUDO"; then
   deny 'sudo' 'Privileged commands need the human: ask them to run it (e.g. via `! sudo ...`).'
 fi
 
-# Force flag scoped to the same pipeline segment as `git push`.
-if printf '%s' "$cmd" | grep -Eq 'git[[:space:]]+push[^|;&]*[[:space:]](--force(-with-lease[^[:space:]]*)?|-f)([[:space:]]|$)'; then
+# Any force-push spelling: --force / --force-with-lease / -f flags scoped to
+# the push's pipeline segment, plus the flagless `+refspec` form (F12).
+if printf '%s' "$cmd" | grep -Eq "$GUARD_FORCE_PUSH"; then
   deny 'force-push' 'Force-pushes require explicit human approval (global git rules): the human runs it, or temporarily allows it.'
 fi
 
-if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|(])rm[[:space:]]+-(rf|fr)[[:alnum:]]*[[:space:]]+/([[:space:]]|\*|$)'; then
+# Recursive+force rm on the root in any flag arrangement, including
+# flag-separated roots like `rm -rf --no-preserve-root /` (F12).
+if printf '%s' "$cmd" | grep -Eq "$GUARD_RM_RF_ROOT"; then
   deny 'rm -rf on /' 'Refusing to delete from the filesystem root.'
 fi
 
 # --- ask tier ----------------------------------------------------------------
-if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|(])rm[[:space:]]+-(rf|fr)[[:alnum:]]*[[:space:]]+/[^[:space:]]'; then
+if printf '%s' "$cmd" | grep -Eq "$GUARD_RM_RF_ABS"; then
   ask 'rm -rf on an absolute path — confirm the target is disposable'
 fi
 

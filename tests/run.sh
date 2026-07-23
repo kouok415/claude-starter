@@ -481,6 +481,38 @@ echo "$err" | grep -q 'NOT run' && ok "refusal message explains the denylist" ||
 printf '{"session_id": "tsuite-i7"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 2 $? "forbidden verify keeps blocking (no once-per-session yield)"
 grep -q 'forbidden verify' "$D/.ai_context/tasks/demo/gatelog" && ok "forbidden verify logged (INTEGRITY row)" || no "forbidden-verify row missing"
+# Denylist regression net (F8/F21): every entry plus the near-miss spellings
+# that bypassed the v3.9 substring matcher. The pwned probe proves refusal
+# happened BEFORE execution; the rm target is a nonexistent path so a missed
+# match stays harmless while still leaving the probe file as evidence.
+write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-sudo && sudo true'
+printf '{"session_id": "tsuite-f1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "forbidden verify (sudo) blocks"
+[ ! -f "$D/pwned-sudo" ] && ok "sudo verify was NOT executed" || no "sudo verify RAN"
+write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-rm && rm -rf /nonexistent-starter-probe'
+printf '{"session_id": "tsuite-f2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "forbidden verify (rm -rf abs) blocks"
+[ ! -f "$D/pwned-rm" ] && ok "rm -rf verify was NOT executed" || no "rm -rf verify RAN"
+write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-fr && rm -fr /nonexistent-starter-probe'
+printf '{"session_id": "tsuite-f3"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "near-miss spelling rm -fr blocks (F8 bypass closed)"
+[ ! -f "$D/pwned-fr" ] && ok "rm -fr verify was NOT executed" || no "rm -fr verify RAN (F8 regressed)"
+write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-split && rm -r -f /nonexistent-starter-probe'
+printf '{"session_id": "tsuite-f4"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "near-miss spelling rm -r -f blocks"
+[ ! -f "$D/pwned-split" ] && ok "split-flag rm verify was NOT executed" || no "split-flag rm verify RAN"
+write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-dsp && rm  -rf /nonexistent-starter-probe'
+printf '{"session_id": "tsuite-f5"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "near-miss spelling rm<double-space>-rf blocks"
+[ ! -f "$D/pwned-dsp" ] && ok "double-space rm verify was NOT executed" || no "double-space rm verify RAN"
+write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-gp && git  push origin main'
+printf '{"session_id": "tsuite-f6"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "near-miss spelling git<double-space>push blocks"
+[ ! -f "$D/pwned-gp" ] && ok "double-space push verify was NOT executed" || no "double-space push verify RAN"
+# Negative control: relative-path rm is legitimate cleanup, never refused.
+write_plan "$D/.ai_context/tasks/demo/plan.md" 'mkdir -p scratch-dir && rm -rf scratch-dir'
+printf '{"session_id": "tsuite-f7"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "relative rm -rf verify passes (no matcher false positive)"
 
 D="$WORK/l110b"; mkdir -p "$D/.ai_context/tasks/demo"
 printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
@@ -609,6 +641,20 @@ bgp 'rm -rf /' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
 ck 2 $? "rm -rf / denied"
 bgp 'rm -rf /*' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
 ck 2 $? "rm -rf /* denied"
+bgp 'rm -fr /' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "rm -fr / denied (spelling variant)"
+bgp 'rm -r -f /' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "rm -r -f / denied (split flags)"
+bgp 'rm  -rf  /' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "rm<double-space>-rf / denied"
+bgp 'rm -rf --no-preserve-root /' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "rm -rf --no-preserve-root / denied (F12: the canonical root wipe)"
+bgp 'git push origin +main' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "+refspec force-push denied (F12: flagless force)"
+out=$(bgp 'rm -f -r /tmp/scratch' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "split-flag absolute rm -rf downgraded to ask" || no "split-flag absolute rm not asked"
+out=$(bgp 'rm -r -f build/' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "relative split-flag rm passes silently" || no "relative split-flag rm flagged"
 out=$(bgp 'rm -rf /tmp/scratch' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "absolute-path rm -rf downgraded to ask" || no "absolute rm -rf not asked"
 out=$(bgp 'rm -rf build/' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
@@ -623,6 +669,15 @@ out=$(bgp 'cat .secrets/token.json' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok ".secrets/ access downgraded to ask (H1)" || no ".secrets/ access not asked"
 out=$(bgp 'ls foo.secrets/x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "no false positive on lookalike dir names" || no ".secrets lookalike false positive"
+# Shared-matcher integrity (F8): one pattern source, both hooks on it, sync
+# ships it — the drift the two hand-mirrored v3.9 copies allowed is closed.
+[ -f "$REPO/.claude/hooks/guard-patterns.sh" ] && ok "guard-patterns.sh exists (shared matcher source)" || no "guard-patterns.sh missing"
+grep -q 'guard-patterns\.sh' "$REPO/.claude/hooks/stop-gate.sh" && grep -q 'guard-patterns\.sh' "$REPO/.claude/hooks/bash-guard.sh" && ok "both hooks source the shared matchers" || no "a hook does not source guard-patterns.sh (drift risk)"
+if [ -f "$REPO/sync-project.sh" ]; then
+  grep -q '^copy_if_missing \.claude/hooks/guard-patterns\.sh$' "$REPO/sync-project.sh" && grep -q '^stock_update \.claude/hooks/guard-patterns\.sh$' "$REPO/sync-project.sh" && ok "sync ships guard-patterns.sh (add + stock-update)" || no "sync does not ship guard-patterns.sh"
+else
+  skp "sync ships guard-patterns.sh (spawned project — template-repo only)"
+fi
 grep -q '"PreToolUse"' "$REPO/.claude/settings.json" && grep -q 'bash-guard\.sh' "$REPO/.claude/settings.json" && ok "bash-guard wired in settings.json" || no "bash-guard wiring missing"
 grep -qF 'Edit(./.ai_context/tasks/**/gatelog)' "$REPO/.claude/settings.json" && grep -qF 'Write(./.ai_context/tasks/**/gatelog)' "$REPO/.claude/settings.json" && ok "gatelog write-deny present (hook-written only)" || no "gatelog deny entries missing"
 grep -qF '"Bash(git push --force:*)"' "$REPO/.claude/settings.json" && ok "declarative force-push deny present" || no "force-push deny entry missing"
@@ -777,7 +832,7 @@ else
   ok "spawn succeeded"
   miss=""
   for f in .claude/settings.json .claude/hooks/session-start.sh .claude/hooks/stop-gate.sh \
-           .claude/hooks/post-edit.sh .claude/hooks/bash-guard.sh \
+           .claude/hooks/post-edit.sh .claude/hooks/bash-guard.sh .claude/hooks/guard-patterns.sh \
            .claude/skills/wrap/SKILL.md .claude/skills/task/SKILL.md \
            .claude/skills/task/reference.md .claude/skills/setup/SKILL.md \
            .claude/agents/scout.md .claude/agents/planner.md .claude/agents/plan-critic.md \

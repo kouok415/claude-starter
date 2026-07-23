@@ -64,6 +64,21 @@ set -uo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-.}"
 TASKS="$ROOT/.ai_context/tasks"
 
+# Shared destructive-op matchers — one source with bash-guard.sh (F8).
+# Fallback: pre-v3.10 literals plus the proven-bypassing -fr spelling, so
+# a partially-synced project degrades to the old guard, never to none.
+_GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
+# shellcheck source=guard-patterns.sh
+[ -f "$_GP" ] && . "$_GP"
+if ! command -v guard_forbidden_verify >/dev/null 2>&1; then
+  guard_forbidden_verify() { # $1 = verify command -> rc 0 when forbidden
+    case " $1 " in
+      *' sudo '*|*'git push'*|*'rm -rf /'*|*'rm -fr /'*) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+fi
+
 MODE=stop
 [ "${1:-}" = "--sweep" ] && MODE=sweep
 
@@ -217,32 +232,27 @@ sweep_done_milestones() { # $1 = 1 when the plan is all-[done] (last verify runs
     vcmd="$(verify_of "$id")"
     vlog="$(printf '%s' "$vcmd" | tr '\t' ' ')"
     if [ "$id" = "$last_id" ] && [ "$run_last" = 1 ] && [ -n "$vcmd" ]; then
-      case " $vcmd " in
-        *' sudo '*|*'git push'*|*'rm -rf /'*)
-          printf '%s\t%s\tINTEGRITY\tforbidden verify, not executed: %s\n' \
-            "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
-          {
-            printf 'GATE REFUSED — the verify command contains a forbidden operation and was NOT run:\n'
-            printf '$ %s\n' "$vcmd"
-            printf 'Rewrite this milestone verify in plan.md, then finish.\n'
-          } >&2
-          echo BLOCK
-          ;;
-        *)
-          if out="$(run_cmd "$vcmd" 2>&1)"; then
-            printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
-          else
-            printf '%s\t%s\tFAIL\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
-            {
-              printf 'GATE SWEEP FAILED — %s is marked [done] but its verify fails NOW (zero-stop run: the gate never saw it pass).\n' "$id"
-              printf '$ %s\n' "$vcmd"
-              printf '%s\n' "$out" | tail -n 50
-              printf 'The task cannot wrap red: fix it, or mark %s back to [in_progress] and re-enter the loop.\n' "$id"
-            } >&2
-            echo BLOCK
-          fi
-          ;;
-      esac
+      if guard_forbidden_verify "$vcmd"; then
+        printf '%s\t%s\tINTEGRITY\tforbidden verify, not executed: %s\n' \
+          "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
+        {
+          printf 'GATE REFUSED — the verify command contains a forbidden operation and was NOT run:\n'
+          printf '$ %s\n' "$vcmd"
+          printf 'Rewrite this milestone verify in plan.md, then finish.\n'
+        } >&2
+        echo BLOCK
+      elif out="$(run_cmd "$vcmd" 2>&1)"; then
+        printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
+      else
+        printf '%s\t%s\tFAIL\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
+        {
+          printf 'GATE SWEEP FAILED — %s is marked [done] but its verify fails NOW (zero-stop run: the gate never saw it pass).\n' "$id"
+          printf '$ %s\n' "$vcmd"
+          printf '%s\n' "$out" | tail -n 50
+          printf 'The task cannot wrap red: fix it, or mark %s back to [in_progress] and re-enter the loop.\n' "$id"
+        } >&2
+        echo BLOCK
+      fi
     else
       # Earlier [done] milestones (or verify-less ones): their point-in-time
       # has passed — record honest vacuity exactly once, never fake evidence.
@@ -318,20 +328,21 @@ cmd="$(awk '
 # a mid-run weakening of the verify is visible in the audit trail.
 cmd_log="$(printf '%s' "$cmd" | tr '\t' ' ')"
 
-# Catastrophic operations never run unattended — not even once.
-case " $cmd " in
-  *' sudo '*|*'git push'*|*'rm -rf /'*)
-    printf '%s\t%s\tINTEGRITY\tforbidden verify, not executed: %s\n' \
-      "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
-    {
-      printf 'GATE REFUSED — the verify command contains a forbidden operation and was NOT run:\n'
-      printf '$ %s\n' "$cmd"
-      printf 'Verify commands execute unattended at every turn end: no sudo, no git push,\n'
-      printf 'no rm -rf on absolute paths. Rewrite this milestone verify in plan.md, then finish.\n'
-    } >&2
-    exit 2
-    ;;
-esac
+# Catastrophic operations never run unattended — not even once. Matchers
+# are shared with bash-guard.sh (guard-patterns.sh) and spelling-tolerant:
+# -fr / split flags / multi-space variants are refused like the canonical
+# spelling (F8).
+if guard_forbidden_verify "$cmd"; then
+  printf '%s\t%s\tINTEGRITY\tforbidden verify, not executed: %s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
+  {
+    printf 'GATE REFUSED — the verify command contains a forbidden operation and was NOT run:\n'
+    printf '$ %s\n' "$cmd"
+    printf 'Verify commands execute unattended at every turn end: no sudo, no git push,\n'
+    printf 'no rm -rf on absolute paths. Rewrite this milestone verify in plan.md, then finish.\n'
+  } >&2
+  exit 2
+fi
 
 # --- PASS-cache -------------------------------------------------------------
 # The cache file itself is gitignored (.ai_context/tasks/*/.gate-cache), so

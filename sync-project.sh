@@ -84,6 +84,7 @@ copy_if_missing .claude/settings.json
 copy_if_missing .claude/hooks/session-start.sh
 copy_if_missing .claude/hooks/post-edit.sh
 copy_if_missing .claude/hooks/bash-guard.sh
+copy_if_missing .claude/hooks/guard-patterns.sh
 copy_if_missing .claude/hooks/spawn-log.sh
 copy_if_missing .claude/hooks/lint.sh.example
 copy_if_missing .claude/skills/wrap/SKILL.md
@@ -131,6 +132,7 @@ stock_update .claude/settings.json
 stock_update .claude/hooks/session-start.sh
 stock_update .claude/hooks/post-edit.sh
 stock_update .claude/hooks/bash-guard.sh
+stock_update .claude/hooks/guard-patterns.sh
 stock_update .claude/hooks/spawn-log.sh
 stock_update .claude/hooks/stop-gate.sh
 stock_update .claude/skills/wrap/SKILL.md
