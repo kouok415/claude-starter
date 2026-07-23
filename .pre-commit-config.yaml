@@ -18,10 +18,10 @@ repos:
         pass_filenames: false
 
       - id: ai-context-append-only
-        name: "append-only: decisions/journal/scoreboard/friction/gatelog"
+        name: "append-only: decisions/journal/scoreboard/friction/gatelog/spawnlog"
         entry: scripts/check-append-only.sh
         language: system
-        files: ^\.ai_context/(decisions\.md|scoreboard\.csv|friction\.csv|journal/.+\.md|tasks/.+/gatelog)$
+        files: ^\.ai_context/(decisions\.md|scoreboard\.csv|friction\.csv|journal/.+\.md|tasks/.+/(gatelog|spawnlog))$
         pass_filenames: false
 
       - id: ai-context-bulk

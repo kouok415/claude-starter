@@ -13,6 +13,12 @@ set -uo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-.}"
 LINT="$ROOT/.claude/hooks/lint.sh"
+if [ -f "$LINT" ] && [ ! -x "$LINT" ]; then
+  # Present but not executable (a forgotten chmod, a mode-stripping checkout):
+  # the lint loop is silently OFF — say so, never block (warning layer, F14).
+  printf 'WARNING: .claude/hooks/lint.sh exists but is not executable — the lint loop is OFF. chmod +x it to arm.\n' >&2
+  exit 0
+fi
 [ -x "$LINT" ] || exit 0
 
 # Hook input is JSON on stdin; best-effort extraction of the edited path.

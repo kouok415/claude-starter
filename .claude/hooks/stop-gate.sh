@@ -80,6 +80,7 @@ if ! command -v guard_forbidden_verify >/dev/null 2>&1; then
     esac
   }
 fi
+[ -n "${GUARD_SETUP_SENTINEL:-}" ] || GUARD_SETUP_SENTINEL='claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit'
 
 MODE=stop
 [ "${1:-}" = "--sweep" ] && MODE=sweep
@@ -100,11 +101,11 @@ sid_s="$(printf '%s' "${sid:-nosession}" | tr -cd 'A-Za-z0-9._-')"
 [ -n "$sid_s" ] || sid_s=nosession
 
 # --- Gate 1: first-session setup -------------------------------------------
-# Sentinel first (v3.3 templates); legacy placeholder patterns kept for
-# projects spawned before the sentinel existed. Keep this pattern in sync
-# with session-start.sh — the two layers of one mechanism must agree.
+# The trigger pattern is the shared GUARD_SETUP_SENTINEL constant — one
+# source with session-start.sh (ADR-004): the two layers of one mechanism
+# cannot drift apart. L1-5 proves every token arms both layers.
 if [ "$MODE" = stop ] && [ "$stop_active" = 0 ] && [ -f "$ROOT/CLAUDE.md" ] && \
-   grep -qE 'claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit' "$ROOT/CLAUDE.md"; then
+   grep -qE "$GUARD_SETUP_SENTINEL" "$ROOT/CLAUDE.md"; then
   marker="${TMPDIR:-/tmp}/claude-setup-nudge-${sid_s}"
   if [ ! -f "$marker" ]; then
     : > "$marker" 2>/dev/null || true
@@ -239,6 +240,11 @@ run_cmd() { # $1 = command; bounded so a hung verify cannot wedge the session
   fi
 }
 
+warn_unbounded() { # F11: without GNU timeout the 540 s bound is silently OFF
+  command -v timeout >/dev/null 2>&1 && return 0
+  printf 'stop-gate WARNING: `timeout` not found — verify commands run UNBOUNDED by this hook (only the platform hook budget caps them). Install coreutils to restore the 540 s cap.\n' >&2
+}
+
 sweep_done_milestones() { # $1 = 1 when the plan is all-[done] (last verify runs)
   run_last="$1"
   last_id="$(grep '^## .*\[done\]' "$plan" | tail -1 | sed -n 's/^## \([^:]*\):.*/\1/p')"
@@ -248,6 +254,7 @@ sweep_done_milestones() { # $1 = 1 when the plan is all-[done] (last verify runs
     vcmd="$(verify_of "$id")"
     vlog="$(printf '%s' "$vcmd" | tr '\t' ' ')"
     if [ "$id" = "$last_id" ] && [ "$run_last" = 1 ] && [ -n "$vcmd" ]; then
+      warn_unbounded
       if guard_forbidden_verify "$vcmd"; then
         printf '%s\t%s\tINTEGRITY\tforbidden verify, not executed: %s\n' \
           "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
@@ -397,6 +404,7 @@ if [ -n "$fp" ] && [ -f "$gatecache" ] && \
   exit 0
 fi
 
+warn_unbounded
 if out="$(run_cmd "$cmd" 2>&1)"; then
   printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
   red_reset "${slug}-${ms:-?}"

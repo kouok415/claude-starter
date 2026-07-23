@@ -15,14 +15,19 @@ set -uo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-.}"
 CTX="$ROOT/.ai_context"
 
+# Setup-sentinel pattern shared with stop-gate.sh (ADR-004: two layers of
+# one mechanism); helper absent (partial sync) = the same literal inline.
+_GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
+# shellcheck source=guard-patterns.sh
+[ -f "$_GP" ] && . "$_GP"
+[ -n "${GUARD_SETUP_SENTINEL:-}" ] || GUARD_SETUP_SENTINEL='claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit'
+
 # --- Newborn project? Instruct the first-session /setup protocol.
 #     Deliberately BEFORE the .ai_context early-exit: the Stop hook's setup
 #     gate doesn't require .ai_context either, and the two layers of one
-#     mechanism must share a trigger domain. Sentinel first (v3.3 templates);
-#     legacy placeholder patterns kept for pre-sentinel projects. Keep this
-#     pattern in sync with stop-gate.sh.
+#     mechanism must share a trigger domain — hence the shared constant.
 if [ -f "$ROOT/CLAUDE.md" ] && \
-   grep -qE 'claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit' "$ROOT/CLAUDE.md"; then
+   grep -qE "$GUARD_SETUP_SENTINEL" "$ROOT/CLAUDE.md"; then
   printf 'SETUP REQUIRED: this project has not been set up (CLAUDE.md is still a template). In your FIRST reply, run the /setup protocol — interview, scaffold, draft CLAUDE.md/README/state.md for human review — before or alongside the current request. The Stop gate blocks the first turn-end until the draft lands.\n'
 fi
 

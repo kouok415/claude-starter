@@ -49,6 +49,13 @@ GUARD_RM_RF_ABS="${_G_RM}/"
 # a root delete by definition — denied on sight, target parsing aside.
 GUARD_RM_RF_ROOT="${_G_RM}/([[:space:]]|\*|[\"']|$)|(^|[[:space:];&|(])rm[[:space:]][^|;&]*--no-preserve-root"
 
+# Setup-gate sentinel (ADR-004): the newborn-project trigger shared by
+# session-start.sh (instruction layer) and stop-gate.sh (blocking layer) —
+# two layers of ONE mechanism, so they must agree on the trigger domain.
+# Sentinel first (v3.3 templates); legacy placeholder tokens kept for
+# projects spawned before the sentinel existed.
+GUARD_SETUP_SENTINEL='claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit'
+
 # The stop-gate's forbidden-verify test (three entries, absolute).
 guard_forbidden_verify() { # $1 = verify command -> rc 0 when forbidden
   printf '%s' "$1" | grep -Eq "$GUARD_SUDO" && return 0

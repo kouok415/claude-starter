@@ -2,9 +2,11 @@
 #
 # pre-commit hook — mechanical enforcement of the append-only contracts in
 # .ai_context/INDEX.md's writing protocol: decisions.md, journal/*.md,
-# scoreboard.csv, friction.csv and tasks/*/gatelog accumulate history — a
-# commit may ADD lines to them, never change or remove what is already
-# there, and never delete or rename the files themselves.
+# scoreboard.csv, friction.csv, tasks/*/gatelog and tasks/*/spawnlog
+# accumulate history — a commit may ADD lines to them, never change or
+# remove what is already there, and never delete or rename the files
+# themselves. (gatelog and spawnlog are the same evidence class — the
+# runtime layer Edit/Write-denies both, so this layer covers both, F18.)
 #
 # Deliberately NOT covered: lessons.md and brief.md — /wrap legitimately
 # distills them when they exceed their 4 KB caps. state.md is overwrite-
@@ -29,6 +31,7 @@ while IFS=$'\t' read -r status path _rest; do
     .ai_context/friction.csv) ;;
     .ai_context/journal/*.md) ;;
     .ai_context/tasks/*/gatelog) ;;
+    .ai_context/tasks/*/spawnlog) ;;
     *) continue ;;
   esac
   case "$status" in

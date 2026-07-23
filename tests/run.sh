@@ -155,6 +155,21 @@ n_sw=$(grep -c "	sweep	STUCK	" "$D/.ai_context/tasks/demo/gatelog")
 CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
 ck 2 $? "explicit /wrap --sweep never yields (still strict after counted yields)"
 
+echo "=== L1-2e · absent GNU timeout is loud (F11)"
+D="$WORK/l12e"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+SH="$WORK/no-timeout-bin"; mkdir -p "$SH"
+for b in bash sh grep sed awk date tr cat rm mv mkdir wc head tail dirname env; do
+  p="$(command -v "$b" 2>/dev/null)" && [ -n "$p" ] && ln -sf "$p" "$SH/$b" 2>/dev/null
+done
+err=$(printf '{"session_id": "tsuite-tmo"}' | PATH="$SH" CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 0 $rc "gate still passes a green verify without the timeout binary"
+echo "$err" | grep -q 'UNBOUNDED' && ok "missing timeout binary warned (no silent void)" || no "missing timeout stayed silent (F11)"
+err=$(printf '{"session_id": "tsuite-tmo2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+echo "$err" | grep -q 'UNBOUNDED' && no "timeout present but warned anyway" || ok "no warning when timeout exists"
+
 echo "=== L1-2d · spawn-log + no-spawn diagnosis"
 SL="$REPO/.claude/hooks/spawn-log.sh"
 D="$WORK/l12d"; mkdir -p "$D/.ai_context/tasks/demo"
@@ -358,6 +373,22 @@ if [ -d "$REPO/templates" ]; then
 else
   skp "template sentinel census (spawned project — template-repo only)"
 fi
+# F13: the sentinel pattern is one sourced constant — prove every token
+# (sentinel + 3 legacy placeholders) arms BOTH layers, and the degraded-mode
+# fallback literals in the two hooks byte-match the helper's constant.
+for tok in 'claude-starter: UNCONFIGURED' '<e.g., pytest>' '- **Install:** `<command>`' 'Replace before first commit'; do
+  DT="$WORK/l15tok"; rm -rf "$DT"; mkdir -p "$DT"
+  printf '# t\n%s\n' "$tok" > "$DT/CLAUDE.md"
+  out=$(CLAUDE_PROJECT_DIR="$DT" bash "$SS" </dev/null 2>&1)
+  echo "$out" | grep -q 'SETUP REQUIRED' && ok "session-start arms on: $tok" || no "session-start missed: $tok"
+  printf '{"session_id": "tsuite-tok"}' | CLAUDE_PROJECT_DIR="$DT" bash "$GATE" >/dev/null 2>&1; rc=$?
+  [ "$rc" = 2 ] && ok "stop-gate arms on: $tok" || no "stop-gate missed: $tok"
+  rm -f "${TMPDIR:-/tmp}/claude-setup-nudge-tsuite-tok"
+done
+fb_gp=$(grep -o "GUARD_SETUP_SENTINEL='[^']*'" "$REPO/.claude/hooks/guard-patterns.sh" | head -1)
+fb_ss=$(grep -o "GUARD_SETUP_SENTINEL='[^']*'" "$SS" | head -1)
+fb_sg=$(grep -o "GUARD_SETUP_SENTINEL='[^']*'" "$GATE" | head -1)
+{ [ -n "$fb_gp" ] && [ "$fb_ss" = "$fb_gp" ] && [ "$fb_sg" = "$fb_gp" ]; } && ok "sentinel pattern identical: helper + both hook fallbacks (F13)" || no "sentinel pattern drift between the two layers (ADR-004)"
 
 printf '# ok\n## Commands\n- Test: \`true\`\n' > "$D/CLAUDE.md"
 echo demo > "$D/.ai_context/tasks/CURRENT"
@@ -398,6 +429,12 @@ err=$(printf '{"file_path": "x.py"}' | CLAUDE_PROJECT_DIR="$D" bash "$D/.claude/
 ck 2 $rc "post-edit propagates lint failure"
 nl=$(printf '%s\n' "$err" | wc -l)
 [ "$nl" -le 45 ] && ok "post-edit output bounded ($nl lines)" || no "post-edit output unbounded ($nl lines)"
+# F14: present-but-non-executable lint.sh is a dark state — warn, never block.
+chmod -x "$D/.claude/hooks/lint.sh"
+err=$(printf '{"file_path": "x.py"}' | CLAUDE_PROJECT_DIR="$D" bash "$D/.claude/hooks/post-edit.sh" 2>&1 >/dev/null); rc=$?
+ck 0 $rc "non-executable lint.sh does not block"
+echo "$err" | grep -q 'not executable' && ok "non-executable lint.sh warned (F14)" || no "non-executable lint.sh silently dark"
+chmod +x "$D/.claude/hooks/lint.sh"
 
 echo "=== L1-6 · resident-size guards + security entries"
 sz=$(wc -c < "$REPO/.ai_context/INDEX.md")
@@ -720,12 +757,14 @@ D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$
 printf 'preamble\n' > "$D/.ai_context/decisions.md"
 printf 'date,slug\n2026-07-01,t1\n' > "$D/.ai_context/scoreboard.csv"
 printf '2026-07-01T00:00:00\tM1\tPASS\ttrue\n' > "$D/.ai_context/tasks/demo/gatelog"
+printf '2026-07-01T00:00:00\tM1\texecutor\n' > "$D/.ai_context/tasks/demo/spawnlog"
 printf 'first line\n' > "$D/.ai_context/journal/2026-07-01-x.md"
 printf 'lesson 1\n' > "$D/.ai_context/tasks/demo/lessons.md"
 git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm base
 printf '## ADR-001: x\n' >> "$D/.ai_context/decisions.md"
 printf '2026-07-02,t2\n' >> "$D/.ai_context/scoreboard.csv"
 printf '2026-07-02T00:00:00\tM2\tPASS\ttrue\n' >> "$D/.ai_context/tasks/demo/gatelog"
+printf '2026-07-02T00:00:00\tM2\texecutor\n' >> "$D/.ai_context/tasks/demo/spawnlog"
 git -C "$D" add -A
 ( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
 ck 0 $? "pure appends pass"
@@ -740,6 +779,12 @@ git -C "$D" add -A
 ( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
 ck 1 $? "gatelog row removal blocks"
 ( cd "$D" && git reset -q && git checkout -q -- .ai_context/tasks/demo/gatelog )
+# F18: spawnlog is the same evidence class — a history rewrite must block.
+sed -i.bak '1d' "$D/.ai_context/tasks/demo/spawnlog" && rm -f "$D/.ai_context/tasks/demo/spawnlog.bak"
+git -C "$D" add -A
+( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
+ck 1 $? "spawnlog rewrite blocks (F18 — commit layer now agrees with runtime deny)"
+( cd "$D" && git reset -q && git checkout -q -- .ai_context/tasks/demo/spawnlog )
 git -C "$D" mv -f .ai_context/journal/2026-07-01-x.md .ai_context/journal/renamed.md
 ( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
 ck 1 $? "journal rename blocks"
@@ -763,6 +808,7 @@ git -C "$D" add -A
 ( cd "$D" && bash "$REPO/scripts/check-context-bulk.sh" ) >/dev/null 2>&1
 ck 0 $? "big files outside .ai_context are not the bulk guard's business"
 grep -q 'ai-context-append-only' "$REPO/.pre-commit-config.yaml" && grep -q 'ai-context-bulk' "$REPO/.pre-commit-config.yaml" && ok "both guards wired in .pre-commit-config.yaml" || no "pre-commit wiring missing"
+grep -qF 'tasks/.+/(gatelog|spawnlog)' "$REPO/.pre-commit-config.yaml" && ok "pre-commit files regex covers spawnlog (F18)" || no "pre-commit files regex misses spawnlog"
 
 echo "=== L1-15 · gate integrity: wrong-branch task work"
 D="$WORK/l115"; mkdir -p "$D/.ai_context/tasks/demo"
@@ -836,6 +882,33 @@ PY
 ck 0 $? "bloated worktree with small staged content passes (staged is what commits)"
 ( cd "$D" && git add .ai_context/state.md && bash "$REPO/scripts/check-state-size.sh" ) >/dev/null 2>&1
 ck 1 $? "bloated staged content blocks"
+# F20: the worktree fallback was dead code (errexit) and mislabeled its
+# measurement as staged — cover untracked, outside-git, and the label.
+D="$WORK/l18b"; mkdir -p "$D/.ai_context"
+git -C "$D" init -q
+python3 - "$D/.ai_context/state.md" <<'PY'
+import sys; open(sys.argv[1],'w').write('x'*6000)
+PY
+out=$( cd "$D" && bash "$REPO/scripts/check-state-size.sh" 2>&1 ); rc=$?
+ck 1 $rc "untracked oversized state.md blocks via the worktree fallback"
+echo "$out" | grep -q 'worktree' && ok "fallback measurement labeled worktree, not staged" || no "fallback measurement mislabeled"
+printf 'small\n' > "$D/.ai_context/state.md"
+( cd "$D" && bash "$REPO/scripts/check-state-size.sh" ) >/dev/null 2>&1
+ck 0 $? "untracked small state.md passes (no errexit death)"
+D="$WORK/l18c"; mkdir -p "$D/.ai_context"
+python3 - "$D/.ai_context/state.md" <<'PY'
+import sys; open(sys.argv[1],'w').write('y'*6000)
+PY
+( cd "$D" && bash "$REPO/scripts/check-state-size.sh" ) >/dev/null 2>&1
+ck 1 $? "outside git: worktree fallback still enforces S7"
+D="$WORK/l18d"; mkdir -p "$D/.ai_context"
+: > "$D/.ai_context/state.md"
+git -C "$D" init -q && git -C "$D" add -A
+python3 - "$D/.ai_context/state.md" <<'PY'
+import sys; open(sys.argv[1],'w').write('z'*6000)
+PY
+( cd "$D" && bash "$REPO/scripts/check-state-size.sh" ) >/dev/null 2>&1
+ck 0 $? "empty staged + bloated worktree passes (staged is what commits)"
 
 echo "=== L1-9 · seed purity (the template repo ships placeholders, never real memory)"
 if [ -f "$REPO/.claude/.starter-version" ]; then
