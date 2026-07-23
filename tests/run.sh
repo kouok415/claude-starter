@@ -25,7 +25,7 @@ skp()  { SKIP=$((SKIP+1)); echo "SKIP: $*"; }
 ck()   { local want="$1" got="$2"; shift 2; if [ "$want" = "$got" ]; then ok "$*"; else no "$* (want rc=$want got rc=$got)"; fi; }
 
 WORK="$(mktemp -d)"
-cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* ; }
+cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
 trap cleanup EXIT
 
 # Spec-faithful plan fixture: format header INCLUDED, one in_progress.
@@ -901,6 +901,27 @@ PY
   t1=$(date +%s%N)
   ms=$(( (t1 - t0) / 1000000 ))
   [ "$ms" -lt 500 ] && ok "no-op gate latency ${ms}ms (<500ms)" || no "no-op gate latency ${ms}ms (>=500ms)"
+fi
+
+echo "=== L2-1b · --local spawn ships tracked content only (F17)"
+if [ -x "$REPO/start_project.sh" ] && git -C "$REPO" rev-parse HEAD >/dev/null 2>&1; then
+  # Seed both leak classes into the REAL checkout (uniquely named, removed
+  # below and in cleanup): a gitignored credential and a plain untracked file.
+  printf 'FAKE-CRED do-not-ship\n' > "$REPO/.secrets/l2-seeded-fake-cred.tmp"
+  printf 'untracked scratch\n' > "$REPO/l2-seeded-untracked.tmp"
+  ( cd "$WORK" && "$REPO/start_project.sh" --local --kind code hyglab ) >/dev/null 2>&1
+  H="$WORK/hyglab"
+  if [ -d "$H" ]; then
+    [ ! -e "$H/.secrets/l2-seeded-fake-cred.tmp" ] && ok "gitignored secret did NOT ride into the spawn" || no "SECRET LEAKED into --local spawn (F17 regressed)"
+    [ ! -e "$H/l2-seeded-untracked.tmp" ] && ok "untracked file did not ride along" || no "untracked file leaked into spawn"
+    [ -f "$H/.secrets/.gitkeep" ] && ok "tracked .secrets placeholder still ships" || no ".secrets/.gitkeep lost by the archive copy"
+    [ -f "$H/.claude/hooks/stop-gate.sh" ] && [ -f "$H/.ai_context/INDEX.md" ] && ok "tracked mechanisms ship via git archive" || no "archive copy missing tracked files"
+  else
+    no "hygiene spawn failed"
+  fi
+  rm -f "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp"
+else
+  skp "--local hygiene test (needs the template git checkout)"
 fi
 
 echo "=== L2-4 · research kind + artifact verify"

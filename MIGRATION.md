@@ -1,8 +1,12 @@
 # Migration guide
 
-Ten migrations live here (docs are bilingual elsewhere; this file and the
+Eleven migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[-2. claude-starter v3.9 → v3.10](#-2-claude-starter-v39--v310)** — the
+  trust release: shared spelling-tolerant destructive-op matchers,
+  `--local` spawn hygiene (tracked content only), log-always gate audit
+  trail, fail-visible micro-guards, true sync/spawn attribution.
 - **[-1. claude-starter v3.8 → v3.9](#-1-claude-starter-v38--v39)** — the
   handoff release: a red gate reaches the human (counted blocks → `STUCK` +
   `systemMessage`), spawn evidence (`spawnlog` + no-spawn diagnosis),
@@ -35,6 +39,26 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## -2. claude-starter v3.9 → v3.10
+
+The trust release. A source-verified audit of v3.9 (24 findings) showed the
+template advertising protection it did not fully deliver — matcher spellings
+that slipped the forbidden-verify gate, a `--local` spawn path that shipped
+gitignored credentials, audit rows that went silently missing. v3.10 makes
+the guardrails true to their own headers.
+
+### What changed, and why
+
+| v3.9 | v3.10 | Reason |
+|---|---|---|
+| stop-gate's forbidden-verify matcher was a literal-substring list: the `-fr`, split-flag (`-r -f`) and multi-space spellings of a recursive force delete executed at turn end; bash-guard missed the `+refspec` force-push and the `no-preserve-root` root wipe (deny degraded to a settings.json ask) | one shared pattern source, `.claude/hooks/guard-patterns.sh`, sourced by both hooks: anchored, spelling-tolerant regexes; every denylist entry fixture-tested with a not-executed probe; conservative built-in fallbacks when the helper is absent (partial sync) | two hand-mirrored matcher copies had drifted apart in strength, and the weaker one guarded the more dangerous path — unattended turn-end execution |
+| `--local` spawn copied the working tree: gitignored state (`.secrets/` credentials — their designed runtime home since v3.8 — plus local settings overrides) rode into new projects, where inherited ignore rules keep it invisible to `git status` | `--local` copies tracked content only (`git archive HEAD`); non-git template sources fall back to `cp -R` plus a purge of the known leak homes. **Semantic change: uncommitted template edits no longer ride into spawns — commit them first** | the one cross-project credential-leak vector in the audit; committed-content-only is the safe default for a spawn operation |
+
+*(Sections land per implementation phase; this table is complete at the
+v3.10 tag.)*
 
 ---
 

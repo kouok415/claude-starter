@@ -18,7 +18,8 @@
 #
 # What it does:
 #   1. Creates a new GitHub repo from the template and clones it
-#      (or copies this checkout with --local)
+#      (or, with --local, copies this checkout's TRACKED content — git
+#      archive HEAD — so gitignored local state never leaks into spawns)
 #   2. Picks templates/CLAUDE.md.<kind> -> CLAUDE.md, README stub -> README.md
 #   3. Fills {{PROJECT_NAME}} / {{DATE}} placeholders
 #   4. Removes scaffold-infrastructure files (they belong to the template
@@ -166,8 +167,21 @@ if [ "$LOCAL" = 0 ]; then
 else
   echo "Creating $DIR locally from $SCRIPT_DIR..."
   mkdir "$DIR"
-  cp -R "$SCRIPT_DIR/." "$DIR/"
-  rm -rf "$DIR/.git"
+  # Tracked content only (F17): a lived-in checkout carries gitignored local
+  # state — .secrets/ credentials (their designed runtime home, v3.8), local
+  # settings overrides — which a raw cp -R would ship into the new project,
+  # where the inherited ignore rules keep it invisible to git status. git
+  # archive copies exactly what HEAD tracks (uncommitted template edits do
+  # NOT ride along — commit them first); non-git sources fall back to
+  # cp -R plus a purge of the known leak homes.
+  if git -C "$SCRIPT_DIR" rev-parse HEAD >/dev/null 2>&1; then
+    git -C "$SCRIPT_DIR" archive HEAD | tar -x -C "$DIR"
+  else
+    cp -R "$SCRIPT_DIR/." "$DIR/"
+    rm -rf "$DIR/.git" "$DIR/.claude/settings.local.json" "$DIR/.secrets"
+    mkdir -p "$DIR/.secrets" && : > "$DIR/.secrets/.gitkeep"
+    find "$DIR/.ai_context/private" -type f ! -name '.gitkeep' -delete 2>/dev/null || true
+  fi
   git -C "$DIR" init -q -b main 2>/dev/null || git -C "$DIR" init -q
 fi
 
