@@ -315,6 +315,40 @@ PY
 out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
 echo "$out" | grep -q 'filtered plan view is' && ok "oversized filtered view warns" || no "no size warning on bloated armed section"
 
+echo "=== L1-3c · task lifecycle warnings (F22, F23)"
+D="$WORK/l13e"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# n\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+printf '_Last updated: %s_\n' "$(date +%F)" > "$D/.ai_context/state.md"
+printf 'idx\n' > "$D/.ai_context/INDEX.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
+# Plan: fixture
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: a [done]
+- verify: `true`
+- risk: low
+
+## M2: b [done]
+- verify: `true`
+- risk: low
+PEOF
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'run /wrap to write the scoreboard row' && ok "all-done + CURRENT nudges close-out (F22)" || no "finished-but-unclosed state got no nudge"
+echo "$out" | grep -q 'raw plan.md is' && no "small plan falsely size-warned" || ok "small raw plan stays quiet"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'run /wrap to write the scoreboard row' && no "in-flight task falsely nudged to close" || ok "in-flight task gets no close-out nudge"
+python3 - "$D/.ai_context/tasks/demo/plan.md" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+open(p,'w').write(s + '\n<!-- pad ' + 'x'*17000 + ' -->\n')
+PY
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'raw plan.md is' && ok "oversized raw plan.md warned (F23)" || no "40 KB-class raw plan went unseen"
+echo "$out" | grep -q 'filtered plan view is' && no "pad leaked into the filtered view" || ok "filtered view stays small (pad filtered out)"
+
 echo "=== L1-4 · sync: --update-stock + --adopt"
 if [ ! -f "$REPO/sync-project.sh" ]; then
   skp "update-stock history test (spawned project — template-repo only)"

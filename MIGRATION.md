@@ -1,8 +1,12 @@
 # Migration guide
 
-Eleven migrations live here (docs are bilingual elsewhere; this file and the
+Twelve migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[-3. claude-starter v3.10 → v3.11](#-3-claude-starter-v310--v311)** — the
+  token-diet release: single-sourced always-injected surfaces, on-demand
+  wrap reference split, spawn-prompt-authoritative executors, finished-task
+  close-out nudge, raw-plan size floor.
 - **[-2. claude-starter v3.9 → v3.10](#-2-claude-starter-v39--v310)** — the
   trust release: shared spelling-tolerant destructive-op matchers,
   `--local` spawn hygiene (tracked content only), log-always gate audit
@@ -39,6 +43,23 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## -3. claude-starter v3.10 → v3.11
+
+The token-diet release. The v3.9 audit priced the harness's steady-state
+context costs; v3.11 pays them down architecturally — deletion,
+single-sourcing, on-demand loading, warn caps — never by weakening a
+mechanism (and never by model routing, ADR-002).
+
+### What changed, and why
+
+| v3.10 | v3.11 | Reason |
+|---|---|---|
+| every spawned code project paid ~13.1 KB of always-injected surface per session, with the same facts stated in two or three places (injection mechanics ×3, S7 cap ×3, /task protocol re-taught in every template) and 916 B of writer-preamble riding the seed injection forever | single-sourced: injection mechanics live in `INDEX.md` only, the S7 number in its writing-protocol row, the /task protocol in the skill; template task-sections cut to trigger + branch-fact + profile pin; seed preambles compressed to pointer lines. Floor: 13079 → 11422 B (−12.7%); seed `INDEX.md` regains ~820 B of headroom under its 4 KB warn cap | each restated fact was paid two-to-three times every session and could drift independently; the seed INDEX was born at 94% of its own cap — four knowledge-file rows from training projects to ignore the warning channel |
+| routine `/wrap` loaded 5045 B of which 56% was task-close-out machinery dormant on the majority (no-task) wrap; `task` SKILL carried ~550 B of subagent rules the agent bodies already enforce | wrap body 2495 B + `wrap/reference.md` read only when `tasks/CURRENT` exists or a friction row is being written (loud do-not-improvise pointer in the body); task SKILL sheds the duplicated downstream rules — the agent bodies are the single source | the majority case paid for the minority path at every load; rules that execute only inside agent contexts belong in the agent bodies that carry them anyway |
+| every executor spawn re-read the full raw `plan.md` (uncapped path: ~200 KB est. re-paid across an M task at the recorded 40 KB incident scale); a finished task with `CURRENT` still present kept paying the full task attachment silently; no guard watched the raw plan size | executors receive the armed milestone's FULL plan section in the spawn prompt (authoritative — forward-constraint comments included) and never re-read `plan.md`; session-start nudges all-`[done]`-with-`CURRENT` toward `/wrap`; raw `plan.md` warns past 16 KB | the filtered injection view (v3.9) guarded SessionStart only — the per-spawn full read was the one uncapped token path left, and the artifact that actually hit 40 KB had no eye on it |
 
 ---
 

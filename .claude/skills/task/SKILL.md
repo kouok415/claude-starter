@@ -129,8 +129,10 @@ For each milestone in order:
 
 1. Mark it `[in_progress]` in `plan.md` (exactly one at a time).
 2. **S:** execute it yourself; run its verify; continue at 4.
-   **M/L:** spawn `executor` with the task paths + the milestone text
-   (its own body carries the reading order).
+   **M/L:** spawn `executor` with the task paths + the milestone's FULL
+   plan section — heading, verify/risk lines, comment block (forward
+   constraints ride there). The spawn prompt is authoritative: the
+   executor never re-reads plan.md.
 3. **Verification depth = the milestone's `risk:`** —
    - `low`: no model verifier. The mechanical gate re-runs the verify at
      turn-end; that strength was policed at plan time.

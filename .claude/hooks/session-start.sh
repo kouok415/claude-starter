@@ -114,6 +114,23 @@ if [ -f "$CTX/tasks/CURRENT" ]; then
         fi
       fi
     done
+
+    # Raw plan.md size (F23): the filtered view hides bloat from sessions,
+    # but the raw artifact is what full-file readers pay — the mechanism
+    # that exists because of a 40 KB plan keeps an eye on the actual file.
+    psz="$(wc -c < "$tdir/plan.md" | tr -d ' ')"
+    if [ "$psz" -gt 16384 ]; then
+      printf 'WARNING: raw plan.md is %s bytes (cap 16384) — sessions see the filtered view, but any full-file read pays this; move milestone narrative into the task journal.\n' "$psz"
+    fi
+
+    # Finished-but-unclosed (F22): all-[done] with CURRENT still present is
+    # the normal window between finishing and /wrap — and the lasting state
+    # when wrap is skipped, silently re-paying the task attachment forever.
+    if grep -q '^## .*\[done\]' "$tdir/plan.md" && \
+       ! grep -q '^## .*\[pending\]' "$tdir/plan.md" && \
+       ! grep -q '^## .*\[in_progress\]' "$tdir/plan.md"; then
+      printf 'NOTE: task "%s" is all-[done] but tasks/CURRENT still points at it — run /wrap to write the scoreboard row and clear CURRENT; until then every session pays this task attachment.\n' "$slug"
+    fi
   fi
 fi
 

@@ -14,9 +14,14 @@ Read first, in this order (paths arrive in your prompt):
    will modify or must quote; never re-survey the repo.** (S-size tasks
    have no brief — then your spawn prompt is the map.)
 2. `spec.md` — the goal and acceptance criteria
-3. `plan.md` — locate your milestone (the one marked `[in_progress]`)
-4. `lessons.md` — approaches already tried and failed. Repeating one is the
+3. `lessons.md` — approaches already tried and failed. Repeating one is the
    single unforgivable failure mode here.
+
+Your milestone arrives IN the spawn prompt — its full plan section:
+heading, `verify:`/`risk:` lines, and any forward-constraint comment
+lines. That text is authoritative; do NOT re-read `plan.md` for it (plan
+bytes re-paid per spawn are the 40 KB-plan incident class). If the prompt
+carries no milestone section, say so and stop — never go fishing.
 
 Rules:
 
