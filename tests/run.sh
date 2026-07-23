@@ -342,6 +342,16 @@ else
   mkdir -p "$D5/scripts"; cp "$REPO/scripts/check-state-size.sh" "$REPO/scripts/precommit-gitleaks.sh" "$D5/scripts/"
   "$REPO/sync-project.sh" --update-stock "$D5" >/dev/null 2>&1
   grep -q 'synced-to: claude-starter@' "$D5/.claude/.starter-version" 2>/dev/null && ok "added-only sync still appends the synced-to stamp (attribution integrity)" || no "added-only sync left no stamp — harness column would mis-attribute"
+  # F15: the DEFAULT (no-flag) invocation also mutates mechanisms — it must
+  # stamp too, and a no-op re-run must not stamp again.
+  D6="$WORK/l14c"; mkdir -p "$D6/.ai_context"
+  cp "$REPO/.ai_context/INDEX.md" "$D6/.ai_context/"
+  "$REPO/sync-project.sh" "$D6" >/dev/null 2>&1
+  grep -q 'synced-to: claude-starter@' "$D6/.claude/.starter-version" 2>/dev/null && ok "no-flag sync that adds files appends the synced-to stamp (F15)" || no "no-flag sync left no stamp — version mis-attribution lives on"
+  n1=$(grep -c 'synced-to' "$D6/.claude/.starter-version" 2>/dev/null)
+  "$REPO/sync-project.sh" "$D6" >/dev/null 2>&1
+  n2=$(grep -c 'synced-to' "$D6/.claude/.starter-version" 2>/dev/null)
+  [ "$n1" = "$n2" ] && ok "no-op sync appends no stamp (no spam)" || no "no-op sync stamped anyway ($n1 -> $n2)"
 fi
 if [ -f "$REPO/sync-project.sh" ]; then
   unpaired=""

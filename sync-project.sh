@@ -155,9 +155,12 @@ stock_update .pre-commit-config.yaml
 
 chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/scripts/*.sh 2>/dev/null || true
 
-# --update-stock leaves a provenance trail: the spawn stamp records which
-# template vintage the mechanisms were last synced to (stale-spawner debugging).
-if [ "$UPDATE_STOCK" = 1 ] && [ "$(( ${#updated[@]} + ${#added[@]} ))" -gt 0 ]; then
+# Any sync that changed mechanisms leaves a provenance trail: the stamp
+# records which template vintage the mechanisms were last synced to
+# (stale-spawner debugging; per-version fleet attribution). v3.9 stamped
+# only under --update-stock, so a default sync that ADDED new-version
+# files kept the old vintage and mis-attributed later task rows (F15).
+if [ "$(( ${#updated[@]} + ${#added[@]} ))" -gt 0 ]; then
   ref="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   printf 'synced-to: claude-starter@%s on %s\n' "$ref" "$(date +%F)" \
     >> "$TARGET/.claude/.starter-version" 2>/dev/null || true

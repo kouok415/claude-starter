@@ -223,10 +223,26 @@ rm -rf start_project.sh bootstrap-machine.sh sync-project.sh \
 
 chmod +x .claude/hooks/*.sh scripts/*.sh 2>/dev/null || true
 
-# Provenance: record which template checkout spawned this project (debugging
-# stale-spawner incidents; sync tooling can read the vintage).
-STARTER_REF="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-printf 'spawned-by: claude-starter@%s on %s\n' "$STARTER_REF" "$TODAY" > .claude/.starter-version
+# Provenance: record which template vintage spawned this project (debugging
+# stale-spawner incidents; sync tooling and fleet reports read the vintage).
+# GitHub mode clones the SERVER-side template head — the local spawner
+# checkout may be behind it, the exact stale-spawner case the stamp exists
+# to debug (F16) — so resolve the template's default-branch head via gh api;
+# unresolvable (offline flake) falls back to the local rev, LABELED as the
+# spawner checkout so it is never mistaken for the template head. --local
+# copies this checkout, so its rev IS the vintage.
+LOCAL_REF="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [ "$LOCAL" = 0 ]; then
+  TPL_REF="$(gh api "repos/$TEMPLATE/commits/HEAD" --jq '.sha[:7]' 2>/dev/null || echo '')"
+  if [ -n "$TPL_REF" ]; then
+    printf 'spawned-by: claude-starter@%s on %s\n' "$TPL_REF" "$TODAY" > .claude/.starter-version
+  else
+    printf 'spawned-by: claude-starter@%s on %s (template-head unresolved; this is the spawner-checkout ref)\n' \
+      "$LOCAL_REF" "$TODAY" > .claude/.starter-version
+  fi
+else
+  printf 'spawned-by: claude-starter@%s on %s\n' "$LOCAL_REF" "$TODAY" > .claude/.starter-version
+fi
 
 # --- pre-commit (mechanical H1/S7 enforcement) -----------------------------------
 if have pre-commit && [ -f .pre-commit-config.yaml ]; then
