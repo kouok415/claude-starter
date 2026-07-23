@@ -1,4 +1,4 @@
-<!-- global-claude schema: v2 | Last updated: 2026-07-06 -->
+<!-- global-claude schema: v2 | Last updated: 2026-07-23 -->
 
 # Global Engineering Principles
 
@@ -24,8 +24,7 @@ plausible invention is not.
 **Verification first.** A task is done only when the project's Definition
 of done (in its `CLAUDE.md`) is met and you have *observed* it working —
 ran the test, exercised the change, looked at the output. "Should work" is
-not "works". If the project defines a Verify command, run it before
-declaring success. Unverified work is reported as unverified.
+not "works"; the project's DoD carries the Verify contract.
 
 **Minimum viable change.** Don't refactor what wasn't asked. No
 abstractions for hypothetical futures. Match surrounding style. Touch only
@@ -64,9 +63,9 @@ Two memory systems exist. Do not double-write.
 - **`./.ai_context/` (in-repo, shared)** — project truth: current state,
   decisions (ADRs), domain knowledge, event journal. If
   `.ai_context/INDEX.md` exists, read it first, then `state.md`; INDEX is
-  the authority for layout, reading triggers, and the hard rules (H1–H4,
-  L1). Well-formed projects inject both automatically via a SessionStart
-  hook. Do not auto-create `.ai_context/` in projects that lack it.
+  the authority for layout, reading triggers, the hard rules (H1–H4, L1),
+  and how its own injection works. Do not auto-create `.ai_context/` in
+  projects that lack it.
 - **Claude-native memory (per-user)** — cross-project personal context:
   who the user is, feedback on how to work, preferences. Never store
   project facts there; those belong in the project's `.ai_context/`.
@@ -88,7 +87,8 @@ context window was half wasted.
 - **S5 — No emotional content.** Facts and decisions only.
 - **S6 — No PR/commit copies.** Git already stores those; reference by
   hash or URL.
-- **S7 — `state.md` ≤ 5 KB.** Archive resolved sections to `journal/`.
+- **S7 — `state.md` stays small.** Archive resolved sections to `journal/`
+  (cap: INDEX writing protocol; hook + pre-commit enforced).
 
 *(S5–S7 were numbered L2–L4 in schema v1. H1–H4 and L1 live in each
 project's `INDEX.md` Forbidden section because they are project-data

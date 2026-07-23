@@ -1,32 +1,23 @@
 <!-- schema: v3 -->
-<!--
-purpose: Registry of .ai_context/ — what's here, when to read, when to write.
-mutability: edit when adding or removing files; otherwise stable.
-do-not: no project content here — only meta-information about other files;
-        keep this file ≤ 4 KB (it is injected into every session).
--->
+<!-- Meta-registry only, ≤4 KB (injected every session). Per-file writing
+     rules live in §Writing protocol below. -->
 
 # .ai_context Index
 
-Claude's persistent project memory. Each file declares its own rules in a
-top-of-file HTML-comment preamble — read it before writing. This file and
-`state.md` are auto-injected at every session start (hooks); read the rest
-**on-demand**:
+Claude's persistent project memory. This file and `state.md` are
+auto-injected at every session start (hooks); read the rest **on-demand**:
 
 | Situation | Read |
 |---|---|
 | Design choice, picking between options, dependency pick | `decisions.md` (check existing ADRs first) |
-| Touching the API, changing contracts | `knowledge/api-spec.md` |
-| Code review, PR, writing new code | `knowledge/conventions.md` |
-| Unfamiliar domain term | `knowledge/glossary.md` |
+| Domain reference needed (contracts, conventions, terms) | the matching `knowledge/*.md` (create on demand, add a row here) |
 | Past event, debate, retro, specific date | search `journal/YYYY-MM-DD-*.md` |
 | Sensitive scratch, local-only notes | `private/` |
 | Active `/task` (`tasks/CURRENT` exists) | that task's `brief.md` + `plan.md` + `lessons.md` (auto-injected too) |
 
 Don't warm up on `journal/` or `knowledge/` — they exist for retrieval.
-Procedural knowledge (runbooks, checklists, how-tos) belongs in a skill
-(`.claude/skills/<name>/SKILL.md`), which loads itself on demand; keep
-factual reference (contracts, glossaries) in `knowledge/`.
+Procedural knowledge (runbooks, how-tos) belongs in a skill
+(`.claude/skills/<name>/SKILL.md`); factual reference in `knowledge/`.
 
 ## Writing protocol
 
@@ -34,9 +25,9 @@ factual reference (contracts, glossaries) in `knowledge/`.
 |---|---|
 | `state.md` | overwrite; reflects *now* only; ≤5 KB (S7) |
 | `decisions.md` | append-only ADRs; never edit existing entries |
-| `knowledge/*.md` | accumulate; create on demand (no empty stubs), add a row here |
+| `knowledge/*.md` | accumulate; create on demand (no empty stubs), add a row above |
 | `journal/*.md` | append-only; one file per event; first line = one-sentence summary |
-| `tasks/<slug>/spec.md` | frozen once the plan is approved (reframer rung-4 patches excepted — note them in lessons) |
+| `tasks/<slug>/spec.md` | frozen once the plan is approved (reframer rung-4 patches excepted — note in lessons) |
 | `tasks/<slug>/plan.md` | statuses updated at every transition; exactly one `[in_progress]` |
 | `tasks/<slug>/brief.md` | scout-written map; others append dated corrections; ≤4 KB |
 | `tasks/<slug>/lessons.md` | append-only; one line per lesson; ≤4 KB |
@@ -53,18 +44,15 @@ write-back is half a loop. Teams with concurrent ADR writers: switch to
 
 - **H1 — No secrets.** No keys, tokens, passwords, connection strings, or
   internal URLs — not even as placeholders. Write `<redacted>` plus where
-  the real value lives (e.g., "in `.env`" or "in `.secrets/`" — both are
-  runtime-only: code reads them, Claude and git do not).
-- **H2 — No fact duplication.** If it exists in README, code, type
-  signatures, or git history, reference it by path — don't copy it here.
-  Duplication creates drift.
+  the real value lives (`.env` / `.secrets/` — runtime-only homes).
+- **H2 — No fact duplication.** If it exists in README, code, or git
+  history, reference it by path — duplication creates drift.
 - **H3 — No speculation as fact.** Tag tentative claims `[TENTATIVE]` or
   `[HYPOTHESIS]`; untagged statements are trusted as facts.
 - **H4 — Right file, right purpose.** *Now* → `state.md`; *permanent* →
-  `decisions.md` / `knowledge/`; *this event* → `journal/`. Wrong placement
-  pollutes the category.
-- **L1 — No real names.** Use roles (`PM`, `customer-A`, `vendor-X`). Real
-  names at most in `private/`, never in tracked files.
+  `decisions.md` / `knowledge/`; *this event* → `journal/`.
+- **L1 — No real names.** Roles only (`PM`, `customer-A`); real names at
+  most in `private/`.
 
 ## Mechanisms
 

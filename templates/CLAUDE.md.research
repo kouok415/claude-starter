@@ -47,7 +47,8 @@
 
 ## Memory & mechanisms
 
-- `INDEX.md` + `state.md` auto-injected each session via `.claude/` hooks.
+- `.ai_context/` is the project's persistent memory; `INDEX.md` is the
+  authority for what lives where.
 - Run `/wrap` at session end — research memory rots faster than code.
 
 ## Long-horizon tasks
@@ -56,5 +57,3 @@
   through `/task <description>` — milestones gate on **artifact checks**
   (`test -s reports/x.md`, section counts, source counts), not test suites.
 - Work happens on a `task/<slug>` branch; every passed gate is a commit.
-- `/task --auto` runs unattended; intent calls land in spec.md as
-  `[ASSUMED: ...]` for later review.

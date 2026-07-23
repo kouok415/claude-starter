@@ -1,13 +1,4 @@
-<!--
-purpose: Current project snapshot — what is happening now, not history.
-mutability: overwrite-friendly. When a section is no longer "now", remove it
-            (or archive resolved sections to journal/ if worth preserving).
-format: keep sections short. Use [TENTATIVE] tag for unconfirmed items.
-        Add `Last updated: YYYY-MM-DD` to any section claiming current state.
-        Run /wrap at session end to keep this file honest.
-do-not: don't accumulate history here. don't paste large logs (link instead).
-        don't exceed 5 KB total — archive to journal/ when full (S7).
--->
+<!-- Snapshot of NOW, overwrite-friendly — writing rules: INDEX.md §Writing protocol. -->
 
 # Project State
 

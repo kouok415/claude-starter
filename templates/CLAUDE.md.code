@@ -47,9 +47,8 @@ A change is complete only when all of these hold (edit to fit the project):
 
 ## Memory & mechanisms
 
-- `.ai_context/` is this project's persistent memory. `INDEX.md` + `state.md`
-  are injected automatically at session start (`.claude/settings.json`
-  hooks), including after compaction — no manual protocol needed.
+- `.ai_context/` is this project's persistent memory; `INDEX.md` is the
+  authority for what lives where and when to read it.
 - Run `/wrap` at the end of a session to write memory back.
 - For instant lint feedback on every edit, copy
   `.claude/hooks/lint.sh.example` → `lint.sh` once the stack exists.
@@ -57,17 +56,10 @@ A change is complete only when all of these hold (edit to fit the project):
 ## Long-horizon tasks
 
 - Any task expected to exceed ~30 minutes of autonomous work goes through
-  `/task <description>` — milestone plan, a fresh executor context per
-  milestone, adversarial verification, and a Stop gate on each milestone's
-  verify command.
+  `/task <description>` — the skill carries the full protocol.
 - Task work happens on a `task/<slug>` branch; every passed gate is a commit.
-- Stuck-milestone escalation: retry differently → 3 divergent parallel
-  attempts (worktrees) → reframe the problem → stop and report.
-- `/task --auto <description>` runs unattended: ambiguity calls are
-  recorded as `[ASSUMED: ...]` in spec.md instead of asked — review them
-  before merging.
-- Profile is auto-detected from the session model and frozen per task.
-  To pin it for this project, uncomment one:
+- Profile is auto-detected and frozen per task. To pin it for this project,
+  uncomment one:
   <!-- Task profile: opus-tier -->
   <!-- Task profile: fable-tier -->
   <!-- Task profile: mixed  (also pin `model: opus` in .claude/agents/executor.md) -->

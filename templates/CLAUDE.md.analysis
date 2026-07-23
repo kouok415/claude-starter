@@ -44,7 +44,8 @@ metric). A number without a pinned definition is not a result.
 
 ## Memory & mechanisms
 
-- `INDEX.md` + `state.md` auto-injected each session via `.claude/` hooks.
+- `.ai_context/` is the project's persistent memory; `INDEX.md` is the
+  authority for what lives where.
 - Run `/wrap` at session end.
 
 ## Long-horizon tasks
@@ -53,5 +54,3 @@ metric). A number without a pinned definition is not a result.
   `/task <description>` — milestone verify commands are pipeline slices
   (one day / one symbol / one cohort) or output-schema checks.
 - Work happens on a `task/<slug>` branch; every passed gate is a commit.
-- `/task --auto` runs unattended; intent calls land in spec.md as
-  `[ASSUMED: ...]` for later review.
