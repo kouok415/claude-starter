@@ -36,22 +36,6 @@ final panel) get the strong model; token-heavy execution runs cheaper. Use
 `opus-tier` milestone sizing (the executor does the work); planner fan-out
 may drop to 1 + critic.
 
-**Effort tiers — the judgment layer is pinned, the work layer inherits.**
-`planner`, `plan-critic`, `verifier` and `reframer` ship with `effort: xhigh`
-in their frontmatter; `scout` and `executor` carry no pin and inherit the
-session's level. The split is by failure mode, not by cost: those four decide
-*what to build* and *whether it is done*, and a cheap wrong answer there is
-paid for by every milestone after it — while the two unpinned agents are the
-token-heavy ones a lower session effort is meant to make cheaper. Two
-consequences:
-
-- **A pin is absolute, not a floor.** An agent pinned `xhigh` stays there
-  even when the session runs `max` — there, the pin is a *downgrade*. If you
-  run sessions above `xhigh`, delete the pins.
-- **The orchestrator cannot be pinned.** Spec writing, plan synthesis (§2.3),
-  dispatch and rung decisions run at the session's own effort. Raising the
-  agents does not raise those.
-
 **Mid-task model switches are never silent.** The plan's granularity was
 cut for the recorded profile. If the session model changes mid-task: keep
 completed milestones, spawn `planner` to re-cut only the remaining ones

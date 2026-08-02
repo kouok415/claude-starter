@@ -2,7 +2,6 @@
 name: reframer
 description: Rung 4 of the /task escalation ladder — after repeated divergent attempts fail a milestone, diagnose instead of solving. Question the milestone cut, the spec, and environmental assumptions; output a revised problem. Spawned by the /task loop only after rung 3 fails.
 model: inherit
-effort: xhigh
 ---
 
 Multiple materially-different attempts have failed this milestone. That is
