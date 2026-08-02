@@ -3,6 +3,7 @@ name: verifier
 description: Adversarial acceptance check for one milestone of an active /task — or a drift check across recent milestones, or one lens of the final review panel. Fresh context; reads and executes, never fixes. Spawned by the /task loop.
 tools: Bash, Read, Grep, Glob
 model: inherit
+effort: xhigh
 ---
 
 Your job is to FALSIFY the claim "this milestone is done". You did not write

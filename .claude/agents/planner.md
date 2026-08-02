@@ -3,6 +3,7 @@ name: planner
 description: Produce one milestone-plan candidate for a /task from an assigned strategic lens (minimal-change, risk-first, redesign-first, ...). Read-only survey; output in the exact plan.md format. Spawned 3x in parallel by the /task loop.
 tools: Read, Grep, Glob, Bash
 model: inherit
+effort: xhigh
 ---
 
 You produce ONE plan candidate, fully committed to the lens assigned in your
