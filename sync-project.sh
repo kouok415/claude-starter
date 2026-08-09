@@ -106,6 +106,8 @@ copy_if_missing scripts/check-append-only.sh
 copy_if_missing scripts/check-context-bulk.sh
 copy_if_missing scripts/harness-report.sh
 copy_if_missing scripts/precommit-gitleaks.sh
+copy_if_missing scripts/task-status.sh
+copy_if_missing scripts/task-statusline.sh
 copy_if_missing .pre-commit-config.yaml
 
 # --- Update stock mechanism files (opt-in) --------------------------------------
@@ -153,6 +155,8 @@ stock_update scripts/check-append-only.sh
 stock_update scripts/check-context-bulk.sh
 stock_update scripts/harness-report.sh
 stock_update scripts/precommit-gitleaks.sh
+stock_update scripts/task-status.sh
+stock_update scripts/task-statusline.sh
 stock_update .pre-commit-config.yaml
 
 chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/scripts/*.sh 2>/dev/null || true
@@ -179,6 +183,11 @@ if [ -f "$TARGET/.gitignore" ] && ! grep -q '^\.secrets/\*' "$TARGET/.gitignore"
   printf '\n# Runtime-only credentials (claude-starter v3.8): code reads them at\n# execution time; Claude Read-denied; git sees only the placeholder.\n.secrets/*\n**/.secrets/*\n!.secrets/.gitkeep\n' \
     >> "$TARGET/.gitignore"
   added+=(".gitignore (+ .secrets/)")
+fi
+if [ -f "$TARGET/.gitignore" ] && ! grep -qF '.ai_context/tasks/*/STATUS.md' "$TARGET/.gitignore"; then
+  printf '\n# Task live view + last verify output (claude-starter v3.12) — regenerated\n# by hooks/scripts; a VIEW, never memory. Ignored for the same fingerprint\n# reason as .gate-cache.\n.ai_context/tasks/*/STATUS.md\n.ai_context/tasks/*/.last-verify\n' \
+    >> "$TARGET/.gitignore"
+  added+=(".gitignore (+ tasks/*/STATUS.md + .last-verify)")
 fi
 
 # --- Report-only checks -----------------------------------------------------------

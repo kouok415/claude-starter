@@ -999,6 +999,14 @@ grep -qF 'Kickoff brief' "$REPO/.claude/skills/task/reference.md" && ok "referen
 grep -qF -- '- demo:' "$REPO/.claude/agents/executor.md" && ok "executor contract demands the demo" || no "executor lost the demo duty"
 grep -qF 'ASSUMED' "$REPO/.claude/agents/verifier.md" && ok "verifier drift mode audits the ASSUMED ledger" || no "verifier lost the intent lens"
 grep -qF 'task-status.sh' "$REPO/.claude/hooks/session-start.sh" && ok "session-start refreshes the view on resume" || no "session-start refresh missing"
+# sync-project.sh manifest completeness: every shipped mechanism file must
+# be named there, or spawned-then-synced projects silently miss additions
+# (exactly how the v3.12 scripts were first forgotten).
+miss=""
+for f in $(cd "$REPO" && ls scripts/*.sh .claude/hooks/*.sh .claude/agents/*.md .claude/skills/*/SKILL.md .claude/skills/*/reference.md 2>/dev/null); do
+  grep -qF "$f" "$REPO/sync-project.sh" || miss="$miss $f"
+done
+[ -z "$miss" ] && ok "sync-project.sh manifest covers every mechanism file" || no "sync-project.sh manifest missing:$miss"
 
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"
