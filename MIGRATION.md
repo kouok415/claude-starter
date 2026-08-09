@@ -46,7 +46,7 @@ English README are the authority when translations drift):
 
 ---
 
-## -4. claude-starter v3.11 → v3.12 (unreleased)
+## -4. claude-starter v3.11 → v3.12
 
 The legibility release: the harness's founding principle — model promises
 get mechanical backstops — applied to the HUMAN channel for the first
