@@ -95,6 +95,11 @@ if [ -f "$CTX/tasks/CURRENT" ]; then
     emit_plan "$tdir/plan.md"
     emit_file "$tdir/lessons.md"
 
+    # Refresh the human's live view on resume (a view, never injected —
+    # spec/plan above already carry the model's copy of this state).
+    [ -f "$ROOT/scripts/task-status.sh" ] && \
+      bash "$ROOT/scripts/task-status.sh" "$tdir" >/dev/null 2>&1 || true
+
     # Status corruption / resume nudge: [pending] milestones but none
     # [in_progress] means the Stop gate is not armed (a typo'd status tag
     # does exactly this). The stop-gate blocks the mid-flight case once per

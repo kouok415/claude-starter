@@ -25,7 +25,7 @@ skp()  { SKIP=$((SKIP+1)); echo "SKIP: $*"; }
 ck()   { local want="$1" got="$2"; shift 2; if [ "$want" = "$got" ]; then ok "$*"; else no "$* (want rc=$want got rc=$got)"; fi; }
 
 WORK="$(mktemp -d)"
-cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-stuck-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
+cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-stuck-tsuite-* "${TMPDIR:-/tmp}"/claude-status-nag-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
 trap cleanup EXIT
 
 # Spec-faithful plan fixture: format header INCLUDED, one in_progress.
@@ -484,7 +484,7 @@ echo "=== L1-6 · resident-size guards + security entries"
 sz=$(wc -c < "$REPO/.ai_context/INDEX.md")
 [ "$sz" -le 4096 ] && ok "INDEX.md within 4 KB ($sz B — injected every session)" || no "INDEX.md re-bloated ($sz B > 4096)"
 sz=$(wc -c < "$REPO/.claude/skills/task/SKILL.md")
-[ "$sz" -le 11264 ] && ok "task SKILL.md within 11 KB ($sz B)" || no "task SKILL.md bloated ($sz B) — move detail to reference.md"
+[ "$sz" -le 12288 ] && ok "task SKILL.md within 12 KB ($sz B — raised from 11 KB for the v3.12 legibility duties)" || no "task SKILL.md bloated ($sz B) — move detail to reference.md"
 sz=$(wc -c < "$REPO/.claude/skills/wrap/SKILL.md")
 [ "$sz" -le 2560 ] && ok "wrap SKILL.md within 2.5 KB ($sz B — task machinery lives in reference.md)" || no "wrap SKILL.md bloated ($sz B > 2560)"
 [ -f "$REPO/.claude/skills/wrap/reference.md" ] && ok "wrap reference.md exists (on-demand task close-out)" || no "wrap reference.md missing"
@@ -930,6 +930,75 @@ if [ -f "$REPO/MIGRATION.md" ] && [ -f "$REPO/README.zh-TW.md" ]; then
 else
   skp "doc freshness smoke (spawned project — template-repo only)"
 fi
+
+echo "=== L1-19 · task legibility: STATUS.md view + statusline (v3.12)"
+TS="$REPO/scripts/task-status.sh"
+TSL="$REPO/scripts/task-statusline.sh"
+D="$WORK/l119"; mkdir -p "$D/.ai_context/tasks/lg" "$D/scripts"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo lg > "$D/.ai_context/tasks/CURRENT"
+cat > "$D/.ai_context/tasks/lg/plan.md" <<'EOF'
+# Plan: legibility fixture
+<!-- profile: opus-tier ; size: M -->
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: groundwork [done]
+- verify: `true`
+- risk: low
+- demo: run the tool, see the usage line
+
+## M2: current [in_progress]
+- verify: `true`
+- risk: med
+- demo: run the tool on a fixture, see exit 1 + offenders
+
+## M3: future [pending]
+- verify: `false`
+- risk: low
+EOF
+printf '# Spec\n## Assumptions\n- [ASSUMED: fixture assumption]\n' > "$D/.ai_context/tasks/lg/spec.md"
+bash "$TS" "$D/.ai_context/tasks/lg"
+ck 0 $? "task-status.sh exits 0 on a well-formed task dir"
+ST="$D/.ai_context/tasks/lg/STATUS.md"
+[ -f "$ST" ] && ok "STATUS.md created" || no "STATUS.md missing"
+grep -q 'M2 (2/3)' "$ST" && ok "position names the armed milestone" || no "position line wrong"
+grep -q 'mermaid' "$ST" && ok "mermaid map present" || no "mermaid map missing"
+grep -qF 'run the tool on a fixture' "$ST" && ok "demo promises rendered" || no "demo promises missing"
+grep -qF '[ASSUMED: fixture assumption]' "$ST" && ok "ASSUMED ledger mirrored from spec" || no "ASSUMED ledger missing"
+grep -qF 'unwritten — orchestrator' "$ST" && ok "fresh view carries the architecture stub" || no "architecture stub missing"
+# model-owned tail survives regeneration; machine region tracks transitions
+awk '/status:machine:end/{print; print "## Architecture"; print ""; print "ARCH-KEEP line"; exit} {print}' "$ST" > "$ST.tmp" && mv "$ST.tmp" "$ST"
+sed -i.bak 's/## M2: current \[in_progress\]/## M2: current [done]/; s/## M3: future \[pending\]/## M3: future [in_progress]/' "$D/.ai_context/tasks/lg/plan.md" && rm -f "$D/.ai_context/tasks/lg/plan.md.bak"
+bash "$TS" "$D/.ai_context/tasks/lg"
+grep -qF 'ARCH-KEEP line' "$ST" && ok "model-owned tail survives regeneration" || no "regeneration ate the model section"
+grep -q 'M3 (3/3)' "$ST" && ok "machine region tracks the transition" || no "machine region stale after transition"
+grep -qF 'unwritten — orchestrator' "$ST" && no "stub resurrected over model content" || ok "stub gone once the model wrote"
+# stop-gate integration: PASS captures .last-verify, refreshes the view, nags once
+sed -i.bak 's/## M2: current \[done\]/## M2: current [in_progress]/; s/## M3: future \[in_progress\]/## M3: future [pending]/' "$D/.ai_context/tasks/lg/plan.md" && rm -f "$D/.ai_context/tasks/lg/plan.md.bak"
+cp "$TS" "$D/scripts/task-status.sh"
+rm -f "$ST"
+out=$(printf '{"session_id": "tsuite-lg"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "green verify passes with the renderer installed"
+[ -f "$D/.ai_context/tasks/lg/.last-verify" ] && ok "PASS captured .last-verify" || no ".last-verify missing"
+[ -f "$ST" ] && ok "PASS regenerated STATUS.md" || no "gate did not refresh the view"
+echo "$out" | grep -q 'Architecture is still the stub' && ok "stub nag fired on PASS (systemMessage)" || no "stub nag missing"
+out=$(printf '{"session_id": "tsuite-lg"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null)
+echo "$out" | grep -q 'Architecture is still the stub' && no "stub nag repeated in-session" || ok "stub nag is once per session"
+# statusline: position line when a task is armed, silence otherwise
+sl=$(printf '{"current_dir":"%s"}' "$D" | bash "$TSL")
+echo "$sl" | grep -q 'lg ▶ 2/3' && ok "statusline shows slug + position ($sl)" || no "statusline wrong: '$sl'"
+sl=$(printf '{}' | CLAUDE_PROJECT_DIR="$WORK" bash "$TSL")
+[ -z "$sl" ] && ok "no task → empty statusline" || no "statusline noisy without a task: '$sl'"
+# the view never enters git or the fingerprint (gate-cache precedent)
+grep -qF '.ai_context/tasks/*/STATUS.md' "$REPO/.gitignore" && ok "STATUS.md gitignored (fingerprint-safe)" || no "STATUS.md ignore missing"
+grep -qF '.ai_context/tasks/*/.last-verify' "$REPO/.gitignore" && ok ".last-verify gitignored" || no ".last-verify ignore missing"
+# prose ↔ mechanism links (README §Prose → mechanism discipline)
+grep -qF -- '- demo:' "$REPO/.claude/skills/task/SKILL.md" && ok "SKILL.md carries the demo-line plan contract" || no "SKILL.md lost the demo line"
+grep -qF 'STATUS.md' "$REPO/.claude/skills/task/SKILL.md" && ok "SKILL.md names the STATUS.md duty" || no "SKILL.md lost STATUS.md"
+grep -qF 'Kickoff brief' "$REPO/.claude/skills/task/reference.md" && ok "reference.md carries the kickoff-brief format" || no "kickoff-brief section missing"
+grep -qF -- '- demo:' "$REPO/.claude/agents/executor.md" && ok "executor contract demands the demo" || no "executor lost the demo duty"
+grep -qF 'ASSUMED' "$REPO/.claude/agents/verifier.md" && ok "verifier drift mode audits the ASSUMED ledger" || no "verifier lost the intent lens"
+grep -qF 'task-status.sh' "$REPO/.claude/hooks/session-start.sh" && ok "session-start refreshes the view on resume" || no "session-start refresh missing"
 
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"

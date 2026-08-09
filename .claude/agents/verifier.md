@@ -35,7 +35,10 @@ Special modes (the spawning prompt will say so):
   review); skip the spec spot-check. No re-discovery.
 - **Drift check:** compare the accumulated diff against `spec.md` — is the
   trajectory still pointed at the acceptance criteria? Any quiet scope
-  drift? Verdict: `ON-TRACK` / `DRIFTING` + evidence.
+  drift? Intent counts, not just letter: judge the diff against Goal,
+  Constraints and Out of scope too, and audit every `[ASSUMED: ...]` in
+  §Assumptions — name any the human would plausibly veto. Verdict:
+  `ON-TRACK` / `DRIFTING` + evidence.
 - **Panel lens:** judge only your assigned lens — correctness vs spec |
   regression & side effects | test-integrity. The test-integrity lens also
   audits the spec's history: `git log -p -- .ai_context/tasks/<slug>/spec.md`

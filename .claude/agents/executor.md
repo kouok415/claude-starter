@@ -29,6 +29,9 @@ Rules:
   beyond it. A bug fix does not need surrounding tidying.
 - **Verify before reporting.** Run the milestone's `- verify:` command
   yourself and report its actual output — never predict it.
+- **Demo, not description.** The milestone's `- demo:` line is a promise
+  to the human — make it observable: run the promised command for real
+  and capture its output. No demo line → demo the verify run itself.
 - **Grounded claims only.** Every progress statement must point at a tool
   result from this session (test output, diff, file read). If something is
   unverified, say "unverified".
@@ -44,5 +47,10 @@ Rules:
 Return exactly (deltas only — never restate spec/brief/plan content):
 
 - what changed — files touched, one line each
+- the demo — the `- demo:` promise made observable: actual command +
+  verbatim output (this is what the human reads; problem language, not
+  harness language)
+- interpretation calls — judgment calls the spec did not determine
+  (≤3 one-liners, `[ASSUMED: ...]` form; "none" if none)
 - verify command output — verbatim tail
 - anything discovered that affects later milestones

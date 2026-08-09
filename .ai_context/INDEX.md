@@ -27,12 +27,13 @@ Procedural knowledge (runbooks, how-tos) belongs in a skill
 | `decisions.md` | append-only ADRs; never edit existing entries |
 | `knowledge/*.md` | accumulate; create on demand (no empty stubs), add a row above |
 | `journal/*.md` | append-only; one file per event; first line = one-sentence summary |
-| `tasks/<slug>/spec.md` | frozen once the plan is approved (reframer rung-4 patches excepted — note in lessons) |
+| `tasks/<slug>/spec.md` | frozen once the plan is approved (reframer rung-4 patches excepted — note in lessons); §Assumptions alone stays append-only during the run |
 | `tasks/<slug>/plan.md` | statuses updated at every transition; exactly one `[in_progress]` |
 | `tasks/<slug>/brief.md` | scout-written map; others append dated corrections; ≤4 KB |
 | `tasks/<slug>/lessons.md` | append-only; one line per lesson; ≤4 KB |
 | `tasks/<slug>/gatelog` | hook-written only, never hand-edited |
 | `tasks/<slug>/spawnlog` | hook-written only, never hand-edited |
+| `tasks/<slug>/STATUS.md` | view, not memory: machine region hook-regenerated; model writes §Architecture only; gitignored |
 | `scoreboard.csv` | append-only (A/B dataset); corrections are appended, never edited |
 | `private/*` | free-form; gitignored |
 

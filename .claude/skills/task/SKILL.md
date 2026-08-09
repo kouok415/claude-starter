@@ -14,9 +14,9 @@ map already covers. Task state lives in `.ai_context/tasks/<slug>/`; the
 Stop gate (`.claude/hooks/stop-gate.sh`) independently re-runs the current
 milestone's verify command at end-of-turn (unchanged tree = cached PASS).
 
-Token discipline, both directions: spawn prompts carry deltas — paths, the
-milestone, the changed-file list — not restated documents; subagents return
-deltas, not summaries of what they read.
+Token discipline, both directions: spawn prompts carry deltas (paths, the
+milestone, changed files), not restated documents; subagents return
+deltas, not summaries.
 
 ## 0 · Intake
 
@@ -33,7 +33,9 @@ deltas, not summaries of what they read.
    `CURRENT`), or defer the new one. One active task at a time.
 1. Derive a short kebab-case `<slug>`.
 2. If scope, constraints, or "what does done mean" are genuinely
-   ambiguous, ask now — never mid-run. **Autonomous mode** (`--auto`, or
+   ambiguous, ask now — never mid-run. Always ask the direction question:
+   "what would make you reject this even with every AC green?" — answers
+   land in Constraints / Out of scope. **Autonomous mode** (`--auto`, or
    the user says to proceed without confirmation): resolve derivable
    ambiguities by reading the code; make a documented call on
    preference/intent ambiguities, each recorded as `[ASSUMED: ...]` in
@@ -93,6 +95,11 @@ Reject vibes criteria ("works well", "clean"). Every AC needs a command or
 a directly observable behavior; if the user can't supply one, propose one
 and confirm it (in `--auto`: record it under Assumptions instead).
 
+§Assumptions is the run's decision ledger — the one spec section that
+stays append-only after the freeze: every spec-underdetermined call lands
+there as `[ASSUMED: ...]` (≤3 per milestone; executors report them, you
+append).
+
 ## 2 · Plan
 
 1. Per the size table: spawn planner(s) — each gets its lens, the spec,
@@ -108,6 +115,11 @@ and confirm it (in `--auto`: record it under Assumptions instead).
 4. Milestone size comes from the profile budget — one fresh executor
    context must finish within it; split anything bigger (gate overhead is
    linear, error compounding is exponential).
+5. Present the **kickoff brief** in prose before M1 (`reference.md`
+   §Kickoff brief): what will exist, each milestone's demo promise, and
+   the veto contract — every milestone lands as one commit, so "M\<n\> is
+   wrong, redo via Z" rolls back one milestone, never the task. plan.md
+   is for the gate's parser; the brief is for the human.
 
 `plan.md` format — **the Stop gate parses this; keep it exact**:
 
@@ -118,10 +130,10 @@ and confirm it (in `--auto`: record it under Assumptions instead).
     ## M1: <milestone title> [pending]
     - verify: `<command that fails today and passes when this milestone is done>`
     - risk: low
+    - demo: <the verify translated for the human: "run X, you will see Y">
 
-**Non-code work** verifies via artifact checks, same executability bar:
-`test -s reports/x.md`, `test "$(grep -c '^## ' reports/x.md)" -ge 6` —
-more patterns in `reference.md` §Non-code verify.
+**Non-code work** verifies via artifact checks, same executability bar
+(`test -s reports/x.md` — patterns: `reference.md` §Non-code verify).
 
 ## 3 · Milestone loop
 
@@ -141,12 +153,17 @@ For each milestone in order:
      scope creep. No re-discovery.
    - `high`: `verifier` full protocol — fresh, adversarial, spot-checks
      the ACs this milestone touches.
-4. **PASS** → mark `[done]`, commit (`feat(<slug>): M<n> <title>`), update
-   state.md Now/Next in two lines, move on.
+4. **PASS** → mark `[done]`, commit (`feat(<slug>): M<n> <title>`), report
+   **demo-first**: the milestone's demo as actual output, then its
+   interpretation calls, then one gate line — never a bare PASS. Append
+   the calls to spec §Assumptions, update state.md Now/Next in two lines,
+   move on. (Hooks keep STATUS.md's machine half fresh; you own its
+   §Architecture — write it at kickoff, keep it current.)
 5. **FAIL** → escalation ladder (§4).
-6. **Drift check** (`verifier` drift mode: accumulated diff vs spec.md):
-   after every `risk: high` milestone; on L additionally at the profile's
-   cadence.
+6. **Drift check** (`verifier` drift mode: accumulated diff vs spec.md,
+   intent included — Goal, Out of scope, the `[ASSUMED]` ledger): after
+   every `risk: high` milestone; at the midpoint of M; on L at the
+   profile's cadence.
 
 The Stop gate re-runs the in_progress verify whenever you try to end a
 turn; a red gate cannot be narrated over — don't try, fix it.
@@ -162,11 +179,10 @@ turn; a red gate cannot be narrated over — don't try, fix it.
 | exhausted | **stop** | append `lessons.md`, write a `journal/` entry, report honestly (three-strikes rule) |
 
 After every failed rung: append what-was-tried / why-it-failed to
-`lessons.md` — the next fresh context must not re-learn it. On
-`fable-tier`, skip rung 3 (two failed distinct approaches from a strong
-model = the problem is mis-posed; diagnose, don't resample). If the
-planner / plan-critic / reframer agents are not installed, collapse rungs
-3–4 into stop-and-report.
+`lessons.md` — the next fresh context must not re-learn it. `fable-tier`
+skips rung 3 (two failed distinct approaches from a strong model = the
+problem is mis-posed; diagnose, don't resample). Planner / plan-critic /
+reframer not installed → collapse rungs 3–4 into stop-and-report.
 
 ## 5 · Completion
 
@@ -182,14 +198,16 @@ planner / plan-critic / reframer agents are not installed, collapse rungs
 
 ## Profiles — one protocol, tiered knobs
 
-The core is model-independent and always fully on: stop gate, external
-state, fresh-context verification, executable ACs, lessons, scoreboard.
-Only knobs scale with the model tier (milestone budget, planner fan-out,
-executor prompt style, drift cadence, ladder shape) — table, `mixed` setup
-and the mid-task model-switch protocol: `reference.md` §Profiles.
+The core is model-independent and always fully on; only knobs scale with
+the tier (milestone budget, fan-out, prompt style, drift cadence, ladder
+shape) — table, `mixed` setup, mid-task switch protocol: `reference.md`
+§Profiles.
 
 ## Rules
 
+- Mid-run human messages are first-class: answer from plan/STATUS.md/spec
+  immediately (questions are never interruptions), fold vetoes into the
+  current milestone, resume.
 - Never claim done while a verify is red — the gate blocks it anyway.
 - `plan.md` statuses are the compaction anchor: update them at every
   transition. SessionStart re-injects brief + lessons + a filtered plan
@@ -198,9 +216,9 @@ and the mid-task model-switch protocol: `reference.md` §Profiles.
   THAT milestone's comment block in plan.md — it resurfaces exactly when
   the milestone arms. lessons.md is for approach lessons, not forward
   constraints (it is injected every session; plan comments are lazy).
-- `brief.md` and `lessons.md` are capped at 4 KB (the hook warns): keep
-  one line per entry, move narratives to `journal/`.
-- Scoreboard (written by /wrap on completion): profile, size, milestones,
-  gate failures **counted from `tasks/<slug>/gatelog`** (never from
-  memory), highest rung, interventions. That file decides whether this
-  harness earns its keep — and which knobs earn it for which work.
+- `brief.md` / `lessons.md`: ≤4 KB (the hook warns) — one line per entry,
+  narratives to `journal/`.
+- Scoreboard (/wrap writes it): profile, size, milestones, gate failures
+  **counted from `tasks/<slug>/gatelog`** (never from memory), highest
+  rung, interventions — the file that decides whether this harness earns
+  its keep.

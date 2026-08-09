@@ -194,6 +194,24 @@ red_reset() { # $1 = key — a PASS also re-arms the STUCK row for a fresh strea
   rm -f "$(red_file "$1")" "$(stuck_file "$1")" 2>/dev/null || true
 }
 
+# --- STATUS.md view refresh (v3.12) ------------------------------------------
+# The human-facing live view. Best-effort by design: a missing or failing
+# renderer must never affect the gate verdict. STATUS.md and .last-verify
+# are gitignored, so refreshing them cannot evict the PASS-cache.
+status_refresh() {
+  [ -f "$ROOT/scripts/task-status.sh" ] || return 0
+  bash "$ROOT/scripts/task-status.sh" "$TASKS/$slug" >/dev/null 2>&1 || true
+}
+
+arch_nag() { # PASS-time, once per (session, slug): green runs deserve a live view
+  [ "$MODE" = stop ] || return 0
+  grep -qF 'unwritten — orchestrator' "$TASKS/$slug/STATUS.md" 2>/dev/null || return 0
+  nm="${TMPDIR:-/tmp}/claude-status-nag-${sid_s}-$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
+  [ -f "$nm" ] && return 0
+  : > "$nm" 2>/dev/null || true
+  printf '{"systemMessage":"claude-starter: a milestone PASSed but STATUS.md §Architecture is still the stub — the human-facing view is starving. Describe what is being built (problem language) and keep it current."}\n'
+}
+
 # NOTE: $3 lands inside a JSON string — pass fixed ASCII without quotes only.
 # One STUCK row per (session, milestone) — the yield is one handoff event,
 # however many stops follow it (F10); the systemMessage keeps repeating so
@@ -296,6 +314,7 @@ if [ "$MODE" = sweep ]; then
   fi
   # Explicit /wrap sweep: strict, never yields — /wrap must not wrap red.
   sweep_done_milestones "$all_done" || exit 2
+  status_refresh
   exit 0
 fi
 
@@ -325,6 +344,7 @@ if [ "${n_inprog:-0}" -eq 0 ]; then
       exit 2
     fi
     red_reset "${slug}-sweep"
+    status_refresh
   fi
   exit 0
 fi
@@ -408,6 +428,9 @@ warn_unbounded
 if out="$(run_cmd "$cmd" 2>&1)"; then
   printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
   red_reset "${slug}-${ms:-?}"
+  printf '%s\n' "$out" | tail -n 12 > "$TASKS/$slug/.last-verify" 2>/dev/null || true
+  status_refresh
+  arch_nag
   # Fingerprint AFTER the run: verify itself may write artifacts; caching the
   # post-run state lets the next no-op stop hit the cache.
   fp="$(fingerprint || true)"
@@ -419,6 +442,8 @@ fi
 
 rm -f "$gatecache" 2>/dev/null || true
 printf '%s\t%s\tFAIL\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
+printf '%s\n' "$out" | tail -n 12 > "$TASKS/$slug/.last-verify" 2>/dev/null || true
+status_refresh
 
 # No-spawn diagnosis: on M/L, a red milestone with NO executor spawn row means
 # §3.2 was skipped — the right move is rung 1, not the escalation ladder.
