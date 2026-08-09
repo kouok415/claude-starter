@@ -17,6 +17,15 @@
 
 set -uo pipefail
 
+# CJK-safe truncation: under a UTF-8 locale bash ${var:0:n} counts
+# characters, not bytes — a byte-based cut leaves half a multibyte char in
+# mermaid labels. Missing locale degrades to byte-truncation, never worse.
+if locale -a 2>/dev/null | grep -qiE '^C\.utf-?8$'; then
+  export LC_ALL=C.UTF-8
+elif locale -a 2>/dev/null | grep -qiE '^en_US\.utf-?8$'; then
+  export LC_ALL=en_US.UTF-8
+fi
+
 TDIR="${1:-}"
 if [ -z "$TDIR" ] || [ ! -d "$TDIR" ]; then
   echo "usage: task-status.sh <task-dir>" >&2
@@ -65,17 +74,24 @@ else
   position="○ **no milestone armed** (${n_total} planned)"
 fi
 
-# --- Mermaid map --------------------------------------------------------------
-mermaid="$(printf '%s\n' "$ms_tsv" | awk -F'\t' '
-  {
-    g = ($2=="done") ? "✓" : ($2=="in_progress") ? "▶" : "○"
-    t = $3; if (length(t) > 30) t = substr(t, 1, 29) "…"
-    gsub(/["()]/, "", t)
-    n = sprintf("%s[\"%s %s %s\"]", $1, g, $1, t)
-    out = (NR==1) ? n : out " --> " n
-  }
-  END { print "flowchart LR\n  " out }
-')"
+# --- Mermaid map (truncation in bash: character-based under UTF-8) -----------
+mm_out=""
+while IFS=$'\t' read -r m_id m_st m_ttl; do
+  [ -n "$m_id" ] || continue
+  case "$m_st" in
+    done)        m_g="✓" ;;
+    in_progress) m_g="▶" ;;
+    *)           m_g="○" ;;
+  esac
+  m_t="${m_ttl//\"/}"; m_t="${m_t//(/}"; m_t="${m_t//)/}"
+  [ "${#m_t}" -gt 30 ] && m_t="${m_t:0:29}…"
+  m_n="${m_id}[\"$m_g $m_id $m_t\"]"
+  if [ -z "$mm_out" ]; then mm_out="$m_n"; else mm_out="$mm_out --> $m_n"; fi
+done <<MMEOF
+$ms_tsv
+MMEOF
+mermaid="flowchart LR
+  $mm_out"
 
 # --- Demo promises ------------------------------------------------------------
 promises="$(awk '

@@ -999,6 +999,27 @@ grep -qF 'Kickoff brief' "$REPO/.claude/skills/task/reference.md" && ok "referen
 grep -qF -- '- demo:' "$REPO/.claude/agents/executor.md" && ok "executor contract demands the demo" || no "executor lost the demo duty"
 grep -qF 'ASSUMED' "$REPO/.claude/agents/verifier.md" && ok "verifier drift mode audits the ASSUMED ledger" || no "verifier lost the intent lens"
 grep -qF 'task-status.sh' "$REPO/.claude/hooks/session-start.sh" && ok "session-start refreshes the view on resume" || no "session-start refresh missing"
+# CJK titles must truncate on character boundaries — a byte-based cut
+# leaves invalid UTF-8 inside mermaid labels (found live on stock_AGI).
+mkdir -p "$D/.ai_context/tasks/cjk"
+cat > "$D/.ai_context/tasks/cjk/plan.md" <<'EOF'
+# Plan: 中文截斷
+<!-- profile: fable-tier ; size: S -->
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: 里程碑中文標題超長需要截斷測試甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥 [in_progress]
+- verify: `true`
+- risk: low
+EOF
+bash "$TS" "$D/.ai_context/tasks/cjk"
+if command -v iconv >/dev/null 2>&1; then
+  iconv -f UTF-8 -t UTF-8 "$D/.ai_context/tasks/cjk/STATUS.md" >/dev/null 2>&1 && ok "CJK truncation keeps STATUS.md valid UTF-8" || no "CJK title truncated mid-character (invalid UTF-8 in view)"
+  echo cjk > "$D/.ai_context/tasks/CURRENT"
+  printf '{"current_dir":"%s"}' "$D" | bash "$TSL" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 && ok "CJK truncation keeps statusline valid UTF-8" || no "statusline CJK cut mid-character"
+  echo lg > "$D/.ai_context/tasks/CURRENT"
+else
+  skp "iconv absent — CJK truncation validity unchecked"
+fi
 # sync-project.sh manifest completeness: every shipped mechanism file must
 # be named there, or spawned-then-synced projects silently miss additions
 # (exactly how the v3.12 scripts were first forgotten).

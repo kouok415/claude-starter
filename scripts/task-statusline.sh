@@ -12,6 +12,14 @@
 
 set -uo pipefail
 
+# CJK-safe truncation (see task-status.sh): bash counts characters only
+# under a UTF-8 locale; without one this degrades to byte-truncation.
+if locale -a 2>/dev/null | grep -qiE '^C\.utf-?8$'; then
+  export LC_ALL=C.UTF-8
+elif locale -a 2>/dev/null | grep -qiE '^en_US\.utf-?8$'; then
+  export LC_ALL=en_US.UTF-8
+fi
+
 in="$(cat 2>/dev/null || true)"
 dir="$(printf '%s' "$in" | sed -n 's/.*"current_dir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 [ -n "$dir" ] || dir="$(printf '%s' "$in" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
@@ -23,15 +31,21 @@ slug="$(tr -d '[:space:]' < "$cur")"
 plan="$dir/.ai_context/tasks/$slug/plan.md"
 { [ -n "$slug" ] && [ -f "$plan" ]; } || exit 0
 
-awk -v slug="$slug" '
+info="$(awk '
   /^## / { n++; if ($0 ~ /\[in_progress\]/) { cur = n; line = $0 } }
   END {
     if (!n) exit
-    if (!cur) { printf "%s · no milestone armed", slug; exit }
     sub(/^## /, "", line)
     sub(/[[:space:]]*\[in_progress\].*/, "", line)
-    gsub(/`/, "", line)
-    if (length(line) > 48) line = substr(line, 1, 47) "…"
-    printf "%s ▶ %d/%d · %s", slug, cur, n, line
+    gsub(/`|\t/, "", line)
+    printf "%d\t%d\t%s", cur, n, line
   }
-' "$plan"
+' "$plan")"
+[ -n "$info" ] || exit 0
+cur="${info%%	*}"; rest="${info#*	}"; n="${rest%%	*}"; line="${rest#*	}"
+if [ "${cur:-0}" = 0 ]; then
+  printf '%s · no milestone armed' "$slug"
+  exit 0
+fi
+[ "${#line}" -gt 48 ] && line="${line:0:47}…"
+printf '%s ▶ %s/%s · %s' "$slug" "$cur" "$n" "$line"
