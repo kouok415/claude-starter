@@ -29,12 +29,33 @@ Subagents share your working directory, so isolation must be explicit:
 | Drift-check cadence (L tasks) | every 3rd milestone | every 5th, or after `risk: high` only |
 | Escalation ladder | 1 → 2 → 3 → 4 | 1 → 2 → 4 |
 
-`mixed` — where both tiers are available: pin `model: opus` in
-`.claude/agents/executor.md` and run the session on a fable-class model.
-Judgment-dense, low-token stages (plan synthesis, critique, reframing,
-final panel) get the strong model; token-heavy execution runs cheaper. Use
-`opus-tier` milestone sizing (the executor does the work); planner fan-out
-may drop to 1 + critic.
+`mixed` — where both tiers are available: `bash scripts/task-profile.sh
+mixed` pins `model: opus` on the executor; run the session on a
+fable-class model. Judgment-dense, low-token stages (plan synthesis,
+critique, reframing, final panel) get the strong model; token-heavy
+execution runs cheaper. Use `opus-tier` milestone sizing (the executor
+does the work); planner fan-out may drop to 1 + critic.
+
+`mixed-judge` — the fully pinned split: `bash scripts/task-profile.sh
+mixed-judge` writes every agent's model explicitly — scout, planner,
+plan-critic, reframer, final-verifier → `fable`; executor, verifier →
+`opus` — so the agent layer no longer depends on the session model (run
+the session on either tier; that changes only the orchestration price).
+Knobs: `opus-tier` milestone sizing, 1 + critic fan-out, `fable-tier`
+drift cadence, opus escalation ladder (1 → 2 → 3 → 4).
+
+Selection is per task, applied at intake by `task-profile.sh apply`:
+`/task --profile=mixed-judge ...` pins; a flagless `/task` resets to
+inherit — **except on resume**, where the active task's plan.md header
+wins (`apply` resolves: explicit flag > active header > inherit, and
+warns when a flag contradicts the header — that is a mid-task switch,
+protocol below). Inspect anytime with `task-profile.sh status`; reset
+with `task-profile.sh inherit` (restores frontmatter byte-identical to
+stock, so `--update-stock` syncs work again). While pinned, agent files
+count as customized — sync lists template updates to them as hand-merge
+suggestions; quick path: `inherit` → sync → re-apply. Pins require
+`CLAUDE_CODE_SUBAGENT_MODEL` to be unset — it overrides every
+frontmatter pin (the script warns if it is set).
 
 **Mid-task model switches are never silent.** The plan's granularity was
 cut for the recorded profile. If the session model changes mid-task: keep

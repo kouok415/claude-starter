@@ -45,16 +45,17 @@ deltas, not summaries.
    (ask if it's unclear whose they are). Create `.ai_context/tasks/<slug>/`,
    write the slug into `.ai_context/tasks/CURRENT`, branch `task/<slug>`
    (never run a task on main).
-4. **Pick the profile** (`opus-tier` / `fable-tier` / `mixed`): use the
-   `Task profile:` override in the project's CLAUDE.md if present, else
-   detect your own model tier. Knobs and the `mixed` setup live in
-   `reference.md` §Profiles (same directory as this skill).
+4. **Pick the profile** (`opus-tier`/`fable-tier`/`mixed`/`mixed-judge`):
+   `--profile=X` wins; else CLAUDE.md's `Task profile:`; else your model
+   tier. Run `bash scripts/task-profile.sh apply X` (no explicit choice:
+   omit X — an active plan.md header wins, else inherit). Knobs/setups:
+   `reference.md` §Profiles.
 5. **Size the task** — ceremony scales with the task, not only the model:
 
    | Size | When | Plan | Execute | Final check |
    |---|---|---|---|---|
-   | **S** | ≤2 milestones, all `risk: low`, one area | draft plan.md yourself — no scout, no planners | **yourself, in this context** — no executor spawns; the gate still checks every milestone | 1 `verifier` |
-   | **M** | 3–6 milestones | scout → 1 `planner` + `plan-critic` | fresh `executor` per milestone | 1 `verifier`; 3-lens panel if any `risk: high` |
+   | **S** | ≤2 milestones, all `risk: low`, one area | draft plan.md yourself — no scout, no planners | **yourself, in this context** — no executor spawns; the gate still checks every milestone | 1 `final-verifier` |
+   | **M** | 3–6 milestones | scout → 1 `planner` + `plan-critic` | fresh `executor` per milestone | 1 `final-verifier`; 3-lens panel if any `risk: high` |
    | **L** | >6, architectural, or unfamiliar territory | scout → 3 `planner` lenses + `plan-critic` (fable-tier: 1 + critic) | fresh `executor` per milestone | 3-lens panel |
 
    Record profile AND size in the plan.md header; downstream reads the
@@ -124,7 +125,7 @@ append).
 `plan.md` format — **the Stop gate parses this; keep it exact**:
 
     # Plan: <title>
-    <!-- profile: opus-tier | fable-tier | mixed ; size: S | M | L -->
+    <!-- profile: opus-tier | fable-tier | mixed | mixed-judge ; size: S | M | L -->
     <!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
 
     ## M1: <milestone title> [pending]
@@ -186,7 +187,8 @@ reframer not installed → collapse rungs 3–4 into stop-and-report.
 
 ## 5 · Completion
 
-1. Final check per the size table (§0.5 table, last column). Panel lenses:
+1. Final check — spawn `final-verifier` per the size table's last
+   column. Panel lenses:
    correctness vs spec / regression & side effects / test-integrity
    ("were tests weakened?"). Any FAIL → back into the loop as a repair
    milestone.

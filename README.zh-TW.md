@@ -190,8 +190,12 @@ repo 是自足的:`global/CLAUDE.md` 就在裡面。之後重跑會顯示 diff�
 **Profile。** 協定按模型分級:可靠性核心(閘門、狀態、驗證)永遠全開;
 里程碑粒度、planner 扇出、升級梯路徑隨 tier 縮放 —— intake 時偵測、
 凍結進該任務的 `plan.md`,可用專案 CLAUDE.md 的 `Task profile:` 覆寫。
-`mixed`(強模型指揮、便宜模型執行)只需一行 frontmatter:把
-`.claude/agents/executor.md` 釘成 `model: opus`。任務中途換模型永不
+`mixed`(強模型指揮、便宜模型執行)一個指令:`bash
+scripts/task-profile.sh mixed`。v3.13 新增 `mixed-judge`:判斷層
+agent(scout、planner、plan-critic、reframer、final-verifier)釘到
+最強 tier、executor + verifier 用便宜 tier —— 逐任務以
+`/task --profile=mixed-judge` 選用;收尾檢查獨立成 `final-verifier`
+agent,可與里程碑驗收用不同 tier。任務中途換模型永不
 靜默生效 —— 剩餘里程碑要顯式重切。
 
 ---

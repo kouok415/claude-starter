@@ -62,4 +62,5 @@ A change is complete only when all of these hold (edit to fit the project):
   uncomment one:
   <!-- Task profile: opus-tier -->
   <!-- Task profile: fable-tier -->
-  <!-- Task profile: mixed  (also pin `model: opus` in .claude/agents/executor.md) -->
+  <!-- Task profile: mixed  (apply with: bash scripts/task-profile.sh mixed) -->
+  <!-- Task profile: mixed-judge  (apply with: bash scripts/task-profile.sh mixed-judge) -->

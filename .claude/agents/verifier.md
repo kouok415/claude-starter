@@ -1,6 +1,6 @@
 ---
 name: verifier
-description: Adversarial acceptance check for one milestone of an active /task — or a drift check across recent milestones, or one lens of the final review panel. Fresh context; reads and executes, never fixes. Spawned by the /task loop.
+description: Adversarial acceptance check for one milestone of an active /task — or a drift check across recent milestones. Fresh context; reads and executes, never fixes. Spawned by the /task loop. (The completion-time final check is final-verifier's job, not this agent's.)
 tools: Bash, Read, Grep, Glob
 model: inherit
 ---
@@ -39,11 +39,5 @@ Special modes (the spawning prompt will say so):
   Constraints and Out of scope too, and audit every `[ASSUMED: ...]` in
   §Assumptions — name any the human would plausibly veto. Verdict:
   `ON-TRACK` / `DRIFTING` + evidence.
-- **Panel lens:** judge only your assigned lens — correctness vs spec |
-  regression & side effects | test-integrity. The test-integrity lens also
-  audits the spec's history: `git log -p -- .ai_context/tasks/<slug>/spec.md`
-  — an unexplained mid-run weakening of acceptance criteria is a FAIL
-  (rung-4 reframer patches are legitimate only with a matching lessons.md
-  entry).
 
 Never edit files. Never "quickly fix" what you find. Report only.

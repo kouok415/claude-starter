@@ -137,7 +137,7 @@ $1=="SB" {
   sb_seen[slug]=1; sb_gf[slug]=gf
   if (out!="success" && out!="failed" && out!="abandoned")
     enum_bad[++neb]="scoreboard " slug ": outcome=\"" out "\""
-  if (prof!="opus-tier" && prof!="fable-tier" && prof!="mixed" && prof!="?")
+  if (prof!="opus-tier" && prof!="fable-tier" && prof!="mixed" && prof!="mixed-judge" && prof!="?")
     enum_bad[++neb]="scoreboard " slug ": profile=\"" prof "\""
   if (size!="S" && size!="M" && size!="L" && size!="?")
     enum_bad[++neb]="scoreboard " slug ": size=\"" size "\""

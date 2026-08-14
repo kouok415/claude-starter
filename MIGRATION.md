@@ -1,8 +1,13 @@
 # Migration guide
 
-Twelve migrations live here (docs are bilingual elsewhere; this file and the
+Thirteen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[-5. claude-starter v3.12 → v3.13](#-5-claude-starter-v312--v313)** — the
+  judgment-split release: `mixed-judge` profile (judgment agents on the
+  strong tier, execution on the cheap one), selected per task via
+  `/task --profile=...` and applied by `scripts/task-profile.sh`; the
+  completion check splits into its own `final-verifier` agent.
 - **[-3. claude-starter v3.10 → v3.11](#-3-claude-starter-v310--v311)** — the
   token-diet release: single-sourced always-injected surfaces, on-demand
   wrap reference split, spawn-prompt-authoritative executors, finished-task
@@ -43,6 +48,33 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## -5. claude-starter v3.12 → v3.13
+
+The judgment-split release: the profile system gains `mixed-judge` — a
+fully pinned model split (judgment agents on the strongest available
+tier, execution agents on the cheaper one) selectable per task at /task
+time — and the completion check becomes its own agent so it can sit on
+a different tier than milestone verification. The harness still never
+picks a model: pins live only in agent frontmatter, written by a
+deterministic, user-invoked script.
+
+### What changed, and why
+
+| v3.12 | v3.13 | Reason |
+|---|---|---|
+| `verifier` multiplexed three roles (milestone acceptance, drift check, final review panel) behind one frontmatter model | completion-time checking is a new `final-verifier` agent (whole-spec check on S/M, panel lens on M-high/L); `verifier` keeps milestone acceptance + drift; the size table and §Completion spawn `final-verifier` | frontmatter pins are per agent type — splitting the roles lets the final gate run on a stronger tier than routine milestone checks without the skill ever carrying a spawn-time model parameter |
+| profiles were manual frontmatter edits (`mixed`: hand-pin the executor); reverting meant remembering what was touched | `scripts/task-profile.sh` (`mixed-judge` / `mixed` / `inherit` / `status` / `apply [profile]`) writes every pin deterministically; `inherit` restores frontmatter byte-identical to stock so `--update-stock` keeps working; warns when `CLAUDE_CODE_SUBAGENT_MODEL` would override pins | a five-edit manual setup gets skipped or half-applied; a script is CI-testable (round-trip asserted) and keeps "models live only in frontmatter" enforceable |
+| profile selection was per project and implicit (CLAUDE.md override or tier detection) | per task: `/task --profile=mixed-judge ...` applies at intake; a flagless /task applies inherit; on resume the active task's plan.md header wins (`apply` resolves flag > header > inherit, and warns on a conflicting flag — a mid-task switch, never silent) | the profile is a property of the task — recorded in its plan header and scoreboard row; intake-time normalization makes leftover pins from an interrupted run self-heal instead of leaking into the next task |
+
+New files: `.claude/agents/final-verifier.md`, `scripts/task-profile.sh`;
+`mixed-judge` accepted by the scoreboard parser (`harness-report.sh`) and
+added to the spawn-log matcher. Sync via `sync-project.sh --update-stock`
+picks all of it up; pinned (customized) agent files are listed for
+hand-merge instead — run `task-profile.sh inherit` first to take the
+fast path.
 
 ---
 

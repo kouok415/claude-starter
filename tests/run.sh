@@ -400,6 +400,7 @@ if [ -f "$REPO/sync-project.sh" ]; then
   { [ -f "$D/.ai_context/INDEX.md" ] && [ -f "$D/CLAUDE.md" ] && [ -d "$D/.ai_context/tasks" ]; } && ok "adopt creates skeleton" || no "adopt skeleton incomplete"
   echo "$out" | grep -q 'run /setup' && ok "adopt hands off to /setup" || no "adopt handoff missing"
   { [ -f "$D/.claude/agents/scout.md" ] && [ -f "$D/.claude/skills/task/reference.md" ]; } && ok "v3.3 files (scout, reference) land via sync" || no "scout/reference missing after sync"
+  { [ -f "$D/.claude/agents/final-verifier.md" ] && [ -f "$D/scripts/task-profile.sh" ]; } && ok "v3.13 files (final-verifier, task-profile) land via sync" || no "final-verifier/task-profile missing after sync"
 else
   skp "sync pairing + adopt tests (spawned project — template-repo only)"
 fi
@@ -1029,6 +1030,31 @@ for f in $(cd "$REPO" && ls scripts/*.sh .claude/hooks/*.sh .claude/agents/*.md 
 done
 [ -z "$miss" ] && ok "sync-project.sh manifest covers every mechanism file" || no "sync-project.sh manifest missing:$miss"
 
+echo "=== L1-20 · mixed-judge profile: task-profile.sh (v3.13)"
+D="$WORK/l120"; mkdir -p "$D/.claude/agents" "$D/scripts" "$D/.ai_context/tasks/pdemo"
+cp "$REPO"/.claude/agents/*.md "$D/.claude/agents/"
+cp "$REPO/scripts/task-profile.sh" "$D/scripts/"
+tp_before=$(cat "$D"/.claude/agents/*.md | md5sum)
+( cd "$D" && bash scripts/task-profile.sh mixed-judge >/dev/null 2>&1 )
+{ grep -q '^model: fable$' "$D/.claude/agents/planner.md" && grep -q '^model: fable$' "$D/.claude/agents/final-verifier.md" && grep -q '^model: fable$' "$D/.claude/agents/scout.md"; } \
+  && ok "mixed-judge pins judgment agents to fable" || no "mixed-judge fable pins missing"
+{ grep -q '^model: opus$' "$D/.claude/agents/executor.md" && grep -q '^model: opus$' "$D/.claude/agents/verifier.md"; } \
+  && ok "mixed-judge pins executor + verifier to opus" || no "mixed-judge opus pins missing"
+( cd "$D" && bash scripts/task-profile.sh inherit >/dev/null 2>&1 )
+tp_after=$(cat "$D"/.claude/agents/*.md | md5sum)
+[ "$tp_before" = "$tp_after" ] && ok "inherit restores frontmatter byte-identical (stock_update compatible)" || no "inherit round-trip not byte-identical"
+( cd "$D" && bash scripts/task-profile.sh apply >/dev/null 2>&1 )
+grep -q '^model: inherit$' "$D/.claude/agents/planner.md" && ok "apply: no flag + no active task -> inherit" || no "apply default is not inherit"
+printf 'pdemo\n' > "$D/.ai_context/tasks/CURRENT"
+printf '# Plan: p\n<!-- profile: mixed-judge ; size: M -->\n## M1: x [in_progress]\n- verify: `true`\n' > "$D/.ai_context/tasks/pdemo/plan.md"
+( cd "$D" && bash scripts/task-profile.sh apply >/dev/null 2>&1 )
+grep -q '^model: fable$' "$D/.claude/agents/scout.md" && ok "apply: resume re-applies the plan.md header profile" || no "resume did not restore the header profile"
+tp_warn=$( cd "$D" && bash scripts/task-profile.sh apply inherit 2>&1 >/dev/null )
+echo "$tp_warn" | grep -q 'PROFILE SWITCH' && ok "apply: conflicting flag warns (mid-task switch, never silent)" || no "mid-task switch warning missing"
+grep -q '^model: inherit$' "$D/.claude/agents/scout.md" && ok "apply: explicit flag still wins after the warning" || no "explicit flag did not apply"
+tp_env=$( cd "$D" && CLAUDE_CODE_SUBAGENT_MODEL=sonnet bash scripts/task-profile.sh status 2>&1 >/dev/null )
+echo "$tp_env" | grep -q 'CLAUDE_CODE_SUBAGENT_MODEL' && ok "status warns when CLAUDE_CODE_SUBAGENT_MODEL overrides pins" || no "env-override warning missing"
+
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"
 printf 'Last updated: 2026-07-08\nsmall\n' > "$D/.ai_context/state.md"
@@ -1103,9 +1129,11 @@ else
            .claude/skills/task/reference.md .claude/skills/setup/SKILL.md \
            .claude/agents/scout.md .claude/agents/planner.md .claude/agents/plan-critic.md \
            .claude/agents/executor.md .claude/agents/verifier.md .claude/agents/reframer.md \
+           .claude/agents/final-verifier.md \
            .claude/.starter-version .ai_context/INDEX.md .ai_context/tasks/.gitkeep \
            .secrets/.gitkeep \
            scripts/harness-report.sh scripts/check-append-only.sh scripts/check-context-bulk.sh \
+           scripts/task-profile.sh \
            CLAUDE.md README.md; do
     [ -e "$P/$f" ] || miss="$miss $f"
   done

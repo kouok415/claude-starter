@@ -207,9 +207,13 @@ state, verification) is always fully on, while milestone size, planner
 fan-out, and the escalation path scale with the tier — detected at intake,
 frozen into the task's `plan.md`, overridable with `Task profile:` in the
 project CLAUDE.md. A `mixed` setup (strong model orchestrates, cheaper tier
-executes) is one frontmatter line: `model: opus` in
-`.claude/agents/executor.md`. Mid-task model switches are never silent —
-remaining milestones get re-cut explicitly.
+executes) is one command: `bash scripts/task-profile.sh mixed`. v3.13 adds
+`mixed-judge` — judgment agents (scout, planner, plan-critic, reframer,
+final-verifier) pinned to the strongest tier, executor + verifier to the
+cheaper one — selected per task with `/task --profile=mixed-judge`; the
+completion check runs as its own `final-verifier` agent so it can sit on
+a different tier than milestone verification. Mid-task model switches are
+never silent — remaining milestones get re-cut explicitly.
 
 ---
 

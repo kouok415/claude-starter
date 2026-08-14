@@ -40,7 +40,7 @@
         ]
       },
       {
-        "matcher": "scout|planner|plan-critic|verifier|reframer",
+        "matcher": "scout|planner|plan-critic|verifier|final-verifier|reframer",
         "hooks": [
           {
             "type": "command",

@@ -99,6 +99,7 @@ copy_if_missing .claude/agents/plan-critic.md
 copy_if_missing .claude/agents/executor.md
 copy_if_missing .claude/agents/verifier.md
 copy_if_missing .claude/agents/reframer.md
+copy_if_missing .claude/agents/final-verifier.md
 copy_if_missing .ai_context/tasks/.gitkeep
 copy_if_missing .secrets/.gitkeep
 copy_if_missing scripts/check-state-size.sh
@@ -108,6 +109,7 @@ copy_if_missing scripts/harness-report.sh
 copy_if_missing scripts/precommit-gitleaks.sh
 copy_if_missing scripts/task-status.sh
 copy_if_missing scripts/task-statusline.sh
+copy_if_missing scripts/task-profile.sh
 copy_if_missing .pre-commit-config.yaml
 
 # --- Update stock mechanism files (opt-in) --------------------------------------
@@ -149,6 +151,7 @@ stock_update .claude/agents/plan-critic.md
 stock_update .claude/agents/executor.md
 stock_update .claude/agents/verifier.md
 stock_update .claude/agents/reframer.md
+stock_update .claude/agents/final-verifier.md
 stock_update .ai_context/INDEX.md
 stock_update scripts/check-state-size.sh
 stock_update scripts/check-append-only.sh
@@ -157,6 +160,7 @@ stock_update scripts/harness-report.sh
 stock_update scripts/precommit-gitleaks.sh
 stock_update scripts/task-status.sh
 stock_update scripts/task-statusline.sh
+stock_update scripts/task-profile.sh
 stock_update .pre-commit-config.yaml
 
 chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/scripts/*.sh 2>/dev/null || true
