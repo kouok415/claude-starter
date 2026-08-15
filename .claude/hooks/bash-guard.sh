@@ -107,4 +107,12 @@ if printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_])\.secrets/'; then
   ask 'touches .secrets/ (runtime-only credentials, H1) — confirm this should happen'
 fi
 
+# Checkpoint ack files record HUMAN sign-off on a `- checkpoint: human`
+# milestone (v3.14). The natural path is the human's own shell (`! touch
+# ...` bypasses hooks entirely); a model-issued write must surface this
+# confirmation — approving it IS the sign-off, one click, on the record.
+if printf '%s' "$cmd" | grep -Eq '\.ai_context/tasks/[^[:space:]/]+/ack-'; then
+  ask 'checkpoint sign-off: ack files record HUMAN approval — confirm only if you, the human, are signing off this checkpoint'
+fi
+
 exit 0

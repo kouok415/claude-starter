@@ -25,7 +25,7 @@ skp()  { SKIP=$((SKIP+1)); echo "SKIP: $*"; }
 ck()   { local want="$1" got="$2"; shift 2; if [ "$want" = "$got" ]; then ok "$*"; else no "$* (want rc=$want got rc=$got)"; fi; }
 
 WORK="$(mktemp -d)"
-cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-stuck-tsuite-* "${TMPDIR:-/tmp}"/claude-status-nag-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
+cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-stuck-tsuite-* "${TMPDIR:-/tmp}"/claude-status-nag-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-green-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
 trap cleanup EXIT
 
 # Spec-faithful plan fixture: format header INCLUDED, one in_progress.
@@ -69,9 +69,16 @@ D="$WORK/l12"; mkdir -p "$D/.ai_context/tasks/demo"
 printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
 echo demo > "$D/.ai_context/tasks/CURRENT"
 write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
-printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "green verify passes (format header not miscounted)"
+out=$(printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>"$WORK/l12.err"); rc=$?
+ck 2 $rc "green with [pending] left prompts the boundary once (v3.14)"
 grep -q "	M2	PASS" "$D/.ai_context/tasks/demo/gatelog" && ok "gatelog PASS row carries milestone id" || no "gatelog PASS row missing/wrong"
+echo "$out" | grep -q 'claude-starter-gate: BLOCK' && ok "boundary prompt carries the stdout marker" || no "stdout marker missing on green prompt"
+grep -q 'MILESTONE COMPLETE' "$WORK/l12.err" && ok "prompt reads as a continuation ask, not an error" || no "continuation prompt text missing"
+grep -q 'never proceed past an unanswered question' "$WORK/l12.err" && ok "prompt protects pending human questions" || no "question-guard line missing"
+out=$(printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "second green stop passes (one-shot consumed)"
+grep -q "	M2	PAUSED	" "$D/.ai_context/tasks/demo/gatelog" && ok "explicit PAUSED row makes the park legible" || no "PAUSED row missing"
+echo "$out" | grep -q 'paused at a milestone boundary' && ok "pause surfaces a systemMessage" || no "pause systemMessage missing"
 write_plan "$D/.ai_context/tasks/demo/plan.md" 'sh -c "echo boom; exit 1"'
 err=$(printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
 ck 2 $rc "red verify blocks"
@@ -111,7 +118,7 @@ n_stuck=$(grep -c "	M2	STUCK	" "$D/.ai_context/tasks/demo/gatelog")
 # PASS resets the streak: fix the verify, pass once, break it again — blocks anew
 write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
 printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "green verify passes after yield"
+ck 2 $? "green after yield prompts the boundary (PASS recorded, streak reset)"
 write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
 printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 2 $? "PASS reset the counter — new red streak blocks again"
@@ -165,8 +172,10 @@ for b in bash sh grep sed awk date tr cat rm mv mkdir wc head tail dirname env; 
   p="$(command -v "$b" 2>/dev/null)" && [ -n "$p" ] && ln -sf "$p" "$SH/$b" 2>/dev/null
 done
 err=$(printf '{"session_id": "tsuite-tmo"}' | PATH="$SH" CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 0 $rc "gate still passes a green verify without the timeout binary"
+ck 2 $rc "green boundary prompt fires even without the timeout binary"
 echo "$err" | grep -q 'UNBOUNDED' && ok "missing timeout binary warned (no silent void)" || no "missing timeout stayed silent (F11)"
+printf '{"session_id": "tsuite-tmo"}' | PATH="$SH" CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "gate still passes the second green stop without the timeout binary"
 err=$(printf '{"session_id": "tsuite-tmo2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
 echo "$err" | grep -q 'UNBOUNDED' && no "timeout present but warned anyway" || ok "no warning when timeout exists"
 
@@ -199,10 +208,24 @@ grep -q "	-	other$" "$D/.ai_context/tasks/demo/spawnlog" && ok "intake spawn row
 sed -i.bak 's/## M2: current \[pending\]/## M2: current [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
 printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" executor
 grep -q "	M2	executor$" "$D/.ai_context/tasks/demo/spawnlog" && ok "executor row attributed to the armed milestone" || no "executor row wrong"
-# gate red with executor row present => ladder message, no accusation
-err=$(printf '{"session_id": "tsuite-sl1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
+# fresh executor row => in-flight deferral (v3.14): quiet stop, WAITING row,
+# the completion notification is the wake signal — no guaranteed-red verify.
+out=$(printf '{"session_id": "tsuite-sl1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "fresh executor row defers the verify (in-flight, v3.14)"
+grep -q "	M2	WAITING	executor in flight" "$D/.ai_context/tasks/demo/gatelog" && ok "WAITING row records the deferral" || no "WAITING row missing"
+echo "$out" | grep -q 'executor in flight' && ok "deferral surfaces a systemMessage" || no "deferral systemMessage missing"
+# second stop, same spawn row => deferral spent, gate red with ladder message
+err=$(printf '{"session_id": "tsuite-sl1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "one deferral per spawn row — second stop re-arms the gate"
+n_wait=$(grep -c "	M2	WAITING	" "$D/.ai_context/tasks/demo/gatelog")
+[ "$n_wait" = 1 ] && ok "exactly one WAITING row per spawn row" || no "WAITING rows: want 1 got $n_wait"
 echo "$err" | grep -q 'no executor spawn' && no "false no-spawn accusation despite executor row" || ok "executor row suppresses the hint"
 echo "$err" | grep -q 'escalate per the /task ladder' && ok "ladder guidance kept when spawn evidence exists" || no "ladder guidance missing"
+# stale executor row (past the freshness window) => no deferral, red at once
+printf '2026-01-01T00:00:00\t-\tother\n2026-01-01T00:00:01\tM2\texecutor\n' > "$D/.ai_context/tasks/demo/spawnlog"
+grep -v "	M2	WAITING	" "$D/.ai_context/tasks/demo/gatelog" > "$D/.ai_context/tasks/demo/gatelog.new" && mv "$D/.ai_context/tasks/demo/gatelog.new" "$D/.ai_context/tasks/demo/gatelog"
+printf '{"session_id": "tsuite-sl1b"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "stale executor row does not shield the milestone (hung-executor bound)"
 # arm M1 instead (no executor row for it) => diagnosis fires
 sed -i.bak -e 's/## M2: current \[in_progress\]/## M2: current [pending]/' -e 's/## M1: groundwork \[pending\]/## M1: groundwork [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
 err=$(printf '{"session_id": "tsuite-sl2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
@@ -508,7 +531,7 @@ write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
 git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm base
 git -C "$D" checkout -qb task/demo
 printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "green verify passes (run 1)"
+ck 2 $? "green run 1 prompts the boundary (verify ran, cache written)"
 printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 0 $? "green verify passes (run 2, unchanged tree)"
 n=$(grep -c 'PASS' "$D/.ai_context/tasks/demo/gatelog")
@@ -613,9 +636,12 @@ printf '{"session_id": "tsuite-f6"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/de
 ck 2 $? "near-miss spelling git<double-space>push blocks"
 [ ! -f "$D/pwned-gp" ] && ok "double-space push verify was NOT executed" || no "double-space push verify RAN"
 # Negative control: relative-path rm is legitimate cleanup, never refused.
+# (The green boundary prompt is rc 2 too, so distinguish via stderr text.)
 write_plan "$D/.ai_context/tasks/demo/plan.md" 'mkdir -p scratch-dir && rm -rf scratch-dir'
-printf '{"session_id": "tsuite-f7"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "relative rm -rf verify passes (no matcher false positive)"
+err=$(printf '{"session_id": "tsuite-f7"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "relative rm -rf verify runs green (boundary prompt, not a refusal)"
+echo "$err" | grep -q 'GATE REFUSED' && no "relative rm -rf falsely refused (matcher false positive)" || ok "no forbidden-verify false positive"
+echo "$err" | grep -q 'MILESTONE COMPLETE' && ok "verify actually ran and passed" || no "green boundary prompt missing"
 
 # F9: log-always / interrupt-once — a second distinct dark state in the
 # SAME session still reaches the audit trail (one interrupt, two rows).
@@ -626,9 +652,11 @@ printf '{"session_id": "tsuite-f9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/de
 ck 2 $? "dark state 1 (missing plan) interrupts"
 printf 'not a plan\n' > "$D/.ai_context/tasks/demo/plan.md"
 printf '{"session_id": "tsuite-f9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "dark state 2 (heading-less plan) yields — interrupt already spent"
+ck 2 $? "dark state 2 (heading-less plan) gets its OWN interrupt (per-class, v3.14)"
+printf '{"session_id": "tsuite-f9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "same dark-state class yields on repeat (marker spent)"
 n_int=$(grep -c "	INTEGRITY	" "$D/.ai_context/tasks/demo/gatelog")
-[ "$n_int" = 2 ] && ok "both dark states left INTEGRITY rows (log-always)" || no "INTEGRITY rows: want 2 got $n_int — second dark state went unrecorded"
+[ "$n_int" = 3 ] && ok "every dark-state stop left an INTEGRITY row (log-always)" || no "INTEGRITY rows: want 3 got $n_int — a dark state went unrecorded"
 
 D="$WORK/l110b"; mkdir -p "$D/.ai_context/tasks/demo"
 printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
@@ -639,8 +667,9 @@ git -C "$D" add -A && git -C "$D" commit -qm base
 printf '{"session_id": "tsuite-i8"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 2 $? "active task on main blocks (integrity)"
 git -C "$D" checkout -qb task/demo
-printf '{"session_id": "tsuite-i9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "task branch passes (fresh session)"
+err=$(printf '{"session_id": "tsuite-i9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "task branch arms the gate (boundary prompt, not an integrity block)"
+grep -q "	M2	PASS" "$D/.ai_context/tasks/demo/gatelog" && ok "verify ran and passed on the task/ branch" || no "no PASS row on task/ branch"
 
 echo "=== L1-11 · harness-report.sh (scoring is computed, never recalled)"
 D="$WORK/l111"; mkdir -p "$D/.ai_context/tasks/t1" "$D/.ai_context/tasks/live"
@@ -871,8 +900,9 @@ grep -q "	FAIL	" "$D/.ai_context/tasks/demo/gatelog" && no "wrong branch pollute
 printf '{"session_id": "tsuite-w1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 0 $? "wrong-branch integrity yields on second stop (marker)"
 git -C "$D" checkout -qb task/demo
-printf '{"session_id": "tsuite-w2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "task/ branch passes (fresh session)"
+err=$(printf '{"session_id": "tsuite-w2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "task/ branch arms the gate (boundary prompt, fresh session)"
+grep -q "	M2	PASS" "$D/.ai_context/tasks/demo/gatelog" && ok "verify ran and passed on the task/ branch" || no "no PASS row on task/ branch"
 
 echo "=== L1-16 · session-start: INDEX size warning"
 D="$WORK/l116"; mkdir -p "$D/.ai_context"
@@ -978,11 +1008,15 @@ grep -qF 'unwritten — orchestrator' "$ST" && no "stub resurrected over model c
 sed -i.bak 's/## M2: current \[done\]/## M2: current [in_progress]/; s/## M3: future \[in_progress\]/## M3: future [pending]/' "$D/.ai_context/tasks/lg/plan.md" && rm -f "$D/.ai_context/tasks/lg/plan.md.bak"
 cp "$TS" "$D/scripts/task-status.sh"
 rm -f "$ST"
-out=$(printf '{"session_id": "tsuite-lg"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "green verify passes with the renderer installed"
+printf '{"session_id": "tsuite-lg"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1; rc=$?
+ck 2 $rc "green verify prompts the boundary with the renderer installed"
 [ -f "$D/.ai_context/tasks/lg/.last-verify" ] && ok "PASS captured .last-verify" || no ".last-verify missing"
 [ -f "$ST" ] && ok "PASS regenerated STATUS.md" || no "gate did not refresh the view"
-echo "$out" | grep -q 'Architecture is still the stub' && ok "stub nag fired on PASS (systemMessage)" || no "stub nag missing"
+# The nag waits for the first PASSING green stop — an exit-2 stop discards
+# stdout, so nagging there would burn the marker on an unseen message.
+out=$(printf '{"session_id": "tsuite-lg"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "second green stop passes with the renderer installed"
+echo "$out" | grep -q 'Architecture is still the stub' && ok "stub nag fired on the passing stop (systemMessage)" || no "stub nag missing"
 out=$(printf '{"session_id": "tsuite-lg"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null)
 echo "$out" | grep -q 'Architecture is still the stub' && no "stub nag repeated in-session" || ok "stub nag is once per session"
 # statusline: position line when a task is armed, silence otherwise
@@ -1054,6 +1088,98 @@ echo "$tp_warn" | grep -q 'PROFILE SWITCH' && ok "apply: conflicting flag warns 
 grep -q '^model: inherit$' "$D/.claude/agents/scout.md" && ok "apply: explicit flag still wins after the warning" || no "explicit flag did not apply"
 tp_env=$( cd "$D" && CLAUDE_CODE_SUBAGENT_MODEL=sonnet bash scripts/task-profile.sh status 2>&1 >/dev/null )
 echo "$tp_env" | grep -q 'CLAUDE_CODE_SUBAGENT_MODEL' && ok "status warns when CLAUDE_CODE_SUBAGENT_MODEL overrides pins" || no "env-override warning missing"
+
+echo "=== L1-21 · every exit-2 block prints the stdout marker (CLI heuristic, v3.14)"
+# The missing-hook heuristic (exit 2 + EMPTY stdout + stderr matching
+# /no such file|can't open/i) silently drops legitimate blocks — journal
+# 2026-08-13. Non-empty stdout breaks the conjunction; every block path
+# must print the marker, INCLUDING when verify output carries the fatal
+# strings. mk() runs the gate and asserts rc=2 + marker on stdout.
+MARK='claude-starter-gate: BLOCK'
+mk() { # $1 = label, $2 = session id, $3 = project dir, $4... = extra gate args
+  local label="$1" sidq="$2" dir="$3"; shift 3
+  local o rc
+  o=$(printf '{"session_id": "%s"}' "$sidq" | CLAUDE_PROJECT_DIR="$dir" bash "$GATE" "$@" 2>/dev/null); rc=$?
+  if [ "$rc" = 2 ] && printf '%s' "$o" | grep -qF "$MARK"; then ok "marker: $label"
+  else no "marker: $label (rc=$rc stdout='$o')"; fi
+}
+D="$WORK/l121"; mkdir -p "$D/.ai_context"
+printf '# t\n- **Install:** `<command>`\n' > "$D/CLAUDE.md"
+mk "setup gate" tsuite-mk1 "$D"
+D="$WORK/l121b"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+mk "integrity (missing plan)" tsuite-mk2 "$D"
+# the heuristic's exact bait: verify output contains "can't open file"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "python3 no-such-script-xyz.py"
+mk "red verify whose output matches the heuristic regex" tsuite-mk3 "$D"
+write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-mk && git push origin main'
+mk "forbidden verify" tsuite-mk4 "$D"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+sed -i.bak 's/## M3: future \[pending\]/## M3: future [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
+mk "double in_progress" tsuite-mk5 "$D"
+write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+mk "green boundary prompt" tsuite-mk6 "$D"
+# red wrap-up sweep (stop mode) and strict /wrap sweep
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
+# Plan: fixture
+<!-- profile: opus-tier ; size: S -->
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: only [done]
+- verify: `false`
+- risk: low
+PEOF
+rm -f "$D/.ai_context/tasks/demo/gatelog"
+mk "red wrap-up sweep" tsuite-mk7 "$D"
+rm -f "$D/.ai_context/tasks/demo/gatelog"
+o=$(CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep 2>/dev/null); rc=$?
+if [ "$rc" = 2 ] && printf '%s' "$o" | grep -qF "$MARK"; then ok "marker: strict /wrap --sweep"
+else no "marker: strict /wrap --sweep (rc=$rc)"; fi
+# static net: no exit-2 path exists that the runtime cases above miss
+n_exit2=$(grep -c 'exit 2' "$GATE")
+n_mark=$(grep -c 'mark_block$\|mark_block;' "$GATE")
+[ "$n_mark" -ge 7 ] && ok "mark_block wired across block paths ($n_mark call sites, $n_exit2 exit-2 lines)" || no "mark_block call sites: want >=7 got $n_mark"
+
+echo "=== L1-22 · checkpoint milestones: hold for the human, never advance past (v3.14)"
+D="$WORK/l122"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
+# Plan: fixture
+<!-- profile: opus-tier ; size: M -->
+<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+## M1: gated deploy [in_progress]
+- verify: `true`
+- checkpoint: human
+- risk: high
+
+## M2: aftermath [pending]
+- verify: `false`
+- risk: low
+PEOF
+out=$(printf '{"session_id": "tsuite-ck1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "checkpoint PASS holds quietly (no continuation prompt)"
+echo "$out" | grep -q 'human checkpoint' && ok "hold surfaces the sign-off systemMessage" || no "checkpoint systemMessage missing"
+grep -q "	M1	PAUSED	checkpoint" "$D/.ai_context/tasks/demo/gatelog" && ok "checkpoint hold recorded (PAUSED row)" || no "checkpoint PAUSED row missing"
+# work advanced past the un-acked checkpoint => integrity block, then a
+# repeating systemMessage — the human signal must not die with the one-shot
+sed -i.bak 's/## M1: gated deploy \[in_progress\]/## M1: gated deploy [done]/; s/## M2: aftermath \[pending\]/## M2: aftermath [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
+err=$(printf '{"session_id": "tsuite-ck1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "advancing past an un-acked checkpoint blocks (integrity)"
+echo "$err" | grep -q 'sign-off' && ok "block names the missing sign-off" || no "block message unhelpful"
+out=$(printf '{"session_id": "tsuite-ck1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "checkpoint integrity yields on repeat (one-shot spent)"
+echo "$out" | grep -q 'awaits human sign-off' && ok "repeat stop keeps pinging the human" || no "repeat signal lost"
+# the ack releases everything: hold gone, gate arms M2 normally (red)
+touch "$D/.ai_context/tasks/demo/ack-M1"
+printf '{"session_id": "tsuite-ck2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "acked checkpoint releases the run (M2 arms, red verify blocks normally)"
+# wiring: ack files are Edit-denied and bash-guard confirms model-side writes
+grep -q 'Edit(./.ai_context/tasks/\*\*/ack-\*)' "$REPO/.claude/settings.json" && ok "ack files Edit-denied" || no "ack Edit-deny missing"
+bgout=$(printf '{"tool_input":{"command":"touch .ai_context/tasks/demo/ack-M1"}}' | CLAUDE_PROJECT_DIR="$D" bash "$REPO/.claude/hooks/bash-guard.sh" 2>/dev/null)
+echo "$bgout" | grep -q '"permissionDecision":"ask"' && ok "bash-guard asks on model-side ack writes (sign-off stays human)" || no "bash-guard ack confirmation missing"
 
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"

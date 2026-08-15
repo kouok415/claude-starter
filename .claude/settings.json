@@ -25,7 +25,8 @@
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Edit(./.ai_context/tasks/**/gatelog)",
-      "Edit(./.ai_context/tasks/**/spawnlog)"
+      "Edit(./.ai_context/tasks/**/spawnlog)",
+      "Edit(./.ai_context/tasks/**/ack-*)"
     ]
   },
   "hooks": {

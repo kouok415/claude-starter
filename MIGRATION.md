@@ -1,8 +1,14 @@
 # Migration guide
 
-Thirteen migrations live here (docs are bilingual elsewhere; this file and the
+Fourteen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[-6. claude-starter v3.13 → v3.14](#-6-claude-starter-v313--v314)** — the
+  liveness release: stdout marker on every stop-gate block (defeats the
+  CLI's missing-hook heuristic that silently dropped red blocks),
+  in-flight executor deferral (`WAITING`), the green-boundary
+  continuation prompt + explicit `PAUSED` state, and mechanical human
+  checkpoints (`- checkpoint: human` + ack files).
 - **[-5. claude-starter v3.12 → v3.13](#-5-claude-starter-v312--v313)** — the
   judgment-split release: `mixed-judge` profile (judgment agents on the
   strong tier, execution on the cheap one), selected per task via
@@ -48,6 +54,31 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## -6. claude-starter v3.13 → v3.14
+
+The liveness release, from the 2026-08-15 backtest_system double-stall:
+one run stalled twice in one night through two DIFFERENT holes — a red
+block silently dropped by the host CLI, and a green PASS that parked the
+session with work remaining. The gate's contract grows from "cannot stop
+red" to: cannot stop red, **defer to an in-flight executor**, and **make
+every green boundary an explicit decision** — while still never being
+able to force continuation (the second stop always passes).
+
+### What changed, and why
+
+| v3.13 | v3.14 | Reason |
+|---|---|---|
+| blocks were exit 2 + stderr only; Claude Code's missing-hook heuristic (exit 2 + empty stdout + stderr matching `/no such file\|can't open/i`) reclassified them as "hook script missing" and let red turns end dark | every block path prints one fixed stdout marker line (`claude-starter-gate: BLOCK`) before exit 2; L1-21 exercises all seven paths, including a verify whose output is the heuristic's exact bait | a just-armed milestone's verify says `can't open file ... No such file or directory` — the gate's strongest moment was its most droppable; non-empty stdout breaks the heuristic's conjunction (JSON `decision:block` protocol deferred to the next major: escaping arbitrary verify output into JSON in bash is a bigger risk than the marker) |
+| turn-end with a background executor running re-ran the armed milestone's verify — guaranteed red at milestone start: wasted runtime, a red-counter strike, wait-loop babysitting, and the heuristic's trigger surface | fresh executor spawn row (< 45 min) for the armed milestone → verify deferred, one `WAITING` gatelog row per spawn row, quiet stop + systemMessage; the second stop re-arms the gate | a red block's only value is stopping a turn nothing would re-wake; an in-flight executor's completion notification IS the wake guarantee — and one-deferral-per-spawn-row means a hung or died-silent executor can never keep the gate off |
+| a PASS with `[pending]` milestones left allowed a silent park (53-minute stall: model stopped expecting a green echo that never came; "waiting on human" and "stalled" were indistinguishable) | one continuation prompt per (session, milestone): continue (flip statuses, spawn executor) or pause explicitly — restating any unanswered human question; the next stop passes and records a `PAUSED` row + repeating systemMessage | the gate can only persuade, never force (exit-2 text; second stop always passes) — but the boundary decision becomes explicit and the parked state legible; integrity interrupts also went per-class markers, so an intake pause no longer consumes the one shot a later gate-OFF state needs |
+| "wait for my sign-off here" relied on the model's judgment surviving wake-ups | `- checkpoint: human` on a milestone: PASS holds the run until `tasks/<slug>/ack-<id>` exists (human's own shell, or approving the bash-guard confirmation = the sign-off); advancing past an un-acked checkpoint is an integrity block; ack files are Edit-denied | plan approval is standing authorization for milestone-to-milestone advance, so the places that DO need a human become declared, mechanical tripwires instead of hoping the model asks |
+
+Existing tests updated to the new contract (green stops prompt once;
+integrity is per-class; a fresh executor row defers). No file renames; a
+plain `sync-project.sh --update-stock` picks everything up.
 
 ---
 

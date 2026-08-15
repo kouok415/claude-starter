@@ -60,6 +60,26 @@
 # the platform's own consecutive-block cap (default 8) is the backstop.
 # stop_hook_active is honored only by Gate 1 (setup nudge); the milestone
 # gate does its own counting instead.
+#
+# Liveness (v3.14): three additions from the 2026-08-15 backtest_system
+# double-stall (journal: starter-dev 2026-08-13 + 2026-08-15).
+#   - Every block prints ONE fixed marker line on stdout first: the CLI's
+#     missing-hook heuristic (observed through 2.1.229) reclassifies an
+#     exit-2 Stop hook as "script missing" when stdout is empty and stderr
+#     happens to match /no such file|can't open/i — which a just-armed
+#     milestone's verify output does. Non-empty stdout breaks the
+#     conjunction, so blocks are honored regardless of verify text.
+#   - In-flight deferral: a fresh executor spawn row for the armed
+#     milestone means the completion notification WILL re-wake the session
+#     — a guaranteed-red verify at that stop buys nothing. One WAITING row
+#     per spawn row, then the gate re-arms (a hung executor cannot keep it
+#     off past the freshness window).
+#   - Green boundary: a PASS with [pending] milestones left used to allow a
+#     silent park. Now: one continuation prompt per (session, milestone) —
+#     continue or explicitly pause; the second stop passes with a PAUSED
+#     row. Milestones marked `- checkpoint: human` never get the prompt:
+#     they pause until a human ack file exists, and advancing past an
+#     un-acked checkpoint is an integrity block.
 
 set -uo pipefail
 
@@ -100,6 +120,10 @@ fi
 sid_s="$(printf '%s' "${sid:-nosession}" | tr -cd 'A-Za-z0-9._-')"
 [ -n "$sid_s" ] || sid_s=nosession
 
+# Fixed stdout marker, printed before EVERY exit-2 block (see Liveness
+# header note). Regression: L1-21 exercises each block path for it.
+mark_block() { printf 'claude-starter-gate: BLOCK\n'; }
+
 # --- Gate 1: first-session setup -------------------------------------------
 # The trigger pattern is the shared GUARD_SETUP_SENTINEL constant — one
 # source with session-start.sh (ADR-004): the two layers of one mechanism
@@ -109,6 +133,7 @@ if [ "$MODE" = stop ] && [ "$stop_active" = 0 ] && [ -f "$ROOT/CLAUDE.md" ] && \
   marker="${TMPDIR:-/tmp}/claude-setup-nudge-${sid_s}"
   if [ ! -f "$marker" ]; then
     : > "$marker" 2>/dev/null || true
+    mark_block
     {
       printf 'SETUP GATE — this project has not been set up: CLAUDE.md still carries the UNCONFIGURED sentinel / template placeholders.\n'
       printf 'Run the /setup protocol now: interview the human if intent is unclear, scaffold if needed,\n'
@@ -128,15 +153,26 @@ slug="$(tr -d '[:space:]' < "$TASKS/CURRENT")"
 # — the session marker gates only the stderr interrupt — so a second dark
 # state in the same session still reaches the audit trail and a quiet
 # gatelog provably means "clean run", never "the gate went dark quietly".
-imarker="${TMPDIR:-/tmp}/claude-gate-integrity-${sid_s}"
+# The interrupt marker is per (session, class) since v3.14: an intake-pause
+# interrupt no longer consumes the one shot a later status-typo state needs
+# (2026-08-15: the 01:11 intake interrupt silenced the 01:59 gate-OFF one).
 
-integrity_stop() { # $1 = milestone id or '?', $2 = reason
+integrity_stop() { # $1 = milestone id or '?', $2 = reason,
+                   # $3 = class (marker scope; default generic),
+                   # $4 = repeating systemMessage once the one-shot is spent
+                   #      ('' = silent; fixed ASCII, no quotes — JSON string)
   if [ -n "$slug" ] && [ -d "$TASKS/$slug" ]; then
     printf '%s\t%s\tINTEGRITY\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$1" "$2" \
       >> "$TASKS/$slug/gatelog" 2>/dev/null || true
   fi
-  [ -f "$imarker" ] && exit 0
+  icls="$(printf '%s' "${3:-generic}" | tr -cd 'A-Za-z0-9._-')"
+  imarker="${TMPDIR:-/tmp}/claude-gate-integrity-${sid_s}-${icls}"
+  if [ -f "$imarker" ]; then
+    [ -n "${4:-}" ] && printf '{"systemMessage":"%s"}\n' "$4"
+    exit 0
+  fi
   : > "$imarker" 2>/dev/null || true
+  mark_block
   {
     printf 'GATE INTEGRITY — the milestone gate cannot arm: %s\n' "$2"
     printf 'Fix the task state before finishing. If this is a legitimate mid-intake pause\n'
@@ -145,7 +181,7 @@ integrity_stop() { # $1 = milestone id or '?', $2 = reason
   exit 2
 }
 
-[ -n "$slug" ] || integrity_stop '?' 'tasks/CURRENT exists but is empty/corrupt — restore the slug or delete the file'
+[ -n "$slug" ] || integrity_stop '?' 'tasks/CURRENT exists but is empty/corrupt — restore the slug or delete the file' current
 
 # Task work sits on a task/* branch, never the default one (non-git /
 # detached HEAD: skip). Any other branch is also a dark state: the gate
@@ -154,18 +190,19 @@ integrity_stop() { # $1 = milestone id or '?', $2 = reason
 branch="$(git -C "$ROOT" branch --show-current 2>/dev/null || true)"
 case "$branch" in
   main|master)
-    integrity_stop '?' "active task '$slug' but the session is on '$branch' — task work belongs on a task/ branch"
+    integrity_stop '?' "active task '$slug' but the session is on '$branch' — task work belongs on a task/ branch" branch
     ;;
   ''|task/*) ;;
   *)
-    integrity_stop '?' "active task '$slug' but the session is on branch '$branch' — task work belongs on task/<slug>; a verify here would run against the wrong tree"
+    integrity_stop '?' "active task '$slug' but the session is on branch '$branch' — task work belongs on task/<slug>; a verify here would run against the wrong tree" branch
     ;;
 esac
 
 plan="$TASKS/$slug/plan.md"
 gatelog="$TASKS/$slug/gatelog"
-[ -f "$plan" ] || integrity_stop '?' "tasks/CURRENT names '$slug' but its plan.md is missing — mid-intake pause, renamed dir, or stale CURRENT"
-grep -q '^## ' "$plan" || integrity_stop '?' 'plan.md has no milestone headings — malformed plan, the gate has nothing to check'
+spawnlog="$TASKS/$slug/spawnlog"
+[ -f "$plan" ] || integrity_stop '?' "tasks/CURRENT names '$slug' but its plan.md is missing — mid-intake pause, renamed dir, or stale CURRENT" intake
+grep -q '^## ' "$plan" || integrity_stop '?' 'plan.md has no milestone headings — malformed plan, the gate has nothing to check' planform
 
 # --- Counted red blocks ------------------------------------------------------
 # Consecutive red *blocks* per (session, milestone), kept in a tmp counter.
@@ -313,7 +350,7 @@ if [ "$MODE" = sweep ]; then
     all_done=1
   fi
   # Explicit /wrap sweep: strict, never yields — /wrap must not wrap red.
-  sweep_done_milestones "$all_done" || exit 2
+  sweep_done_milestones "$all_done" || { mark_block; exit 2; }
   status_refresh
   exit 0
 fi
@@ -324,6 +361,7 @@ fi
 # "[in_progress]" and must not be counted.
 n_inprog="$(grep -c '^## .*\[in_progress\]' "$plan" || true)"
 if [ "${n_inprog:-0}" -gt 1 ]; then
+  mark_block
   printf 'GATE FAILED — %s milestones are marked [in_progress] in plan.md; exactly one is allowed. Fix the statuses, then finish.\n' "$n_inprog" >&2
   exit 2
 fi
@@ -332,7 +370,8 @@ if [ "${n_inprog:-0}" -eq 0 ]; then
   # legitimate. [done]+[pending] with no [in_progress] is a status typo —
   # exactly the state in which the gate would silently stay OFF.
   if grep -q '^## .*\[done\]' "$plan" && grep -q '^## .*\[pending\]' "$plan"; then
-    integrity_stop '?' 'milestones are [done] and [pending] but none [in_progress] — a status typo has the gate OFF; mark the next milestone [in_progress]'
+    integrity_stop '?' 'milestones are [done] and [pending] but none [in_progress] — a status typo has the gate OFF; mark the next milestone [in_progress]' statusoff \
+      'claude-starter gate: milestones are done+pending with none in_progress - the gate is OFF; mark the next milestone in_progress'
   fi
   # All-[done] wrap-up: account for gates a zero-stop run never armed —
   # verify the final milestone now, record UNARMED for earlier rowless ones.
@@ -341,6 +380,7 @@ if [ "${n_inprog:-0}" -eq 0 ]; then
     if ! sweep_done_milestones 1; then
       swn="$(red_count "${slug}-sweep")"
       [ "$swn" -ge 3 ] && yield_stuck sweep "$swn" 'final-milestone verify red at wrap-up'
+      mark_block
       exit 2
     fi
     red_reset "${slug}-sweep"
@@ -351,6 +391,36 @@ fi
 
 ms="$(grep -m1 '^## .*\[in_progress\]' "$plan" | sed -n 's/^## \([^:]*\):.*/\1/p')"
 gatecache="$TASKS/$slug/.gate-cache"
+
+# --- Checkpoint tripwire (v3.14) ---------------------------------------------
+# A milestone carrying `- checkpoint: human` in plan.md is a human gate: its
+# PASS pauses the run until `.ai_context/tasks/<slug>/ack-<id>` exists (the
+# ack path is Edit-denied and bash-guard-confirmed — same trust class as
+# gatelog: a tripwire against drift, not a sandbox). Work that advanced past
+# an un-acked checkpoint is a dark state: block once, then keep the human
+# signal repeating.
+ms_checkpoint() { # $1 = milestone id -> rc 0 when it is a human checkpoint
+  awk -v want="## $1:" '
+    index($0, want) == 1 { take = 1; next }
+    /^## / { take = 0 }
+    take && /^- checkpoint:[[:space:]]*human/ { f = 1 }
+    END { exit !f }
+  ' "$plan"
+}
+
+ck_unacked="$(awk '
+  /^## / { take = 0; if ($0 ~ /\[done\]/) { id = $0; sub(/^## /, "", id); sub(/:.*/, "", id); take = 1 }; next }
+  take && /^- checkpoint:[[:space:]]*human/ { print id }
+' "$plan" | while IFS= read -r cid; do
+  [ -f "$TASKS/$slug/ack-$cid" ] || { printf '%s' "$cid"; break; }
+done)"
+if [ -n "$ck_unacked" ]; then
+  ck_j="$(printf '%s' "$ck_unacked" | tr -cd 'A-Za-z0-9._-')"
+  slugck_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
+  integrity_stop "${ms:-?}" "checkpoint $ck_unacked is [done] without human sign-off, yet ${ms:-?} is already [in_progress] — work advanced past a human gate. Human: \`touch .ai_context/tasks/$slug/ack-$ck_unacked\` to sign off. Model: flip ${ms:-?} back to [pending], restate what needs sign-off, and pause" \
+    checkpoint \
+    "claude-starter gate: checkpoint ${ck_j} awaits human sign-off (touch .ai_context/tasks/${slugck_j}/ack-${ck_j}) - the run is held"
+fi
 
 # Extract the `- verify:` command of the [in_progress] milestone.
 # plan.md format (kept in sync with .claude/skills/task/SKILL.md):
@@ -365,7 +435,7 @@ cmd="$(awk '
     exit
   }
 ' "$plan")"
-[ -n "$cmd" ] || integrity_stop "${ms:-?}" 'the [in_progress] milestone has no `- verify:` command — the gate cannot arm on it'
+[ -n "$cmd" ] || integrity_stop "${ms:-?}" 'the [in_progress] milestone has no `- verify:` command — the gate cannot arm on it' noverify
 
 # Gatelog rows carry the exact command that was enforced (tabs sanitized) —
 # a mid-run weakening of the verify is visible in the audit trail.
@@ -378,6 +448,7 @@ cmd_log="$(printf '%s' "$cmd" | tr '\t' ' ')"
 if guard_forbidden_verify "$cmd"; then
   printf '%s\t%s\tINTEGRITY\tforbidden verify, not executed: %s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
+  mark_block
   {
     printf 'GATE REFUSED — the verify command contains a forbidden operation and was NOT run:\n'
     printf '$ %s\n' "$cmd"
@@ -386,6 +457,79 @@ if guard_forbidden_verify "$cmd"; then
   } >&2
   exit 2
 fi
+
+# --- In-flight executor deferral (v3.14) -------------------------------------
+# A red block's only value is stopping a turn nothing would ever re-wake.
+# A fresh executor spawn row for THIS milestone means the completion
+# notification will re-wake the session — running the (just-armed,
+# guaranteed-red) verify here burns runtime, a red-counter strike, and is
+# the exact output the CLI heuristic misreads. One deferral per spawn row:
+# the wake-up turn re-arms the gate, and past the freshness window a hung
+# executor stops shielding the milestone.
+INFLIGHT_S=2700  # 45 min — above observed executor runtimes, below "hung"
+sp_ts="$(awk -F'\t' -v m="${ms:-?}" '$2==m && $3=="executor" {t=$1} END {if (t) print t}' "$spawnlog" 2>/dev/null)"
+if [ -n "$sp_ts" ] && \
+   ! grep -qF "${TAB}${ms:-?}${TAB}WAITING${TAB}executor in flight since ${sp_ts}" "$gatelog" 2>/dev/null; then
+  sp_e="$(date -d "$sp_ts" +%s 2>/dev/null || date -j -f '%Y-%m-%dT%H:%M:%S' "$sp_ts" +%s 2>/dev/null || true)"
+  now_e="$(date +%s)"
+  if [ -n "$sp_e" ] && [ "$((now_e - sp_e))" -ge 0 ] && [ "$((now_e - sp_e))" -lt "$INFLIGHT_S" ]; then
+    printf '%s\t%s\tWAITING\texecutor in flight since %s\n' \
+      "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$sp_ts" >> "$gatelog" 2>/dev/null || true
+    slug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
+    ms_j="$(printf '%s' "${ms:-?}" | tr -cd 'A-Za-z0-9._-')"
+    printf '{"systemMessage":"claude-starter gate: %s / %s - executor in flight (spawned %s); verify deferred until the session wakes."}\n' \
+      "$slug_j" "$ms_j" "$sp_ts"
+    status_refresh
+    exit 0
+  fi
+fi
+
+# --- Green-boundary continuation (v3.14) -------------------------------------
+# A PASS used to allow a silent park even with [pending] milestones left —
+# the 2026-08-15 backtest_system 53-minute stall. The gate can never force
+# continuation (it is exit-2 text, and the second stop always passes); it
+# makes the boundary EXPLICIT instead: one continuation prompt per
+# (session, milestone) — symmetric by design, pausing is a first-class
+# answer, and an unanswered human question must be restated, never crossed.
+# The stop after the prompt records a PAUSED row, so a parked run is
+# legible ("waiting on you") instead of indistinguishable from a stall.
+# Checkpoint milestones skip the prompt entirely: they hold for the ack.
+green_boundary() { # $ms verified green (fresh PASS or cache hit) in stop mode
+  [ "$MODE" = stop ] || return 0
+  grep -q '^## .*\[pending\]' "$plan" || return 0
+  gslug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
+  gms_j="$(printf '%s' "${ms:-?}" | tr -cd 'A-Za-z0-9._-')"
+  if ms_checkpoint "${ms:-?}" && [ ! -f "$TASKS/$slug/ack-${ms:-?}" ]; then
+    if ! grep -qF "${TAB}${ms:-?}${TAB}PAUSED${TAB}checkpoint" "$gatelog" 2>/dev/null; then
+      printf '%s\t%s\tPAUSED\tcheckpoint — awaiting human ack (ack-%s)\n' \
+        "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "${ms:-?}" >> "$gatelog" 2>/dev/null || true
+    fi
+    printf '{"systemMessage":"claude-starter gate: %s / %s PASSED and is a human checkpoint - run held; sign off with: touch .ai_context/tasks/%s/ack-%s"}\n' \
+      "$gslug_j" "$gms_j" "$gslug_j" "$gms_j"
+    return 0
+  fi
+  gmk="${TMPDIR:-/tmp}/claude-gate-green-${sid_s}-$(printf '%s' "$slug-${ms:-?}" | tr -cs 'A-Za-z0-9._-' '_')"
+  if [ ! -f "$gmk" ]; then
+    : > "$gmk" 2>/dev/null || true
+    mark_block
+    {
+      printf 'MILESTONE COMPLETE — %s verify PASS is recorded, and [pending] milestones remain.\n' "${ms:-?}"
+      printf 'State your intent explicitly, then act on it:\n'
+      printf '  (a) continue — flip %s to [done], mark the next milestone [in_progress], spawn its executor;\n' "${ms:-?}"
+      printf '  (b) pause — waiting on the human, or stopping here: say so plainly and finish; the next stop passes quietly.\n'
+      printf 'If your last message asked the human a question, restate it and choose (b) — never proceed past an unanswered question.\n'
+      printf '(one-time prompt for this milestone; not an error)\n'
+    } >&2
+    exit 2
+  fi
+  if ! grep -qF "${TAB}${ms:-?}${TAB}PAUSED" "$gatelog" 2>/dev/null; then
+    printf '%s\t%s\tPAUSED\tgreen boundary — paused after the one-time continuation prompt\n' \
+      "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" >> "$gatelog" 2>/dev/null || true
+  fi
+  printf '{"systemMessage":"claude-starter gate: %s / %s is green; the run is paused at a milestone boundary (pause chosen or waiting on you)."}\n' \
+    "$gslug_j" "$gms_j"
+  return 0
+}
 
 # --- PASS-cache -------------------------------------------------------------
 # The cache file itself is gitignored (.ai_context/tasks/*/.gate-cache), so
@@ -421,6 +565,8 @@ fingerprint() {
 fp="$(fingerprint || true)"
 if [ -n "$fp" ] && [ -f "$gatecache" ] && \
    [ "$(cat "$gatecache" 2>/dev/null)" = "$ms|$fp" ]; then
+  green_boundary
+  arch_nag
   exit 0
 fi
 
@@ -430,13 +576,17 @@ if out="$(run_cmd "$cmd" 2>&1)"; then
   red_reset "${slug}-${ms:-?}"
   printf '%s\n' "$out" | tail -n 12 > "$TASKS/$slug/.last-verify" 2>/dev/null || true
   status_refresh
-  arch_nag
   # Fingerprint AFTER the run: verify itself may write artifacts; caching the
   # post-run state lets the next no-op stop hit the cache.
   fp="$(fingerprint || true)"
   if [ -n "$fp" ]; then
     printf '%s|%s' "$ms" "$fp" > "$gatecache" 2>/dev/null || true
   fi
+  # Boundary first, nag after: an exit-2 stop discards stdout, so nagging
+  # before the continuation prompt would burn the once-per-session marker
+  # on a message nobody sees. The nag lands on the first PASSING green stop.
+  green_boundary
+  arch_nag
   exit 0
 fi
 
@@ -452,7 +602,6 @@ status_refresh
 # on Claude Code versions without SubagentStart the file stays absent and
 # this stays silent). Explicit size M/L only — S runs in-context by design.
 spawn_hint=''
-spawnlog="$TASKS/$slug/spawnlog"
 psize="$(sed -n 's/.*;[[:space:]]*size:[[:space:]]*\([SML]\).*/\1/p' "$plan" | head -n1)"
 if { [ "$psize" = M ] || [ "$psize" = L ]; } && [ -s "$spawnlog" ] && \
    ! awk -F'\t' -v m="${ms:-?}" '$2==m && $3=="executor" {f=1} END {exit !f}' "$spawnlog"; then
@@ -461,6 +610,7 @@ fi
 
 rn="$(red_count "${slug}-${ms:-?}")"
 [ "$rn" -ge 3 ] && yield_stuck "${ms:-?}" "$rn" "$spawn_hint"
+mark_block
 {
   printf 'GATE FAILED (red block %s of 2 — one more red stop hands off to the human) — the [in_progress] milestone did not pass verify; this turn cannot end.\n' "$rn"
   printf '$ %s\n' "$cmd"

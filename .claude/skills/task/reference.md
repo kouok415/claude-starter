@@ -106,6 +106,24 @@ every later context. Claims not directly observed are tagged
 
 Attended runs pause here for a reply; `--auto` posts it and proceeds.
 
+## Checkpoints & milestone boundaries (v3.14)
+
+A milestone whose section carries `- checkpoint: human` is a human gate:
+its verify PASS holds the run (PAUSED row + repeating systemMessage)
+until the human signs off with `touch .ai_context/tasks/<slug>/ack-<id>`
+— their own shell, or approving the bash-guard confirmation, IS the
+sign-off. Advancing past an un-acked checkpoint is an integrity block.
+Mark checkpoints at plan approval (deploys, spend, outward-facing
+steps); they are the mechanical form of "wait for me here".
+
+Non-checkpoint milestones: a PASS with `[pending]` milestones left gets
+ONE continuation prompt per session — answer it by continuing (flip
+statuses, spawn the executor) or by pausing EXPLICITLY (state why,
+restate any unanswered human question, finish). The second stop passes
+and records a PAUSED row. A fresh executor spawn also buys one quiet
+WAITING stop — the completion notification is the wake signal; do not
+babysit it with wait-loops.
+
 ## STATUS.md — the live view
 
 `tasks/<slug>/STATUS.md` answers "where are we and what is happening" at
