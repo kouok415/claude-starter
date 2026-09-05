@@ -1328,7 +1328,7 @@ PY
   printf '# lab\n## Commands\n- Test: `true`\n' > "$P/CLAUDE.md"
   git -C "$P" checkout -qb task/demo 2>/dev/null || true
   printf '{"session_id": "tsuite-l2"}' | CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
-  ck 0 $? "project gate: green passes"
+  ck 2 $? "project gate: green boundary prompts (v3.14: PASS with [pending] left ⇒ one-time exit 2)"
   write_plan "$P/.ai_context/tasks/demo/plan.md" "false"
   printf '{"session_id": "tsuite-l2"}' | CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
   ck 2 $? "project gate: red blocks"
@@ -1386,7 +1386,7 @@ else
   ck 2 $? "artifact gate blocks while deliverable absent"
   mkdir -p "$R/reports" && echo content > "$R/reports/x.md"
   printf '{"session_id": "tsuite-r"}' | CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
-  ck 0 $? "artifact gate passes once deliverable exists"
+  ck 2 $? "artifact gate: deliverable present ⇒ PASS + green boundary prompt (v3.14)"
 fi
 
 echo "=== L2-6 · spawning via a symlink resolves the real template"
