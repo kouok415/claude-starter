@@ -49,6 +49,18 @@ GUARD_RM_RF_ABS="${_G_RM}/"
 # a root delete by definition — denied on sight, target parsing aside.
 GUARD_RM_RF_ROOT="${_G_RM}/([[:space:]]|\*|[\"']|$)|(^|[[:space:];&|(])rm[[:space:]][^|;&]*--no-preserve-root"
 
+# Claude Code's own per-session scratchpad,
+#   /tmp/claude-<uid>/<project>/<session>/scratchpad
+# is disposable by construction — the harness creates it and throws it
+# away, and milestones clean it constantly. bash-guard's ask tier scrubs
+# these paths out before matching (v3.14.1): confirming them buys nothing
+# and trains the human to click through the tier that matters. Exactly
+# that shape; path characters only in the tail, so a `;rm -rf /etc`
+# chained after it survives the scrub; the sourcing hook drops the
+# exemption whenever the command contains `..`. bash-guard ONLY — the
+# stop-gate denylist keeps refusing them, verifies run unattended.
+GUARD_SCRATCHPAD='/tmp/claude-[[:alnum:]_.-]+/[[:alnum:]_.-]+/[[:alnum:]_.-]+/scratchpad[[:alnum:]_./@+~-]*'
+
 # Setup-gate sentinel (ADR-004): the newborn-project trigger shared by
 # session-start.sh (instruction layer) and stop-gate.sh (blocking layer) —
 # two layers of ONE mechanism, so they must agree on the trigger domain.

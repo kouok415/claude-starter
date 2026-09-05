@@ -10,7 +10,8 @@
 #     - sudo
 #     - rm -rf on the filesystem root
 #   ask (JSON permissionDecision, human confirms):
-#     - rm -rf on any other absolute path
+#     - rm -rf on any other absolute path — except inside the session's own
+#       /tmp/claude-*/…/scratchpad tree, which the harness itself discards
 #     - commands touching .env files (H1) — .env.example/sample/template/dist
 #       are exempt
 #
@@ -38,6 +39,7 @@ _GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
 : "${GUARD_FORCE_PUSH:=git[[:space:]]+push[^|;&]*[[:space:]](--force(-with-lease[^[:space:]]*)?|-f)([[:space:]]|\$)}"
 : "${GUARD_RM_RF_ROOT:=(^|[[:space:];&|(])rm[[:space:]]+-(rf|fr)[[:alnum:]]*[[:space:]]+/([[:space:]]|\*|\$)}"
 : "${GUARD_RM_RF_ABS:=(^|[[:space:];&|(])rm[[:space:]]+-(rf|fr)[[:alnum:]]*[[:space:]]+/[^[:space:]]}"
+: "${GUARD_SCRATCHPAD:=/tmp/claude-[[:alnum:]_.-]+/[[:alnum:]_.-]+/[[:alnum:]_.-]+/scratchpad[[:alnum:]_./@+~-]*}"
 
 payload="$(cat 2>/dev/null || true)"
 
@@ -94,7 +96,16 @@ if printf '%s' "$cmd" | grep -Eq "$GUARD_RM_RF_ROOT"; then
 fi
 
 # --- ask tier ----------------------------------------------------------------
-if printf '%s' "$cmd" | grep -Eq "$GUARD_RM_RF_ABS"; then
+# The session's own scratchpad (GUARD_SCRATCHPAD) is scrubbed out first: the
+# harness creates and discards that tree, so deleting inside it is not a
+# decision worth a click. Any `..` in the command keeps the full string —
+# fail towards asking rather than reason about where a traversal lands.
+rm_probe="$cmd"
+case "$cmd" in
+  *..*) ;;
+  *) rm_probe="$(printf '%s' "$cmd" | sed -E "s#${GUARD_SCRATCHPAD}##g")" ;;
+esac
+if printf '%s' "$rm_probe" | grep -Eq "$GUARD_RM_RF_ABS"; then
   ask 'rm -rf on an absolute path — confirm the target is disposable'
 fi
 
