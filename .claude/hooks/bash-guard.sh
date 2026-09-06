@@ -10,8 +10,9 @@
 #     - sudo
 #     - rm -rf on the filesystem root
 #   ask (JSON permissionDecision, human confirms):
-#     - rm -rf on any other absolute path — except inside the session's own
-#       /tmp/claude-*/…/scratchpad tree, which the harness itself discards
+#     - rm -rf leaving the project tree (absolute, ~/, $HOME/, ..) — except
+#       inside the session's own /tmp/claude-*/…/scratchpad tree, which the
+#       harness itself discards
 #     - commands touching .env files (H1) — .env.example/sample/template/dist
 #       are exempt
 #
@@ -106,7 +107,7 @@ case "$cmd" in
   *) rm_probe="$(printf '%s' "$cmd" | sed -E "s#${GUARD_SCRATCHPAD}##g")" ;;
 esac
 if printf '%s' "$rm_probe" | grep -Eq "$GUARD_RM_RF_ABS"; then
-  ask 'rm -rf on an absolute path — confirm the target is disposable'
+  ask 'rm -rf beyond the project tree (absolute, ~/, $HOME/, ..) — confirm the target is disposable'
 fi
 
 stripped="$(printf '%s' "$cmd" | sed -E 's/\.env\.(example|sample|template|dist)//g')"

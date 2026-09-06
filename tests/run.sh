@@ -804,6 +804,17 @@ out=$(bgp 'rm -rf /tmp/scratch' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "absolute-path rm -rf downgraded to ask" || no "absolute rm -rf not asked"
 out=$(bgp 'rm -rf build/' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "relative rm -rf passes silently" || no "relative rm -rf flagged"
+# v3.14.3: with the settings.json rm rule gone (ADR-023), the hook is the only
+# rm tier — home-relative and parent-traversal spellings join the ask tier.
+out=$(bgp 'rm -rf ~/projects/x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "home-relative rm -rf (~/) asks (v3.14.3)" || no "home-relative rm -rf passes silently (guard hole)"
+out=$(bgp 'rm -rf $HOME/projects/x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "\$HOME/ rm -rf asks (v3.14.3)" || no "\$HOME/ rm -rf passes silently (guard hole)"
+out=$(bgp 'rm -rf ../sibling' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "parent-traversal rm -rf (..) asks (v3.14.3)" || no ".. rm -rf passes silently (guard hole)"
+out=$(bgp 'rm -rf ./build' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "dot-relative rm -rf still passes silently" || no "./ rm -rf flagged (false positive)"
+( . "$REPO/.claude/hooks/guard-patterns.sh"; guard_forbidden_verify "rm -rf ~/x" ) && ok "stop-gate refuses a ~/ rm -rf verify (shared matcher, v3.14.3)" || no "stop-gate lets a ~/ rm -rf verify through"
 # Session-scratchpad exemption (v3.14.1): the harness's own disposable tree
 # is not a decision worth a click; every other absolute target still asks.
 SP='/tmp/claude-1000/-code-demo/9f2c4a1b-0000-4000-8000-000000000000/scratchpad'

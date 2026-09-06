@@ -3,11 +3,12 @@
 Fifteen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
-- **[-7. claude-starter v3.14 → v3.14.2](#-7-claude-starter-v314--v3142)** — the
+- **[-7. claude-starter v3.14 → v3.14.3](#-7-claude-starter-v314--v3143)** — the
   single-rm-tier patch: the `Bash(rm -rf:*)` ask rule leaves
   `settings.json` — declarative ask rules prompt in every mode (bypass
   included) and no hook exemption reaches them, so v3.14.1's scratchpad
-  exemption never showed; `bash-guard.sh` is now the only `rm` tier.
+  exemption never showed; `bash-guard.sh` is now the only `rm` tier,
+  and (v3.14.3) `~/`, `$HOME/` and `..` path starts join its ask tier.
 - **[-6. claude-starter v3.13 → v3.14](#-6-claude-starter-v313--v314)** — the
   liveness release: stdout marker on every stop-gate block (defeats the
   CLI's missing-hook heuristic that silently dropped red blocks),
@@ -62,9 +63,9 @@ English README are the authority when translations drift):
 
 ---
 
-## -7. claude-starter v3.14 → v3.14.2
+## -7. claude-starter v3.14 → v3.14.3
 
-Two patch releases on one finding. v3.14.1 exempted the session
+Three patch releases on one finding. v3.14.1 exempted the session
 scratchpad (`/tmp/claude-<uid>/<project>/<session>/scratchpad`) from
 bash-guard's absolute-`rm -rf` confirmation. It changed nothing the
 user could see: the confirmation was coming from `settings.json`'s
@@ -78,6 +79,7 @@ hook returns. No hook-side exemption can reach a declarative ask rule.
 | v3.14.1 | v3.14.2 | Reason |
 |---|---|---|
 | `settings.json` `permissions.ask` carried `Bash(rm -rf:*)` beside the hook's absolute-path `rm -rf` confirmation | the ask rule is gone; `bash-guard.sh` is the single `rm` tier (absolute paths only, any flag spelling, scratchpad exempt, root deletes denied) | a declarative ask rule prompts in every mode and cannot be scoped or exempted; the hook matches more spellings (`-fr`, `-r -f`, `--recursive --force`) and is the layer the exemption lives in. The CLI's own critical-path breaker (root, top-level dirs, home, cwd and its parents, `"$DIR"/*`) still asks in every mode |
+| the hook's confirmation covered only path starts of `/` | `~/`, `$HOME/` and `..` path starts join the ask tier (v3.14.3); `$VAR/…` stays the documented boundary; `./build` and `build` stay silent | with the settings rule gone, home-relative and parent-traversal spellings had no layer left — the CLI breaker covers home itself, not `~/projects/x`; matching `$VAR/` in general would re-create the scratchpad prompt storm (`rm -rf $S/abl`) |
 
 Trade: a relative `rm -rf build` inside the project no longer prompts
 where an allow rule, auto mode, or bypass would approve it. The other
@@ -86,9 +88,10 @@ unchanged — they prompt under bypass by design.
 
 ### Migrating
 
-- Stock `settings.json`: `sync-project.sh --update-stock <project>`
-  replaces it. Customized copies: delete the `"Bash(rm -rf:*)"` entry
-  from `permissions.ask` by hand.
+- Stock `settings.json`, `guard-patterns.sh`, `bash-guard.sh`:
+  `sync-project.sh --update-stock <project>` replaces them. Customized
+  `settings.json` copies: delete the `"Bash(rm -rf:*)"` entry from
+  `permissions.ask` by hand.
 - Restart running sessions — `settings.json` is read at session start.
 
 ---

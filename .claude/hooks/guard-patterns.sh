@@ -43,8 +43,13 @@ _G_F='(-[[:alnum:]]*f[[:alnum:]]*|--force)'
 _G_RF="(-[[:alnum:]]*([rR][[:alnum:]]*f|f[[:alnum:]]*[rR])[[:alnum:]]*|${_G_R}([[:space:]]+${_G_FLAG})*[[:space:]]+${_G_F}|${_G_F}([[:space:]]+${_G_FLAG})*[[:space:]]+${_G_R})"
 _G_RM="(^|[[:space:];&|(])rm[[:space:]]+(${_G_FLAG}[[:space:]]+)*${_G_RF}([[:space:]]+${_G_FLAG})*[[:space:]]+[\"']?"
 
-# ...on any absolute path (stop-gate denylist; bash-guard ask tier).
-GUARD_RM_RF_ABS="${_G_RM}/"
+# ...on a path that leaves the project tree: absolute, home-relative
+# (`~`, `$HOME`) or parent traversal (`..`) — stop-gate denylist,
+# bash-guard ask tier. `$VAR/...` forms stay the documented boundary
+# (v3.14.3: with the settings.json rm rule gone these spellings had no
+# layer left; the CLI's critical-path breaker covers home itself, not
+# `~/projects/x`).
+GUARD_RM_RF_ABS="${_G_RM}(/|~|\\\$HOME|\.\.)"
 # ...on the filesystem root (bash-guard deny tier). --no-preserve-root is
 # a root delete by definition — denied on sight, target parsing aside.
 GUARD_RM_RF_ROOT="${_G_RM}/([[:space:]]|\*|[\"']|$)|(^|[[:space:];&|(])rm[[:space:]][^|;&]*--no-preserve-root"
