@@ -8,7 +8,8 @@ English README are the authority when translations drift):
   `settings.json` — declarative ask rules prompt in every mode (bypass
   included) and no hook exemption reaches them, so v3.14.1's scratchpad
   exemption never showed; `bash-guard.sh` is now the only `rm` tier,
-  and (v3.14.3) `~/`, `$HOME/` and `..` path starts join its ask tier.
+  and (v3.14.3) `~/`, `$HOME/` and `..` path starts join its ask tier,
+  mirrored as three declarative ask rules so bypass sessions still prompt.
 - **[-6. claude-starter v3.13 → v3.14](#-6-claude-starter-v313--v314)** — the
   liveness release: stdout marker on every stop-gate block (defeats the
   CLI's missing-hook heuristic that silently dropped red blocks),
@@ -79,7 +80,7 @@ hook returns. No hook-side exemption can reach a declarative ask rule.
 | v3.14.1 | v3.14.2 | Reason |
 |---|---|---|
 | `settings.json` `permissions.ask` carried `Bash(rm -rf:*)` beside the hook's absolute-path `rm -rf` confirmation | the ask rule is gone; `bash-guard.sh` is the single `rm` tier (absolute paths only, any flag spelling, scratchpad exempt, root deletes denied) | a declarative ask rule prompts in every mode and cannot be scoped or exempted; the hook matches more spellings (`-fr`, `-r -f`, `--recursive --force`) and is the layer the exemption lives in. The CLI's own critical-path breaker (root, top-level dirs, home, cwd and its parents, `"$DIR"/*`) still asks in every mode |
-| the hook's confirmation covered only path starts of `/` | `~/`, `$HOME/` and `..` path starts join the ask tier (v3.14.3); `$VAR/…` stays the documented boundary; `./build` and `build` stay silent | with the settings rule gone, home-relative and parent-traversal spellings had no layer left — the CLI breaker covers home itself, not `~/projects/x`; matching `$VAR/` in general would re-create the scratchpad prompt storm (`rm -rf $S/abl`) |
+| the hook's confirmation covered only path starts of `/`; under `bypassPermissions` the CLI drops hook asks altogether | `~/`, `$HOME/` and `..` path starts join the hook's ask tier (any flag spelling; the stop-gate denylist widens with it) AND `settings.json` gains three declarative ask rules — `Bash(rm -rf ~/*)`, `Bash(rm -rf $HOME/*)`, `Bash(rm -rf ../*)` — which prompt in every mode, bypass included; `$VAR/…` stays the documented boundary; `./build` and `build` stay silent | with the coarse rule gone these spellings had no layer left in a bypass session (the CLI breaker covers home itself, not `~/projects/x`); the three rules can never match a `/tmp` scratchpad path, so the v3.14.1 storm cannot return through them; matching `$VAR/` in general would (`rm -rf $S/abl`). Absolute non-scratchpad paths in bypass stay silent — no declarative rule can say "absolute except scratchpad" |
 
 Trade: a relative `rm -rf build` inside the project no longer prompts
 where an allow rule, auto mode, or bypass would approve it. The other
@@ -91,7 +92,8 @@ unchanged — they prompt under bypass by design.
 - Stock `settings.json`, `guard-patterns.sh`, `bash-guard.sh`:
   `sync-project.sh --update-stock <project>` replaces them. Customized
   `settings.json` copies: delete the `"Bash(rm -rf:*)"` entry from
-  `permissions.ask` by hand.
+  `permissions.ask` by hand and add `"Bash(rm -rf ~/*)"`,
+  `"Bash(rm -rf $HOME/*)"`, `"Bash(rm -rf ../*)"`.
 - Restart running sessions — `settings.json` is read at session start.
 
 ---

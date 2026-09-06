@@ -10,7 +10,10 @@
       "Bash(git push:*)",
       "Bash(git reset --hard:*)",
       "Bash(git clean:*)",
-      "Bash(sudo:*)"
+      "Bash(sudo:*)",
+      "Bash(rm -rf ~/*)",
+      "Bash(rm -rf $HOME/*)",
+      "Bash(rm -rf ../*)"
     ],
     "deny": [
       "Read(./.env)",

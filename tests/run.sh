@@ -859,6 +859,7 @@ grep -qF 'Edit(./.ai_context/tasks/**/gatelog)' "$REPO/.claude/settings.json" &&
 grep -qF 'Write(./.ai_context/tasks/**/' "$REPO/.claude/settings.json" && no "dead Write() deny rule present — CC matches only Edit(path) for file edits and warns every session (F25)" || ok "no dead Write() deny rules (F25)"
 grep -qF '"Bash(git push --force:*)"' "$REPO/.claude/settings.json" && ok "declarative force-push deny present" || no "force-push deny entry missing"
 grep -qF '"ask"' "$REPO/.claude/settings.json" && grep -qF '"Bash(git push:*)"' "$REPO/.claude/settings.json" && ok "ask tier present (push/reset/clean/sudo)" || no "ask tier missing"
+for r in 'Bash(rm -rf ~/*)' 'Bash(rm -rf $HOME/*)' 'Bash(rm -rf ../*)'; do grep -qF "\"$r\"" "$REPO/.claude/settings.json" && ok "declarative ask rule present: $r (v3.14.3 — prompts even under bypass, where hook asks are dropped)" || no "declarative ask rule missing: $r"; done
 grep -qF '"Bash(rm -rf:*)"' "$REPO/.claude/settings.json" && no "rm -rf ask rule back in settings.json — declarative ask rules prompt in every mode incl. bypass, per subcommand, and no hook exemption reaches them (v3.14.2)" || ok "no declarative rm -rf ask rule: bash-guard is the single rm tier (v3.14.2)"
 
 echo "=== L1-14 · pre-commit guards: append-only + S2 bulk"

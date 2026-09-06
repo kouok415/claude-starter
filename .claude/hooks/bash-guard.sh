@@ -12,7 +12,10 @@
 #   ask (JSON permissionDecision, human confirms):
 #     - rm -rf leaving the project tree (absolute, ~/, $HOME/, ..) — except
 #       inside the session's own /tmp/claude-*/…/scratchpad tree, which the
-#       harness itself discards
+#       harness itself discards. The CLI drops hook asks under
+#       bypassPermissions, so the ~/ $HOME/ ../ spellings are mirrored as
+#       declarative ask rules in settings.json (v3.14.3) — those prompt in
+#       every mode and can never touch a /tmp scratchpad path.
 #     - commands touching .env files (H1) — .env.example/sample/template/dist
 #       are exempt
 #
