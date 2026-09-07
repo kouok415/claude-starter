@@ -16,7 +16,8 @@
 #       bypassPermissions, so the ~/ $HOME/ ../ spellings are mirrored as
 #       declarative ask rules in settings.json (v3.14.3) — those prompt in
 #       every mode and can never touch a /tmp scratchpad path. The project'"'"'s
-#       own tree is exempt like the scratchpad (v3.14.4).
+#       own tree is exempt like the scratchpad (v3.14.4), and so is any
+#       /tmp/<name> — never /tmp itself or /tmp/* (v3.14.5).
 #     - the ask tier reads the command with heredoc BODIES removed (v3.14.4):
 #       prose in a memory-file write is not a command. The deny tier reads
 #       the full text.
@@ -48,6 +49,7 @@ _GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
 : "${GUARD_RM_RF_ROOT:=(^|[[:space:];&|(])rm[[:space:]]+-(rf|fr)[[:alnum:]]*[[:space:]]+/([[:space:]]|\*|\$)}"
 : "${GUARD_RM_RF_ABS:=(^|[[:space:];&|(])rm[[:space:]]+-(rf|fr)[[:alnum:]]*[[:space:]]+/[^[:space:]]}"
 : "${GUARD_SCRATCHPAD:=/tmp/claude-[[:alnum:]_.-]+/[[:alnum:]_.-]+/[[:alnum:]_.-]+/scratchpad[[:alnum:]_./@+~-]*}"
+: "${GUARD_TMP_SUBDIR:=/tmp/[[:alnum:]_.-]+[[:alnum:]_./@+~-]*}"
 
 payload="$(cat 2>/dev/null || true)"
 
@@ -114,10 +116,12 @@ fi
 #      full command (fail towards asking). Boundary: a heredoc that is
 #      itself EXECUTED (`python3 - <<PY` calling os.system) is now outside
 #      the ask tier — the same class as `bash -c`; the deny tier sees it.
-#   2. for the rm test, paths the harness owns are scrubbed: the session
-#      scratchpad (GUARD_SCRATCHPAD, v3.14.1) and the project's own tree
+#   2. for the rm test, disposable trees are scrubbed: the session
+#      scratchpad (GUARD_SCRATCHPAD, v3.14.1), the project's own tree
 #      ($CLAUDE_PROJECT_DIR/…, v3.14.4 — a relative `rm -rf build` was
-#      always silent; its absolute spelling should not cost a click). Any
+#      always silent; its absolute spelling should not cost a click) and
+#      any /tmp/<name> (GUARD_TMP_SUBDIR, v3.14.5 — /tmp is disposable by
+#      definition; `/tmp`, `/tmp/` and `/tmp/*` still ask). Any
 #      `..` in the command keeps the full string — fail towards asking
 #      rather than reason about where a traversal lands.
 ask_probe="$(printf '%s' "$cmd" | python3 -c '
@@ -135,7 +139,7 @@ case "$cmd" in
     case "${ROOT%/}" in
       /?*) tree_re="$(printf '%s' "${ROOT%/}" | sed 's/[][\\.*^$+?(){}|#]/\\&/g')/[[:alnum:]_./@+~-]+" ;;
     esac
-    rm_probe="$(printf '%s' "$ask_probe" | sed -E "s#${GUARD_SCRATCHPAD}##g${tree_re:+; s#${tree_re}##g}")" ;;
+    rm_probe="$(printf '%s' "$ask_probe" | sed -E "s#${GUARD_SCRATCHPAD}##g; s#${GUARD_TMP_SUBDIR}##g${tree_re:+; s#${tree_re}##g}")" ;;
 esac
 if printf '%s' "$rm_probe" | grep -Eq "$GUARD_RM_RF_ABS"; then
   ask 'rm -rf beyond the project tree (absolute, ~/, $HOME/, ..) — confirm the target is disposable'

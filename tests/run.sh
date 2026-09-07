@@ -796,11 +796,11 @@ bgp 'rm -rf --no-preserve-root /' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/nul
 ck 2 $? "rm -rf --no-preserve-root / denied (F12: the canonical root wipe)"
 bgp 'git push origin +main' | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
 ck 2 $? "+refspec force-push denied (F12: flagless force)"
-out=$(bgp 'rm -f -r /tmp/scratch' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+out=$(bgp 'rm -f -r /var/scratch' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "split-flag absolute rm -rf downgraded to ask" || no "split-flag absolute rm not asked"
 out=$(bgp 'rm -r -f build/' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "relative split-flag rm passes silently" || no "relative split-flag rm flagged"
-out=$(bgp 'rm -rf /tmp/scratch' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+out=$(bgp 'rm -rf /var/scratch' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "absolute-path rm -rf downgraded to ask" || no "absolute rm -rf not asked"
 out=$(bgp 'rm -rf build/' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "relative rm -rf passes silently" || no "relative rm -rf flagged"
@@ -817,10 +817,13 @@ out=$(bgp 'rm -rf ./build' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc
 ( . "$REPO/.claude/hooks/guard-patterns.sh"; guard_forbidden_verify "rm -rf ~/x" ) && ok "stop-gate refuses a ~/ rm -rf verify (shared matcher, v3.14.3)" || no "stop-gate lets a ~/ rm -rf verify through"
 # v3.14.4: the ask tier reads a probe — heredoc bodies dropped, the project's own
 # tree scrubbed like the scratchpad. The deny tier still reads the full text.
-case "$D" in /*) ;; *) no "L1-13 fixture dir is not absolute — project-tree cases cannot run";; esac
+# The fixture dir lives under /tmp, which v3.14.5 exempts wholesale below one
+# level — so the project-tree cases use a fake root outside /tmp (the hook only
+# matches the path textually; it need not exist).
+PD=/var/lib/l113-proj
 out=$(bgp "cat > notes.md <<'EOF'\nsecrets live in .env, never here\nEOF" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "heredoc prose mentioning .env passes silently (v3.14.4)" || no "heredoc prose .env still asks"
-out=$(bgp "cat > plan.md <<'EOF'\n- verify: rm -rf /tmp/x && make\nEOF" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+out=$(bgp "cat > plan.md <<'EOF'\n- verify: rm -rf /var/x && make\nEOF" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "heredoc prose with an absolute rm -rf passes silently (v3.14.4)" || no "heredoc prose rm -rf still asks"
 out=$(bgp "cat > .env <<'EOF'\nA=1\nEOF" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok ".env on the command line beside a heredoc still asks" || no "heredoc strip swallowed a command-line .env"
@@ -828,19 +831,19 @@ out=$(bgp "cat > notes.md <<'EOF'\nunterminated body mentions .env" | CLAUDE_PRO
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "unterminated heredoc keeps the full text (fails toward asking)" || no "unterminated heredoc exempted"
 bgp "bash <<'EOF'\nsudo ls\nEOF" | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
 ck 2 $? "deny tier still reads heredoc bodies (sudo inside bash <<EOF denied)"
-out=$(bgp "rm -rf $D/build" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+out=$(bgp "rm -rf $PD/build" | CLAUDE_PROJECT_DIR="$PD" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "absolute path inside the project tree passes silently (v3.14.4)" || no "project-tree absolute rm -rf still asks"
-out=$(bgp "rm -rf $D" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+out=$(bgp "rm -rf $PD" | CLAUDE_PROJECT_DIR="$PD" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "the project root itself still asks" || no "project root rm -rf exempted"
-out=$(bgp "rm -rf ${D}x/build" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+out=$(bgp "rm -rf ${PD}x/build" | CLAUDE_PROJECT_DIR="$PD" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "project-dir lookalike prefix still asks" || no "lookalike prefix exempted"
-out=$(bgp "rm -rf $D/../other" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+out=$(bgp "rm -rf $PD/../other" | CLAUDE_PROJECT_DIR="$PD" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "traversal out of the project tree still asks" || no "project-tree traversal exempted"
-out=$(bgp "rm -rf $D/build /tmp/other" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+out=$(bgp "rm -rf $PD/build /var/other" | CLAUDE_PROJECT_DIR="$PD" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "second target outside the tree still asks" || no "tree scrub swallowed a second target"
-out=$(bgp "rm -rf $D/build" | CLAUDE_PROJECT_DIR="." bash "$BG" 2>/dev/null); rc=$?
+out=$(bgp "rm -rf $PD/build" | CLAUDE_PROJECT_DIR="." bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "no project-tree exemption without an absolute CLAUDE_PROJECT_DIR" || no "relative ROOT produced an exemption"
-out=$(bgp "python3 - <<'PY'\nimport os; os.system('rm -rf /tmp/q')\nPY" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+out=$(bgp "python3 - <<'PY'\nimport os; os.system('rm -rf /var/q')\nPY" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "executed heredoc body is outside the ask tier (documented boundary, same class as bash -c)" || no "heredoc strip changed for executed heredocs — update the boundary note"
 # Session-scratchpad exemption (v3.14.1): the harness's own disposable tree
 # is not a decision worth a click; every other absolute target still asks.
@@ -858,7 +861,25 @@ out=$(bgp "rm -rf $SP/x /etc/nginx" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/
 out=$(bgp "rm -rf $SP/x;rm -rf /etc/nginx" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "chained absolute rm -rf after a scratchpad path still asks" || no "scrub swallowed a chained rm -rf"
 out=$(bgp 'rm -rf /tmp/claude-1000/scratchpad' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
-{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "shallow /tmp/claude-* lookalike still asks" || no "lookalike path exempted"
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "shallow /tmp/claude-* lookalike passes (v3.14.5: any /tmp/<name> does)" || no "/tmp/<name> lookalike still asks"
+# v3.14.5 (ADR-026): /tmp/<name> is disposable by definition; the wholesale wipe still asks.
+out=$(bgp 'rm -rf /tmp/zzac5' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "rm -rf /tmp/<name> passes silently (v3.14.5)" || no "/tmp/<name> still asks"
+out=$(bgp 'rm -rf /tmp/zzac5/sub dir' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "rm -rf /tmp/<name>/<sub> passes silently" || no "/tmp/<name>/<sub> still asks"
+out=$(bgp 'rm -rf /tmp' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "rm -rf /tmp itself still asks" || no "/tmp itself exempted (wholesale wipe)"
+out=$(bgp 'rm -rf /tmp/' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "rm -rf /tmp/ still asks" || no "/tmp/ exempted (wholesale wipe)"
+out=$(bgp 'rm -rf /tmp/*' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "rm -rf /tmp/* still asks" || no "/tmp/* exempted (wholesale wipe)"
+out=$(bgp 'rm -rf /tmp/foo/../x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "traversal under /tmp/<name> still asks" || no "/tmp traversal exempted"
+out=$(bgp 'rm -rf /tmp/foo /var/x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "second target outside /tmp beside a /tmp/<name> still asks" || no "/tmp scrub swallowed a second target"
+out=$(bgp 'rm -rf /tmp/claude-1000' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "the whole /tmp/claude-<uid> tree passes (documented edge, ADR-026)" || no "/tmp/claude-<uid> handling changed — update the edge note"
+( . "$REPO/.claude/hooks/guard-patterns.sh"; guard_forbidden_verify "rm -rf /tmp/foo" ) && ok "stop-gate still refuses a /tmp/<name> rm -rf verify (exemption not shared)" || no "stop-gate inherited the /tmp exemption"
 out=$(bgp 'cat .env' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok ".env access downgraded to ask (H1)" || no ".env access not asked"
 out=$(bgp 'cat .env.example' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?

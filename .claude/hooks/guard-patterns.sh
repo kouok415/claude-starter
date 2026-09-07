@@ -66,6 +66,14 @@ GUARD_RM_RF_ROOT="${_G_RM}/([[:space:]]|\*|[\"']|$)|(^|[[:space:];&|(])rm[[:spac
 # stop-gate denylist keeps refusing them, verifies run unattended.
 GUARD_SCRATCHPAD='/tmp/claude-[[:alnum:]_.-]+/[[:alnum:]_.-]+/[[:alnum:]_.-]+/scratchpad[[:alnum:]_./@+~-]*'
 
+# Anything one level below /tmp (v3.14.5, ADR-026): on a dev box /tmp is
+# disposable by definition, and every /tmp/<name> the fleet's subagents
+# ever deleted was their own temp dir. At least one real path character,
+# no glob — `rm -rf /tmp`, `/tmp/` and `/tmp/*` keep asking. bash-guard
+# ONLY, like GUARD_SCRATCHPAD. Known edge: the whole /tmp/claude-<uid>
+# tree passes under this rule; the CLI does not catch that either.
+GUARD_TMP_SUBDIR='/tmp/[[:alnum:]_.-]+[[:alnum:]_./@+~-]*'
+
 # Setup-gate sentinel (ADR-004): the newborn-project trigger shared by
 # session-start.sh (instruction layer) and stop-gate.sh (blocking layer) —
 # two layers of ONE mechanism, so they must agree on the trigger domain.

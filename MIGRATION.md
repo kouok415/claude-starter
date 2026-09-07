@@ -3,14 +3,15 @@
 Fifteen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
-- **[-7. claude-starter v3.14 → v3.14.4](#-7-claude-starter-v314--v3144)** — the
+- **[-7. claude-starter v3.14 → v3.14.5](#-7-claude-starter-v314--v3145)** — the
   single-rm-tier patch: the `Bash(rm -rf:*)` ask rule leaves
   `settings.json` — declarative ask rules prompt in every mode (bypass
   included) and no hook exemption reaches them, so v3.14.1's scratchpad
   exemption never showed; `bash-guard.sh` is now the only `rm` tier,
   and (v3.14.3) `~/`, `$HOME/` and `..` path starts join its ask tier,
   mirrored as three declarative ask rules so bypass sessions still prompt;
-  (v3.14.4) the ask tier ignores heredoc bodies and the project's own tree.
+  (v3.14.4) the ask tier ignores heredoc bodies and the project's own tree;
+  (v3.14.5) `/tmp/<name>` passes, `/tmp` and `/tmp/*` still ask.
 - **[-6. claude-starter v3.13 → v3.14](#-6-claude-starter-v313--v314)** — the
   liveness release: stdout marker on every stop-gate block (defeats the
   CLI's missing-hook heuristic that silently dropped red blocks),
@@ -65,9 +66,9 @@ English README are the authority when translations drift):
 
 ---
 
-## -7. claude-starter v3.14 → v3.14.4
+## -7. claude-starter v3.14 → v3.14.5
 
-Four patch releases on one finding. v3.14.1 exempted the session
+Five patch releases on one finding. v3.14.1 exempted the session
 scratchpad (`/tmp/claude-<uid>/<project>/<session>/scratchpad`) from
 bash-guard's absolute-`rm -rf` confirmation. It changed nothing the
 user could see: the confirmation was coming from `settings.json`'s
@@ -83,6 +84,7 @@ hook returns. No hook-side exemption can reach a declarative ask rule.
 | `settings.json` `permissions.ask` carried `Bash(rm -rf:*)` beside the hook's absolute-path `rm -rf` confirmation | the ask rule is gone; `bash-guard.sh` is the single `rm` tier (absolute paths only, any flag spelling, scratchpad exempt, root deletes denied) | a declarative ask rule prompts in every mode and cannot be scoped or exempted; the hook matches more spellings (`-fr`, `-r -f`, `--recursive --force`) and is the layer the exemption lives in. The CLI's own critical-path breaker (root, top-level dirs, home, cwd and its parents, `"$DIR"/*`) still asks in every mode |
 | the hook's confirmation covered only path starts of `/`; under `bypassPermissions` the CLI drops hook asks altogether | `~/`, `$HOME/` and `..` path starts join the hook's ask tier (any flag spelling; the stop-gate denylist widens with it) AND `settings.json` gains three declarative ask rules — `Bash(rm -rf ~/*)`, `Bash(rm -rf $HOME/*)`, `Bash(rm -rf ../*)` — which prompt in every mode, bypass included; `$VAR/…` stays the documented boundary; `./build` and `build` stay silent | with the coarse rule gone these spellings had no layer left in a bypass session (the CLI breaker covers home itself, not `~/projects/x`); the three rules can never match a `/tmp` scratchpad path, so the v3.14.1 storm cannot return through them; matching `$VAR/` in general would (`rm -rf $S/abl`). Absolute non-scratchpad paths in bypass stay silent — no declarative rule can say "absolute except scratchpad" |
 | the ask tier matched the raw command text: a plan or state.md written through a heredoc that *mentioned* `.env` or `rm -rf /…` asked; an absolute path inside the project (`rm -rf /code/proj/build`) asked while `rm -rf build` did not | the ask tier reads a probe — heredoc bodies removed, the session scratchpad and the project's own tree (`$CLAUDE_PROJECT_DIR/…`) scrubbed before the rm test; the deny tier still reads the full text; `..` anywhere, an unterminated heredoc, or a python failure keep the full command | subagent transcripts across the fleet since 2026-08-01: 85 commands parked on a hook confirmation, `.env` prose and in-tree absolute paths the bulk, median waits of 10 and 1.5 minutes, several runs overnight. Bypass mode does NOT drop hook asks (2026-09-07 probe: 299 s) — an earlier note claimed it did. Boundary: a heredoc that is itself executed (`python3 - <<PY` calling `os.system`) is now outside the ask tier, the same class as `bash -c`; the deny tier still reads it |
+| `rm -rf /tmp/<name>` asked — ADR-022 had rejected exempting `/tmp` | `/tmp/<name>…` is scrubbed like the scratchpad and the project tree (v3.14.5); `/tmp`, `/tmp/`, `/tmp/*` still ask; the stop-gate verify denylist does not share it | two of ADR-022's three reasons no longer hold (the CLI's critical-path breaker asks for the top-level `/tmp` in every mode; other sessions' scratchpads were already unprotected by the shape exemption) and the third is a principle, not a harm; nine fleet stalls since 2026-08-01, all the model's own temp dirs. Known edge: `/tmp/claude-<uid>` as a whole passes |
 
 Trade: a relative `rm -rf build` inside the project no longer prompts
 where an allow rule, auto mode, or bypass would approve it. The other
