@@ -815,6 +815,33 @@ out=$(bgp 'rm -rf ../sibling' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null);
 out=$(bgp 'rm -rf ./build' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "dot-relative rm -rf still passes silently" || no "./ rm -rf flagged (false positive)"
 ( . "$REPO/.claude/hooks/guard-patterns.sh"; guard_forbidden_verify "rm -rf ~/x" ) && ok "stop-gate refuses a ~/ rm -rf verify (shared matcher, v3.14.3)" || no "stop-gate lets a ~/ rm -rf verify through"
+# v3.14.4: the ask tier reads a probe — heredoc bodies dropped, the project's own
+# tree scrubbed like the scratchpad. The deny tier still reads the full text.
+case "$D" in /*) ;; *) no "L1-13 fixture dir is not absolute — project-tree cases cannot run";; esac
+out=$(bgp "cat > notes.md <<'EOF'\nsecrets live in .env, never here\nEOF" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "heredoc prose mentioning .env passes silently (v3.14.4)" || no "heredoc prose .env still asks"
+out=$(bgp "cat > plan.md <<'EOF'\n- verify: rm -rf /tmp/x && make\nEOF" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "heredoc prose with an absolute rm -rf passes silently (v3.14.4)" || no "heredoc prose rm -rf still asks"
+out=$(bgp "cat > .env <<'EOF'\nA=1\nEOF" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok ".env on the command line beside a heredoc still asks" || no "heredoc strip swallowed a command-line .env"
+out=$(bgp "cat > notes.md <<'EOF'\nunterminated body mentions .env" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "unterminated heredoc keeps the full text (fails toward asking)" || no "unterminated heredoc exempted"
+bgp "bash <<'EOF'\nsudo ls\nEOF" | CLAUDE_PROJECT_DIR="$D" bash "$BG" >/dev/null 2>&1
+ck 2 $? "deny tier still reads heredoc bodies (sudo inside bash <<EOF denied)"
+out=$(bgp "rm -rf $D/build" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "absolute path inside the project tree passes silently (v3.14.4)" || no "project-tree absolute rm -rf still asks"
+out=$(bgp "rm -rf $D" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "the project root itself still asks" || no "project root rm -rf exempted"
+out=$(bgp "rm -rf ${D}x/build" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "project-dir lookalike prefix still asks" || no "lookalike prefix exempted"
+out=$(bgp "rm -rf $D/../other" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "traversal out of the project tree still asks" || no "project-tree traversal exempted"
+out=$(bgp "rm -rf $D/build /tmp/other" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "second target outside the tree still asks" || no "tree scrub swallowed a second target"
+out=$(bgp "rm -rf $D/build" | CLAUDE_PROJECT_DIR="." bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "no project-tree exemption without an absolute CLAUDE_PROJECT_DIR" || no "relative ROOT produced an exemption"
+out=$(bgp "python3 - <<'PY'\nimport os; os.system('rm -rf /tmp/q')\nPY" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "executed heredoc body is outside the ask tier (documented boundary, same class as bash -c)" || no "heredoc strip changed for executed heredocs — update the boundary note"
 # Session-scratchpad exemption (v3.14.1): the harness's own disposable tree
 # is not a decision worth a click; every other absolute target still asks.
 SP='/tmp/claude-1000/-code-demo/9f2c4a1b-0000-4000-8000-000000000000/scratchpad'

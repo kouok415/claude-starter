@@ -15,7 +15,11 @@
 #       harness itself discards. The CLI drops hook asks under
 #       bypassPermissions, so the ~/ $HOME/ ../ spellings are mirrored as
 #       declarative ask rules in settings.json (v3.14.3) — those prompt in
-#       every mode and can never touch a /tmp scratchpad path.
+#       every mode and can never touch a /tmp scratchpad path. The project'"'"'s
+#       own tree is exempt like the scratchpad (v3.14.4).
+#     - the ask tier reads the command with heredoc BODIES removed (v3.14.4):
+#       prose in a memory-file write is not a command. The deny tier reads
+#       the full text.
 #     - commands touching .env files (H1) — .env.example/sample/template/dist
 #       are exempt
 #
@@ -100,25 +104,49 @@ if printf '%s' "$cmd" | grep -Eq "$GUARD_RM_RF_ROOT"; then
 fi
 
 # --- ask tier ----------------------------------------------------------------
-# The session's own scratchpad (GUARD_SCRATCHPAD) is scrubbed out first: the
-# harness creates and discards that tree, so deleting inside it is not a
-# decision worth a click. Any `..` in the command keeps the full string —
-# fail towards asking rather than reason about where a traversal lands.
-rm_probe="$cmd"
+# The ask tier reads a PROBE, not the raw command (v3.14.4):
+#   1. heredoc bodies are dropped — prose written into a memory file is not
+#      a command. 17 of the 48 subagent `.env` stalls in the fleet since
+#      2026-08-01 were a plan or state.md that mentioned `.env`; each parked
+#      a verifier for a median 10 minutes, hours overnight. The deny tier
+#      above keeps the full text, so `bash <<EOF` smuggling a denied command
+#      is still caught. Python failure or an unterminated heredoc ⇒ the
+#      full command (fail towards asking). Boundary: a heredoc that is
+#      itself EXECUTED (`python3 - <<PY` calling os.system) is now outside
+#      the ask tier — the same class as `bash -c`; the deny tier sees it.
+#   2. for the rm test, paths the harness owns are scrubbed: the session
+#      scratchpad (GUARD_SCRATCHPAD, v3.14.1) and the project's own tree
+#      ($CLAUDE_PROJECT_DIR/…, v3.14.4 — a relative `rm -rf build` was
+#      always silent; its absolute spelling should not cost a click). Any
+#      `..` in the command keeps the full string — fail towards asking
+#      rather than reason about where a traversal lands.
+ask_probe="$(printf '%s' "$cmd" | python3 -c '
+import re, sys
+s = sys.stdin.read()
+sys.stdout.write(re.sub(r"(<<-?[ \t]*([\x27\"]?)(\w+)\2[^\n]*\n)(?:.*?\n)?(^[ \t]*\3[ \t]*$)", r"\1\4", s, flags=re.S | re.M))
+' 2>/dev/null)" || ask_probe="$cmd"
+[ -n "$ask_probe" ] || ask_probe="$cmd"
+
+rm_probe="$ask_probe"
 case "$cmd" in
   *..*) ;;
-  *) rm_probe="$(printf '%s' "$cmd" | sed -E "s#${GUARD_SCRATCHPAD}##g")" ;;
+  *)
+    tree_re=""
+    case "${ROOT%/}" in
+      /?*) tree_re="$(printf '%s' "${ROOT%/}" | sed 's/[][\\.*^$+?(){}|#]/\\&/g')/[[:alnum:]_./@+~-]+" ;;
+    esac
+    rm_probe="$(printf '%s' "$ask_probe" | sed -E "s#${GUARD_SCRATCHPAD}##g${tree_re:+; s#${tree_re}##g}")" ;;
 esac
 if printf '%s' "$rm_probe" | grep -Eq "$GUARD_RM_RF_ABS"; then
   ask 'rm -rf beyond the project tree (absolute, ~/, $HOME/, ..) — confirm the target is disposable'
 fi
 
-stripped="$(printf '%s' "$cmd" | sed -E 's/\.env\.(example|sample|template|dist)//g')"
+stripped="$(printf '%s' "$ask_probe" | sed -E 's/\.env\.(example|sample|template|dist)//g')"
 if printf '%s' "$stripped" | grep -Eq '(^|[^[:alnum:]_])\.env(\.[[:alnum:]_.-]+)?([^[:alnum:]_.-]|$)'; then
   ask 'touches .env files (H1: secrets) — confirm this should happen'
 fi
 
-if printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_])\.secrets/'; then
+if printf '%s' "$ask_probe" | grep -Eq '(^|[^[:alnum:]_])\.secrets/'; then
   ask 'touches .secrets/ (runtime-only credentials, H1) — confirm this should happen'
 fi
 
@@ -126,7 +154,7 @@ fi
 # milestone (v3.14). The natural path is the human's own shell (`! touch
 # ...` bypasses hooks entirely); a model-issued write must surface this
 # confirmation — approving it IS the sign-off, one click, on the record.
-if printf '%s' "$cmd" | grep -Eq '\.ai_context/tasks/[^[:space:]/]+/ack-'; then
+if printf '%s' "$ask_probe" | grep -Eq '\.ai_context/tasks/[^[:space:]/]+/ack-'; then
   ask 'checkpoint sign-off: ack files record HUMAN approval — confirm only if you, the human, are signing off this checkpoint'
 fi
 
