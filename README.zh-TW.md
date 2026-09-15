@@ -201,6 +201,19 @@ agent,可與里程碑驗收用不同 tier。任務中途換模型永不
 `inherit` 都會在選擇與 active plan 不同時警告。仍套用使用者選擇，
 但不自動改寫 plan；剩餘里程碑與 header 依既有切換流程調整。
 
+**Pair 模式（Unreleased）。** `/task --profile=pair-codex` 加入唯一的非
+Claude 席位：一個在 [herdr](https://herdr.dev) 相鄰 pane 裡、用使用者當前
+Codex 預設模型跑的 Codex judge。角色固定 —— Claude 執行、Codex 檢查 ——
+因為「不同模型」比「fresh context」多買到的只有判斷獨立性。檔案是契約
+（`tasks/<slug>/pair/` packet 進、result 出），herdr 只負責啟動、送 prompt、
+等待。`scripts/task-pair.sh` 是筆：非 pair profile 拒絕執行；啟動 judge 時關掉
+Codex hooks（Codex hooks 與 Claude 相容，複製過去的 Stop hook 會在 judge
+裡跑第二道閘門）；每次 run 前後比對 tree 指紋（judge 改了任何東西就作廢
+自己的結果）；掃描 herdr 判成 `idle` 的 Codex 對話框；自己永不輸出
+verdict —— 它只決定 `run_state`。先出 transport；各階段接線（critique、
+驗證分層、plan 收斂迴圈、雙邊 final panel）逐階段寫進
+`.claude/skills/task/pair.md`。
+
 ---
 
 ## 盒子裡有什麼

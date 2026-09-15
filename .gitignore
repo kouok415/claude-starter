@@ -21,6 +21,7 @@
 # VIEW, never memory. Ignored for the same fingerprint reason as the cache.
 .ai_context/tasks/*/STATUS.md
 .ai_context/tasks/*/.last-verify
+.ai_context/tasks/*/pair/.fp-*
 
 # Local-only Claude Code settings (machine-specific permissions etc.)
 # .claude/settings.json IS tracked on purpose — it carries shared hooks.

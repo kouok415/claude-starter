@@ -92,6 +92,7 @@ copy_if_missing .claude/skills/wrap/reference.md
 copy_if_missing .claude/hooks/stop-gate.sh
 copy_if_missing .claude/skills/task/SKILL.md
 copy_if_missing .claude/skills/task/reference.md
+copy_if_missing .claude/skills/task/pair.md
 copy_if_missing .claude/skills/setup/SKILL.md
 copy_if_missing .claude/agents/scout.md
 copy_if_missing .claude/agents/planner.md
@@ -110,6 +111,7 @@ copy_if_missing scripts/precommit-gitleaks.sh
 copy_if_missing scripts/task-status.sh
 copy_if_missing scripts/task-statusline.sh
 copy_if_missing scripts/task-profile.sh
+copy_if_missing scripts/task-pair.sh
 copy_if_missing .pre-commit-config.yaml
 
 # --- Update stock mechanism files (opt-in) --------------------------------------
@@ -144,6 +146,7 @@ stock_update .claude/skills/wrap/SKILL.md
 stock_update .claude/skills/wrap/reference.md
 stock_update .claude/skills/task/SKILL.md
 stock_update .claude/skills/task/reference.md
+stock_update .claude/skills/task/pair.md
 stock_update .claude/skills/setup/SKILL.md
 stock_update .claude/agents/scout.md
 stock_update .claude/agents/planner.md
@@ -161,6 +164,7 @@ stock_update scripts/precommit-gitleaks.sh
 stock_update scripts/task-status.sh
 stock_update scripts/task-statusline.sh
 stock_update scripts/task-profile.sh
+stock_update scripts/task-pair.sh
 stock_update .pre-commit-config.yaml
 
 chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/scripts/*.sh 2>/dev/null || true

@@ -82,6 +82,7 @@ spec; the mechanism is the guarantee.
 |---|---|
 | "Read INDEX.md, then state.md, every session" | `SessionStart` hook injects both — on startup, resume, `/clear`, and after compaction |
 | "Write memory back before you stop" | `/wrap` skill runs the write-back ritual |
+| "The Codex judge checks; it never writes, never gates" (pair-codex) | `scripts/task-pair.sh`: profile check, hooks-off start, tree fingerprint before/after, modal scan, no verdict output — `tests/run.sh` L1-23 over a fake herdr |
 | "No secrets in commits" (H1) | gitleaks pre-commit hook + `settings.json` denies reading `.env*` and `.secrets/**` |
 | "Secrets are runtime-only: code may read them, Claude and git may not" | the `.secrets/` folder — Read tool denied (`settings.json`), bash access downgraded to a confirmation (`bash-guard.sh`), gitignored except the placeholder; execution-time reads (`GOOGLE_APPLICATION_CREDENTIALS=.secrets/sa.json ...`) untouched. Hard on the Read tool, a tripwire elsewhere — code that can read a secret can always leak it, so don't echo secrets to stdout |
 | "state.md stays under 5 KB" (S7) | pre-commit size check + session-start warning |
@@ -221,6 +222,22 @@ never silent — every script writing entry point (`apply`, `mixed`,
 `mixed-judge`, `inherit`) warns on a mismatch with the active plan. The
 selected pins still apply; remaining milestones get re-cut and the plan
 header updated explicitly.
+
+**Pair mode (Unreleased).** `/task --profile=pair-codex` adds one
+non-Claude seat: a Codex judge in a sibling [herdr](https://herdr.dev)
+pane, on the user's current Codex default. Roles are fixed — Claude
+executes, Codex checks — because judgment independence is the one thing a
+different model buys that a fresh context does not. Files are the
+contract (`tasks/<slug>/pair/` packets in, results out); herdr only starts,
+prompts and waits. `scripts/task-pair.sh` is the pen: it refuses to run
+under any other profile, starts the judge with Codex hooks disabled (Codex
+hooks are Claude-compatible, so a copied Stop hook would run a second gate
+inside the judge), fingerprints the tree around every run (a judge that
+changed anything voids its own result), scans for Codex's modal dialogs
+that herdr reports as `idle`, and never emits a verdict of its own —
+`run_state` is the only thing it decides. The transport ships first;
+stage wiring (critique, verification tiers, the plan convergence loop,
+the two-sided final panel) lands per stage in `.claude/skills/task/pair.md`.
 
 ---
 

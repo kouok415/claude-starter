@@ -507,8 +507,11 @@ chmod +x "$D/.claude/hooks/lint.sh"
 echo "=== L1-6 · resident-size guards + security entries"
 sz=$(wc -c < "$REPO/.ai_context/INDEX.md")
 [ "$sz" -le 4096 ] && ok "INDEX.md within 4 KB ($sz B — injected every session)" || no "INDEX.md re-bloated ($sz B > 4096)"
-sz=$(wc -c < "$REPO/.claude/skills/task/SKILL.md")
-[ "$sz" -le 12288 ] && ok "task SKILL.md within 12 KB ($sz B — raised from 11 KB for the v3.12 legibility duties)" || no "task SKILL.md bloated ($sz B) — move detail to reference.md"
+# task SKILL.md has no size assertion since the pair-codex work (workshop
+# ADR-028): the cap was lifted by the user; on-demand detail still belongs
+# in reference.md / pair.md, so the pointer checks below stay.
+[ -f "$REPO/.claude/skills/task/pair.md" ] && ok "task pair.md exists (on-demand pair-codex protocol)" || no "task pair.md missing"
+grep -q 'pair.md' "$REPO/.claude/skills/task/SKILL.md" && ok "task body points at pair.md for pair-* profiles" || no "task body lost its pair.md pointer"
 sz=$(wc -c < "$REPO/.claude/skills/wrap/SKILL.md")
 [ "$sz" -le 2560 ] && ok "wrap SKILL.md within 2.5 KB ($sz B — task machinery lives in reference.md)" || no "wrap SKILL.md bloated ($sz B > 2560)"
 [ -f "$REPO/.claude/skills/wrap/reference.md" ] && ok "wrap reference.md exists (on-demand task close-out)" || no "wrap reference.md missing"
@@ -1234,6 +1237,17 @@ done
 printf '# Plan: p\n<!-- profile: mixed-judge ; size: M -->\n' > "$D/.ai_context/tasks/pdemo/plan.md"
 tp_warn=$( cd "$D" && bash scripts/task-profile.sh mixed-judge 2>&1 >/dev/null )
 [ -z "$tp_warn" ] && ok "matching direct profile has no switch warning" || no "matching profile warned"
+# pair-codex (ADR-028): all seven inherit — the Codex judge is the only
+# non-Claude seat and it is not a pin; the plan header is the whole state.
+( cd "$D" && bash scripts/task-profile.sh pair-codex >/dev/null 2>&1 ); tp_rc=$?
+ck 0 "$tp_rc" "pair-codex is an accepted profile"
+[ "$(grep -h '^model:' "$D"/.claude/agents/*.md | sort -u)" = "model: inherit" ] && ok "pair-codex pins every agent to inherit (both sides run their session default)" || no "pair-codex wrote a model pin"
+printf '# Plan: p\n<!-- profile: pair-codex ; size: M -->\n## M1: x [in_progress]\n- verify: `true`\n' > "$D/.ai_context/tasks/pdemo/plan.md"
+tp_warn=$( cd "$D" && bash scripts/task-profile.sh apply mixed-judge 2>&1 >/dev/null )
+echo "$tp_warn" | grep -q 'PROFILE SWITCH mid-task (pair-codex -> mixed-judge)' && ok "leaving pair-codex mid-task warns like any other switch" || no "pair-codex switch was silent"
+( cd "$D" && bash scripts/task-profile.sh apply >/dev/null 2>&1 )
+grep -q '^model: inherit$' "$D/.claude/agents/executor.md" && ok "apply: resume restores pair-codex from the header (inherit pins)" || no "resume under pair-codex left pins behind"
+( cd "$D" && bash scripts/task-profile.sh status 2>/dev/null ) | grep -q 'active plan.md profile: pair-codex' && ok "status names the active plan.md profile" || no "status does not show the active profile"
 
 echo "=== L1-21 · every exit-2 block prints the stdout marker (CLI heuristic, v3.14)"
 # The missing-hook heuristic (exit 2 + EMPTY stdout + stderr matching
@@ -1364,6 +1378,136 @@ ck 2 $? "all-done sweep also checks earlier unacked checkpoints"
 touch "$D/.ai_context/tasks/demo/ack-M0"
 CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
 ck 0 $? "all acknowledged checkpoints allow completion"
+
+echo "=== L1-23 · pair-codex transport: task-pair.sh over a fake herdr (ADR-028)"
+# Every scenario asserts the same invariant from two sides: a run that did
+# not end in a checkable result never exits 0, and the script never prints
+# a verdict of its own. The fake herdr replays herdr 0.9.0 JSON shapes.
+PD="$WORK/l123"; FK="$WORK/l123-fake"   # fake herdr's log/state live OUTSIDE the fixture repo
+mkdir -p "$PD/scripts" "$PD/.ai_context/tasks/pdemo" "$FK/bin" "$FK/codex-home" "$FK/empty-home" "$FK/state"
+cp "$REPO/scripts/task-pair.sh" "$PD/scripts/"
+cp "$REPO/tests/fake-herdr.sh" "$FK/bin/herdr"; chmod +x "$FK/bin/herdr"
+( cd "$PD" && git init -q . && printf '# p\n' > CLAUDE.md && git add -A && git commit -qm init )
+PH="$(git -C "$PD" rev-parse HEAD)"
+printf 'pdemo\n' > "$PD/.ai_context/tasks/CURRENT"
+pplan() { printf '# Plan: p\n<!-- profile: %s ; size: M -->\n## M1: x [in_progress]\n- verify: `true`\n' "$1" > "$PD/.ai_context/tasks/pdemo/plan.md"; }
+pplan pair-codex
+printf '[projects."%s"]\ntrust_level = "trusted"\n' "$PD" > "$FK/codex-home/config.toml"
+PKD="$PD/.ai_context/tasks/pdemo/pair"; mkdir -p "$PKD"
+mkpkt() { printf 'role: %s\nmilestone: M1\nbase: %s\n\n# packet body\n' "$2" "$3" > "$PKD/$1-$2-M1.md"; echo "$PKD/$1-$2-M1.md"; }
+# tp <ENV=val ...> -- <task-pair args>: runs inside the fixture with the fake
+# herdr on PATH; stdout/stderr land in $FK/out and $FK/err, rc is echoed.
+tp() {
+  local envs=()
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  ( cd "$PD" && env HERDR_ENV=1 PATH="$FK/bin:$PATH" CODEX_HOME="$FK/codex-home" \
+      FAKE_HERDR_LOG="$FK/herdr.log" FAKE_HERDR_STATE="$FK/state" "${envs[@]}" \
+      bash scripts/task-pair.sh "$@" ) >"$FK/out" 2>"$FK/err"; echo $?
+}
+prompts() { grep -c '^agent prompt' "$FK/herdr.log" 2>/dev/null || echo 0; }
+no_verdict_printed() { ! grep -q 'PASS\|FAIL' "$FK/out" "$FK/err"; }
+RL="$PKD/runlog"
+
+# --- refusals happen before any herdr call --------------------------------
+pplan opus-tier
+rc=$(tp -- ensure); ck 3 "$rc" "ensure refuses under a non-pair profile"
+[ ! -s "$FK/herdr.log" ] && ok "no herdr call under a non-pair profile" || no "herdr was called under a non-pair profile"
+pplan pair-codex
+rc=$(tp HERDR_ENV=0 -- ensure); ck 3 "$rc" "ensure refuses outside herdr (HERDR_ENV != 1)"
+rc=$(tp CODEX_HOME="$FK/empty-home" -- ensure); ck 3 "$rc" "ensure refuses when Codex has not trusted the repo"
+grep -q 'trust' "$FK/err" && ok "untrusted refusal names the fix" || no "untrusted refusal message missing"
+# Hooks tripwire: a judge we did not start cannot prove hooks are off.
+mkdir -p "$PD/.codex"; printf '{"hooks":{}}' > "$PD/.codex/hooks.json"
+rc=$(tp FAKE_HERDR_AGENT=idle -- ensure); ck 3 "$rc" "ensure refuses a foreign judge when .codex/hooks.json exists"
+printf 'name=judge-pdemo\nhooks_off=1\n' > "$PKD/judge"
+rc=$(tp FAKE_HERDR_AGENT=idle -- ensure); ck 0 "$rc" "ensure accepts a judge whose record says hooks are off"
+rm -rf "$PD/.codex" "$PKD/judge"; : > "$FK/herdr.log"
+
+# --- ensure starts the judge with the verified argument set -----------------
+rc=$(tp -- ensure); ck 0 "$rc" "ensure starts a judge when none is live"
+st_line="$(grep '^agent start' "$FK/herdr.log" || true)"
+printf '%s' "$st_line" | grep -q -- '-c features.hooks=false' && ok "judge starts with Codex hooks disabled (no second Stop gate)" || no "judge started with hooks enabled: $st_line"
+printf '%s' "$st_line" | grep -q -- '-s workspace-write' && ok "judge starts in workspace-write (read-only cannot even mktemp)" || no "judge sandbox flag wrong: $st_line"
+printf '%s' "$st_line" | grep -q 'project_doc_fallback_filenames' && ok "judge reads CLAUDE.md as its project doc" || no "CLAUDE.md fallback missing: $st_line"
+printf '%s' "$st_line" | grep -qE -- '(^| )-m |model_reasoning_effort' && no "judge pins a model/effort (must inherit the user's Codex default)" || ok "judge inherits the user's Codex model and effort"
+grep -qx 'hooks_off=1' "$PKD/judge" && ok "judge record written (hooks_off=1)" || no "judge record missing"
+grep -q 'gpt-5.6-terra medium' "$FK/out" && ok "ensure reports the observed model from the status line" || no "model not scraped: $(cat "$FK/out")"
+rc=$(tp -- ensure); ck 0 "$rc" "ensure is idempotent (judge present)"
+[ "$(grep -c '^agent start' "$FK/herdr.log")" -eq 1 ] && ok "second ensure does not start a second judge" || no "ensure restarted a live judge"
+
+# --- send: the happy path, and the script's silence on verdicts -------------
+pk=$(mkpkt 001 verifier "$PH")
+rc=$(tp -- send "$pk"); ck 0 "$rc" "send: completed run exits 0"
+[ -s "${pk%.md}.result.md" ] && ok "send: result file collected" || no "send: result missing"
+grep -q "	001	start	verifier	M1	$PH	" "$RL" && ok "runlog: start row (seq, role, milestone, base)" || no "runlog start row malformed: $(cat "$RL")"
+grep -q "	001	end:completed	" "$RL" && ok "runlog: end:completed row" || no "runlog end row missing"
+grep -q 'state=completed (verdict=pass)' "$FK/out" && ok "send: summary carries the judge's verdict verbatim, lowercase" || no "send summary wrong: $(cat "$FK/out")"
+no_verdict_printed && ok "script prints no PASS/FAIL of its own" || no "script printed a verdict"
+grep -q '	gpt-5.6-terra medium	' "$RL" && ok "runlog rows record the observed model" || no "runlog model column empty"
+
+# --- send: every way a run can end without a usable result -----------------
+pk=$(mkpkt 002 verifier "$PH")
+rc=$(tp FAKE_HERDR_PROMPT=no_result -- send "$pk"); ck 6 "$rc" "idle without a result file is failed:no_result"
+grep -q "	002	end:failed	.*	no_result$" "$RL" && ok "runlog: no_result recorded" || no "runlog no_result row missing"
+pk=$(mkpkt 003 verifier "$PH")
+rc=$(tp FAKE_HERDR_PROMPT=bad_header -- send "$pk"); ck 6 "$rc" "result without a verdict line is failed:bad_header"
+grep -q "	003	end:failed	.*	bad_header$" "$RL" && ok "runlog: bad_header recorded" || no "runlog bad_header row missing"
+pk=$(mkpkt 004 verifier "$PH")
+rc=$(tp FAKE_HERDR_PROMPT=base_mismatch -- send "$pk"); ck 6 "$rc" "result for another base is failed:base_mismatch"
+pk=$(mkpkt 005 verifier "$PH")
+rc=$(tp FAKE_HERDR_PROMPT=tree_changed FAKE_HERDR_TOUCH="$PD/CLAUDE.md" -- send "$pk"); ck 6 "$rc" "a judge that touched the tree voids its own result (tree_changed)"
+grep -q "	005	end:failed	.*	tree_changed$" "$RL" && ok "runlog: tree_changed recorded" || no "runlog tree_changed row missing"
+[ -s "${pk%.md}.result.md" ] && ok "tree_changed: the (voided) result file is kept as evidence" || no "tree_changed result vanished"
+git -C "$PD" checkout -q CLAUDE.md
+pk=$(mkpkt 006 verifier "$PH")
+rc=$(tp FAKE_HERDR_PROMPT=timeout -- send "$pk"); ck 5 "$rc" "herdr timeout leaves the run in flight (exit 5, chain wait)"
+grep -q "	006	waiting	" "$RL" && ok "runlog: waiting row on timeout" || no "runlog waiting row missing"
+[ -f "$PKD/.fp-006" ] && ok "in-flight fingerprint kept for wait" || no "in-flight fingerprint missing"
+grep -q 'task-pair.sh wait 006' "$FK/out" && ok "timeout output names the wait command" || no "timeout output lacks the wait hint"
+rc=$(tp FAKE_HERDR_WAIT=ok -- wait 006); ck 0 "$rc" "wait: settles the in-flight run"
+grep -q "	006	end:completed	" "$RL" && ok "runlog: wait completed the run" || no "runlog after wait wrong"
+[ ! -f "$PKD/.fp-006" ] && ok "in-flight fingerprint cleared after settle" || no "stale .fp file left"
+rc=$(tp -- wait 006); ck 2 "$rc" "wait refuses a seq with no run in flight"
+pk=$(mkpkt 007 verifier "$PH")
+rc=$(tp FAKE_HERDR_PROMPT=stalled -- send "$pk"); ck 6 "$rc" "agent_prompt_stalled is failed:stalled, not resent"
+[ "$(prompts)" -eq 7 ] && ok "stalled prompt was not resubmitted" || no "prompt count after stall: $(prompts)"
+pk=$(mkpkt 008 verifier "$PH")
+rc=$(tp FAKE_HERDR_PROMPT=blocked -- send "$pk"); ck 4 "$rc" "judge blocked mid-run exits 4 (human)"
+grep -q "	008	end:blocked	" "$RL" && ok "runlog: blocked recorded" || no "runlog blocked row missing"
+pk=$(mkpkt 009 verifier "$PH")
+rc=$(tp -- send "$pk"); ck 4 "$rc" "send refuses while the judge is still blocked"
+[ "$(prompts)" -eq 8 ] && ok "nothing was typed into a blocked judge" || no "prompt sent to a blocked judge"
+echo idle > "$FK/state/agent"
+
+# --- modal dialogs: herdr says idle, the screen says otherwise ---------------
+SCR="$FK/screen.txt"
+printf '  Do you trust the contents of this directory? Working with untrusted contents\n› 1. Yes, continue\n  2. No, quit\n  Press enter to continue\n' > "$SCR"
+pk=$(mkpkt 010 verifier "$PH")
+rc=$(tp FAKE_HERDR_SCREEN="$SCR" -- send "$pk"); ck 4 "$rc" "trust dialog on screen: refused, never answered"
+[ "$(prompts)" -eq 8 ] && ok "no prompt typed into the trust dialog" || no "prompt sent over a trust dialog"
+grep -q "trust" "$FK/err" && ok "trust dialog is reported to the human" || no "trust dialog not reported"
+printf '  Approaching rate limits\n  Switch to gpt-5.6-luna for lower credit usage?\n› 1. Switch to gpt-5.6-luna\n  2. Keep current model\n  Press enter to confirm or esc to go back\n' > "$SCR"
+pk=$(mkpkt 011 verifier "$PH")
+rc=$(tp FAKE_HERDR_SCREEN="$SCR" FAKE_HERDR_ESC_CLEARS=1 -- send "$pk"); ck 0 "$rc" "rate-limit nudge: dismissed with esc, run proceeds"
+grep -q '^agent send-keys judge-pdemo esc' "$FK/herdr.log" && ok "esc sent for the rate-limit nudge (keeps the current model)" || no "esc not sent"
+printf '  Approaching rate limits\n  Switch to gpt-5.6-luna for lower credit usage?\n  Press enter to confirm or esc to go back\n' > "$SCR"
+pk=$(mkpkt 012 verifier "$PH")
+rc=$(tp FAKE_HERDR_SCREEN="$SCR" FAKE_HERDR_ESC_CLEARS=0 -- send "$pk"); ck 4 "$rc" "a nudge that survives esc is handed to the human"
+[ "$(prompts)" -eq 9 ] && ok "no prompt typed into a surviving dialog" || no "prompt sent over a surviving dialog"
+
+# --- packet hygiene ---------------------------------------------------------
+pk=$(mkpkt 013 verifier 0123456789abcdef0123456789abcdef01234567)
+rc=$(tp -- send "$pk"); ck 6 "$rc" "commit-shaped base that is not HEAD: stale packet, not sent"
+[ "$(prompts)" -eq 9 ] && ok "stale packet never reached the judge" || no "stale packet was sent"
+pk=$(mkpkt 014 plan-critic "sha256:plan-digest-v3")
+rc=$(tp -- send "$pk"); ck 0 "$rc" "non-commit base (plan digest) is passed through and matched"
+pk=$(mkpkt 015 verifier "$PH"); : > "${pk%.md}.result.md"
+rc=$(tp -- send "$pk"); ck 2 "$rc" "existing result file: refused (one packet, one run)"
+printf 'milestone: M1\nbase: %s\n' "$PH" > "$PKD/016-verifier-M1.md"
+rc=$(tp -- send "$PKD/016-verifier-M1.md"); ck 2 "$rc" "packet without a role line is refused"
+rc=$(tp -- status); ck 0 "$rc" "status runs"
+grep -q 'seq 001  verifier M1  -> completed' "$FK/out" && ok "status summarises seq 001 as completed" || no "status output wrong: $(head -3 "$FK/out")"
+grep -q 'seq 008  verifier M1  -> blocked' "$FK/out" && ok "status summarises seq 008 as blocked" || no "status lost the blocked row"
 
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"

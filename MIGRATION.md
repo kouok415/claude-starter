@@ -3,6 +3,7 @@
 Fifteen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[Unreleased — pair-codex transport](#unreleased--pair-codex-transport)** — `/task --profile=pair-codex`: a Codex judge over herdr takes the checker seats; `scripts/task-pair.sh` + `pair.md` + fake-herdr tests (transport only).
 - **[Unreleased — completion and profile fixes](#unreleased--completion-and-profile-fixes)** — current final verification, terminal human checkpoints, and consistent profile-switch warnings.
 - **[-7. claude-starter v3.14 → v3.14.5](#-7-claude-starter-v314--v3145)** — the
   single-rm-tier patch: the `Bash(rm -rf:*)` ask rule leaves
@@ -64,6 +65,51 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## Unreleased — pair-codex transport
+
+`/task --profile=pair-codex` (workshop ADR-028): a Codex judge in a sibling
+herdr pane takes the checker seats; Claude keeps executing. This release
+ships the transport only — stage wiring follows per stage.
+
+- **New profile `pair-codex`** in `scripts/task-profile.sh`: all seven
+  agents `inherit`; the plan.md header is the whole mode state, so resume,
+  the mid-task switch warning and the scoreboard `profile` column work
+  unchanged. `status` now also prints the active plan.md profile.
+- **New `scripts/task-pair.sh`** (`ensure` / `send` / `wait` / `status`):
+  refuses under a non-`pair-*` profile, outside herdr, in a repo Codex has
+  not trusted, or when `.codex/hooks.json` exists and the judge on record
+  was not started with hooks off. Starts the judge with `-s
+  workspace-write -c features.hooks=false -c
+  'project_doc_fallback_filenames=["CLAUDE.md"]'` and no model/effort
+  args. Packets and results live in `tasks/<slug>/pair/`; `runlog` there
+  is script-written (tab-separated, observed model per row). The tree
+  fingerprint before/after every run voids results from a judge that
+  changed anything; Codex modal dialogs (rate-limit model switch,
+  directory trust) are scanned for because herdr reports them as `idle`.
+- **New `.claude/skills/task/pair.md`** — loaded only under `pair-*`;
+  SKILL.md gains the enum value and a one-line pointer. The task SKILL.md
+  size assertion (L1-6) is dropped by user decision; the pointer checks
+  stay.
+- **Tests:** L1-20 covers the new profile; L1-23 drives `task-pair.sh`
+  over `tests/fake-herdr.sh` — sixty assertions that no run without a
+  checkable result ever exits 0 and that the script never prints a
+  verdict. `harness-report.sh` accepts the enum value.
+- `.gitignore`: `.ai_context/tasks/*/pair/.fp-*` (in-flight fingerprints).
+
+### Migrating
+
+Sync stock `scripts/task-profile.sh`, the task skill files and tests with
+`sync-project.sh --update-stock <project>`; `scripts/task-pair.sh` and
+`.claude/skills/task/pair.md` are added by a plain sync. Nothing changes
+for projects that never select `pair-codex`. Prerequisites for the
+profile: herdr ≥ 0.9 with the session running inside a herdr pane, Codex
+CLI ≥ 0.154 logged in, and the repo trusted in Codex once. If the project
+carries a `.codex/hooks.json` imported from `.claude/`, leave it — the
+judge is started with hooks off; only a judge the script did not start is
+refused.
 
 ---
 

@@ -44,6 +44,14 @@ the session on either tier; that changes only the orchestration price).
 Knobs: `opus-tier` milestone sizing, 1 + critic fan-out, `fable-tier`
 drift cadence, opus escalation ladder (1 → 2 → 3 → 4).
 
+`pair-codex` — every Claude agent stays `inherit`; the checker seats
+(critique, `risk: med` verification, drift, a second `risk: high`
+verifier, the final panel's second set of lenses) run in a Codex judge
+pane over herdr, driven by `scripts/task-pair.sh`. Claude executes, Codex
+checks — fixed roles, one orchestrator, file packets in and results out.
+Protocol, packet contract and operator notes: `pair.md` (loaded only under
+this profile). Does not combine with `mixed`/`mixed-judge` pins.
+
 Selection is per task, applied at intake by `task-profile.sh apply`:
 `/task --profile=mixed-judge ...` pins; a flagless `/task` resets to
 inherit — **except on resume**, where the active task's plan.md header

@@ -10,6 +10,10 @@
 #   mixed        executor -> opus, everything else inherit (run the
 #                session on a fable-class model)
 #   inherit      all agents -> inherit (factory state, byte-identical)
+#   pair-codex   all agents -> inherit; the checker seats run in a Codex
+#                judge pane driven by scripts/task-pair.sh (ADR-028 in the
+#                workshop). The profile name in plan.md is the only state:
+#                task-pair.sh refuses to run under any other profile.
 # `apply` with no argument: an active task's plan.md header wins (resume
 # keeps its recorded profile); otherwise inherit.
 set -euo pipefail
@@ -38,7 +42,7 @@ apply_profile() {
     mixed)
       for a in $JUDGE $EXEC; do pin "$a" inherit; done
       pin executor opus ;;
-    inherit|opus-tier|fable-tier)
+    inherit|opus-tier|fable-tier|pair-codex)
       for a in $JUDGE $EXEC; do pin "$a" inherit; done ;;
     *) echo "task-profile: unknown profile '$1'" >&2; exit 2 ;;
   esac
@@ -64,15 +68,17 @@ cmd="${1:-status}"
 case "$cmd" in
   status)
     warn_env
-    grep -H '^model:' "$AGENTS"/*.md ;;
+    grep -H '^model:' "$AGENTS"/*.md
+    act="$(active_profile || true)"
+    [ -n "$act" ] && echo "active plan.md profile: $act" ;;
   apply)
     want="${2:-}"
     act="$(active_profile || true)"
     [ -n "$want" ] || want="${act:-inherit}"
     apply_profile "$want" ;;
-  mixed-judge|mixed|inherit)
+  mixed-judge|mixed|inherit|pair-codex)
     apply_profile "$cmd" ;;
   *)
-    echo "Usage: task-profile.sh <mixed-judge|mixed|inherit|status|apply [profile]>" >&2
+    echo "Usage: task-profile.sh <mixed-judge|mixed|inherit|pair-codex|status|apply [profile]>" >&2
     exit 2 ;;
 esac

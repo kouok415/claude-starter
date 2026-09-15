@@ -45,11 +45,12 @@ deltas, not summaries.
    (ask if it's unclear whose they are). Create `.ai_context/tasks/<slug>/`,
    write the slug into `.ai_context/tasks/CURRENT`, branch `task/<slug>`
    (never run a task on main).
-4. **Pick the profile** (`opus-tier`/`fable-tier`/`mixed`/`mixed-judge`):
-   `--profile=X` wins; else CLAUDE.md's `Task profile:`; else your model
-   tier. Run `bash scripts/task-profile.sh apply X` (no explicit choice:
-   omit X — an active plan.md header wins, else inherit). Knobs/setups:
-   `reference.md` §Profiles.
+4. **Pick the profile** (`opus-tier`/`fable-tier`/`mixed`/`mixed-judge`/
+   `pair-codex`): `--profile=X` wins; else CLAUDE.md's `Task profile:`;
+   else your model tier. Run `bash scripts/task-profile.sh apply X` (no
+   explicit choice: omit X — an active plan.md header wins, else inherit).
+   Knobs/setups: `reference.md` §Profiles. `pair-*` ⇒ read `pair.md` now:
+   a Codex judge over herdr takes the checker seats.
 5. **Size the task** — ceremony scales with the task, not only the model:
 
    | Size | When | Plan | Execute | Final check |
@@ -125,7 +126,7 @@ append).
 `plan.md` format — **the Stop gate parses this; keep it exact**:
 
     # Plan: <title>
-    <!-- profile: opus-tier | fable-tier | mixed | mixed-judge ; size: S | M | L -->
+    <!-- profile: opus-tier | fable-tier | mixed | mixed-judge | pair-codex ; size: S | M | L -->
     <!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
 
     ## M1: <milestone title> [pending]

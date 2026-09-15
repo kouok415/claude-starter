@@ -33,6 +33,7 @@ Procedural knowledge (runbooks, how-tos) belongs in a skill
 | `tasks/<slug>/lessons.md` | append-only; one line per lesson; ≤4 KB |
 | `tasks/<slug>/gatelog` | hook-written only, never hand-edited |
 | `tasks/<slug>/spawnlog` | hook-written only, never hand-edited |
+| `tasks/<slug>/pair/*` | pair-codex mailbox: packets + ledger by the orchestrator, results by the judge; `runlog` script-written only |
 | `tasks/<slug>/STATUS.md` | view, not memory: machine region hook-regenerated; model writes §Architecture only; gitignored |
 | `scoreboard.csv` | append-only (A/B dataset); corrections are appended, never edited |
 | `private/*` | free-form; gitignored |
