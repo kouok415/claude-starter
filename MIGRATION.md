@@ -147,7 +147,8 @@ and the final panel, the plan convergence loop, and the intake critique.
   over `tests/fake-herdr.sh` — sixty assertions that no run without a
   checkable result ever exits 0 and that the script never prints a
   verdict. `harness-report.sh` accepts the enum value.
-- `.gitignore`: `.ai_context/tasks/*/pair/.fp-*` (in-flight fingerprints).
+- `.gitignore`: `.ai_context/tasks/*/pair/.fp-*` (in-flight fingerprints);
+  `sync-project.sh` appends the line to synced projects.
 
 ### Migrating
 

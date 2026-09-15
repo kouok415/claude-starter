@@ -197,6 +197,11 @@ if [ -f "$TARGET/.gitignore" ] && ! grep -qF '.ai_context/tasks/*/STATUS.md' "$T
     >> "$TARGET/.gitignore"
   added+=(".gitignore (+ tasks/*/STATUS.md + .last-verify)")
 fi
+if [ -f "$TARGET/.gitignore" ] && ! grep -qF '.ai_context/tasks/*/pair/.fp-*' "$TARGET/.gitignore"; then
+  printf '\n# pair-codex in-flight tree fingerprints (claude-starter, ADR-028) — written\n# by scripts/task-pair.sh per run and removed on settle; never memory.\n.ai_context/tasks/*/pair/.fp-*\n' \
+    >> "$TARGET/.gitignore"
+  added+=(".gitignore (+ tasks/*/pair/.fp-*)")
+fi
 
 # --- Report-only checks -----------------------------------------------------------
 cur_schema="$(grep -m1 -Eo 'schema: v[0-9]+' "$SCRIPT_DIR/.ai_context/INDEX.md" 2>/dev/null || echo 'unknown')"
