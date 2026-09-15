@@ -86,10 +86,22 @@ packet uses the plan digest instead.
 - `ledger.md` — append-only, one row per finding that needed a ruling
   (format under §Stage wiring). Only you write it.
 - `runlog` — script-written, tab-separated:
-  `ts seq event role milestone base digest model detail`; events `start`,
-  `waiting`, `end:<state>`. The model column is the status line as
-  observed at that moment — Codex can switch its own model under rate
-  pressure, so read the scoreboard per model, never per profile alone.
+  `ts seq event role milestone base digest model tokens rollout detail`;
+  events `start`, `waiting`, `end:<state>`, `reset`. `model` and `tokens`
+  (cumulative `in/out`) are the status line as observed at that moment —
+  Codex can switch its own model under rate pressure, so read the
+  scoreboard per model, never per profile alone; a run's cost is the
+  token delta between its start and end rows. `rollout` is the judge's
+  own transcript (`~/.codex/sessions/…/rollout-*.jsonl`, the newest one
+  whose cwd is this repo and which started after the judge): the result
+  file is the judge's self-report, the rollout is what it actually ran.
+  Codex creates the rollout at the first turn, so `start`/`reset` rows
+  may show `?` or the previous thread; the `end:` row is the link. Both
+  observed columns are `?` when Codex's status line is truncated (long
+  cwd, narrow pane).
+- `NNN-<role>.screen.txt` / `dialog-*.screen.txt` / `start-*.screen.txt`
+  — the judge's screen saved whenever a run did not settle `completed`,
+  a dialog was refused, or startup was not ready. Forensics, not memory.
 
 ## Operator notes
 

@@ -156,24 +156,62 @@ clear_modals() {
   fi
   echo "task-pair: judge shows a '$m' dialog — answer it in the pane, then retry:" >&2
   screen 12 | sed 's/^/    /' >&2
+  dump_screen "dialog-$(date -u +%Y%m%dT%H%M%SZ).screen.txt"
   RC=4 die "human input required"
 }
 
-# Model + effort from the Codex status line ("<model> <effort> · <cwd> · …").
-# Observed, never assumed: Codex can switch its own model under rate
-# pressure, so every runlog row re-reads it. '?' when the line is not there.
+# Model + effort from the Codex status line ("<model> <effort> · <cwd> ·
+# … · <n> in · <n> out · …"). Observed, never assumed: Codex can switch its
+# own model under rate pressure, so every runlog row re-reads it. '?' when
+# the line is not there.
 judge_model() {
   local m
   m="$(screen 40 | sed -n 's/^[[:space:]]*\([a-z0-9._-]*\) \([a-z]*\) · .*/\1 \2/p' | tail -1)"
   echo "${m:-?}"
 }
+# Cumulative session token counters from the same line ("12.3k/4.1k");
+# the difference between two runlog rows is what one run cost.
+judge_tokens() {
+  local t
+  t="$(screen 40 | sed -n 's/.*· \([0-9.]*[kKmM]\{0,1\}\) in · \([0-9.]*[kKmM]\{0,1\}\) out.*/\1\/\2/p' | tail -1)"
+  echo "${t:-?}"
+}
+# The judge's own transcript: the newest Codex rollout whose session_meta
+# names this repo as cwd and started after the judge did (a `/new` reset
+# opens a new one). Links a result's self-reported evidence to what the
+# judge actually ran. '?' when none is found.
+judge_rollout() {
+  local started best="" best_ts="" f head ts root2
+  started="$(sed -n 's/^started=//p' "$JUDGE_FILE" 2>/dev/null | head -1)"
+  [ -n "$started" ] || { echo '?'; return; }
+  root2="$(cd "$ROOT" && pwd -P)"
+  for f in "$CODEX_HOME_DIR"/sessions/*/*/*/rollout-*.jsonl; do
+    [ -f "$f" ] || continue
+    head="$(head -c 8192 "$f" 2>/dev/null)"
+    printf '%s' "$head" | grep -qF -e "\"cwd\":\"$ROOT\"" -e "\"cwd\":\"$root2\"" || continue
+    ts="$(printf '%s' "$head" | sed -n 's/^{"timestamp":"\([^"]*\)".*/\1/p' | head -1)"
+    [ -n "$ts" ] || continue
+    [ "$ts" \> "$started" ] || continue
+    if [ -z "$best_ts" ] || [ "$ts" \> "$best_ts" ]; then best="$f"; best_ts="$ts"; fi
+  done
+  echo "${best:-?}"
+}
 
 judge_status() { herdr agent get "$NAME" 2>/dev/null | jstr agent_status || true; }
 
 # --- runlog: append-only, tab-separated ----------------------------------
-# ts  seq  event  role  milestone  base  digest  model  detail
-log_row() { # seq event role milestone base digest model detail
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$@" >> "$RUNLOG"
+# ts  seq  event  role  milestone  base  digest  model  tokens  rollout  detail
+# model/tokens/rollout are observed at write time — a run's cost is the
+# token delta between its start and end rows; rollout is the judge's own
+# transcript for that run.
+log_row() { # seq event role milestone base digest detail
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$(judge_model)" "$(judge_tokens)" "$(judge_rollout)" "$7" >> "$RUNLOG"
+}
+# Evidence for a run that did not settle cleanly: the judge's screen as it
+# was, saved next to the packet (a stderr excerpt is not retrievable later).
+dump_screen() { # $1 = file name under PAIR_DIR
+  screen 80 > "$PAIR_DIR/$1" 2>/dev/null || true
 }
 
 # --- ensure ---------------------------------------------------------------
@@ -201,7 +239,9 @@ ensure() {
   [ -n "$pane_id" ] || refuse "pane split returned no pane_id: $resp"
   # No model/effort args: the judge runs the user's current Codex default.
   # hooks off (second gate), workspace-write (read-only cannot even mktemp),
-  # CLAUDE.md as the project doc (no AGENTS.md shipped).
+  # CLAUDE.md as the project doc (no AGENTS.md shipped). `started` is taken
+  # BEFORE the start so the judge's rollout (created at startup) sorts after it.
+  local started; started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   resp="$(herdr agent start "$NAME" --kind codex --pane "$pane_id" --timeout "$START_TIMEOUT_MS" -- \
             -s workspace-write -c features.hooks=false \
             -c 'project_doc_fallback_filenames=["CLAUDE.md"]' 2>&1)" || true
@@ -211,13 +251,14 @@ ensure() {
       if printf '%s' "$resp" | grep -q agent_not_ready; then
         echo "task-pair: judge started but is not ready — pane $pane_id:" >&2
         herdr pane read "$pane_id" --source visible --lines 12 2>/dev/null | sed 's/^/    /' >&2 || true
+        herdr pane read "$pane_id" --source visible --lines 80 > "$PAIR_DIR/start-$(date -u +%Y%m%dT%H%M%SZ).screen.txt" 2>/dev/null || true
         RC=4 die "human input required"
       fi
       refuse "agent start failed: $resp" ;;
   esac
   {
     echo "name=$NAME"; echo "pane_id=$pane_id"; echo "hooks_off=1"
-    echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "started=$started"
   } > "$JUDGE_FILE"
   sleep 1
   clear_modals
@@ -258,7 +299,8 @@ collect() { # $1 packet, $2 result, $3 base, $4 fp_before, $5 herdr status
 finish() { # seq role milestone base digest packet result
   local m
   rm -f "$PAIR_DIR/.fp-$1"
-  log_row "$1" "end:$STATE" "$2" "$3" "$4" "$5" "$(judge_model)" "$REASON"
+  log_row "$1" "end:$STATE" "$2" "$3" "$4" "$5" "$REASON"
+  [ "$STATE" = completed ] || dump_screen "$1-$2.screen.txt"
   # Post-run dialog sweep: the rate-limit nudge is dismissed (esc keeps the
   # model); anything else is reported, not answered — the run itself is
   # already settled, so this never changes STATE.
@@ -308,7 +350,7 @@ send() {
   digest="$(hash_stdin < "$packet" | awk '{print $1}')"
   fp_before="$(fingerprint || echo nogit)"
   abs_packet="$ROOT/$packet"; abs_result="$ROOT/$result"
-  log_row "$seq" start "$role" "${milestone:--}" "$base" "$digest" "$(judge_model)" "timeout=${timeout}ms"
+  log_row "$seq" start "$role" "${milestone:--}" "$base" "$digest" "timeout=${timeout}ms"
   printf '%s\n' "$fp_before" > "$PAIR_DIR/.fp-$seq"
   resp="$(herdr agent prompt "$NAME" \
     "Read and execute the packet at $abs_packet. It is frozen; do not edit it. When finished, write your result to $abs_result in the format the packet specifies, then reply with only that path." \
@@ -322,7 +364,7 @@ settle() { # seq role milestone base digest packet result herdr_response
   code="$(printf '%s' "$resp" | jstr code)"
   case "$code" in
     timeout)
-      log_row "$1" waiting "$2" "$3" "$4" "$5" "$(judge_model)" "herdr timeout — chain: task-pair.sh wait $1"
+      log_row "$1" waiting "$2" "$3" "$4" "$5" "herdr timeout — chain: task-pair.sh wait $1"
       echo "task-pair: seq=$1 still running — run: task-pair.sh wait $1"; exit 5 ;;
     agent_prompt_stalled) STATE=failed; REASON=stalled; finish "$1" "$2" "$3" "$4" "$5" "$6" "$7"; exit $? ;;
     agent_blocked) STATE=blocked; REASON=herdr_blocked; finish "$1" "$2" "$3" "$4" "$5" "$6" "$7"; exit $? ;;
@@ -616,10 +658,15 @@ reset() {
   [ -n "$(judge_status)" ] || refuse "no judge '$NAME' is live — run ensure"
   clear_modals
   herdr agent prompt "$NAME" "/new" >/dev/null 2>&1 || refuse "sending /new failed"
-  sleep 2
-  local st; st="$(judge_status)"
-  case "$st" in idle|done) ;; *) RC=4 die "judge is '$st' after /new — inspect the pane" ;; esac
-  log_row - reset - - - - "$(judge_model)" "/new"
+  # The TUI redraw after /new can read as `working` for a moment; give it
+  # a few seconds to settle before calling it stuck.
+  local st="" _i
+  for _i in 1 2 3 4 5; do
+    sleep 2; st="$(judge_status)"
+    case "$st" in idle|done) break ;; esac
+  done
+  case "$st" in idle|done) ;; *) dump_screen "reset-$(date -u +%Y%m%dT%H%M%SZ).screen.txt"; RC=4 die "judge is '$st' after /new — inspect the pane" ;; esac
+  log_row - reset - - - - "/new"
   echo "task-pair: judge '$NAME' context reset"
 }
 
@@ -629,7 +676,7 @@ status() {
   [ -f "$RUNLOG" ] || { echo "runlog: empty"; return 0; }
   awk -F"$TAB" '
     $3 == "start" { role[$2] = $4; ms[$2] = $5; last[$2] = "running"; n[$2] = 1 }
-    $3 ~ /^end:/ { last[$2] = substr($3, 5) " " $9 }
+    $3 ~ /^end:/ { last[$2] = substr($3, 5) " " $11 }
     $3 == "waiting" { last[$2] = "waiting" }
     END { for (s in n) printf "seq %s  %s %s  -> %s\n", s, role[s], ms[s], last[s] }' "$RUNLOG" | sort
 }

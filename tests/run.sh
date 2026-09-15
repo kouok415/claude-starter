@@ -1449,12 +1449,14 @@ grep -q "	001	start	verifier	M1	$PH	" "$RL" && ok "runlog: start row (seq, role,
 grep -q "	001	end:completed	" "$RL" && ok "runlog: end:completed row" || no "runlog end row missing"
 grep -q 'state=completed (verdict=pass)' "$FK/out" && ok "send: summary carries the judge's verdict verbatim, lowercase" || no "send summary wrong: $(cat "$FK/out")"
 no_verdict_printed && ok "script prints no PASS/FAIL of its own" || no "script printed a verdict"
-grep -q '	gpt-5.6-terra medium	' "$RL" && ok "runlog rows record the observed model" || no "runlog model column empty"
+grep -q '	gpt-5.6-terra medium	12/34	' "$RL" && ok "runlog rows record the observed model and token counters" || no "runlog model/tokens columns wrong: $(tail -1 "$RL")"
+[ ! -e "$PKD/001-verifier.screen.txt" ] && ok "completed run leaves no screen dump" || no "screen dump written for a completed run"
 
 # --- send: every way a run can end without a usable result -----------------
 pk=$(mkpkt 002 verifier "$PH")
 rc=$(tp FAKE_HERDR_PROMPT=no_result -- send "$pk"); ck 6 "$rc" "idle without a result file is failed:no_result"
 grep -q "	002	end:failed	.*	no_result$" "$RL" && ok "runlog: no_result recorded" || no "runlog no_result row missing"
+[ -s "$PKD/002-verifier.screen.txt" ] && ok "failed run saves the judge's screen next to the packet" || no "screen dump missing for the failed run"
 pk=$(mkpkt 003 verifier "$PH")
 rc=$(tp FAKE_HERDR_PROMPT=bad_header -- send "$pk"); ck 6 "$rc" "result without a verdict line is failed:bad_header"
 grep -q "	003	end:failed	.*	bad_header$" "$RL" && ok "runlog: bad_header recorded" || no "runlog bad_header row missing"
@@ -1492,6 +1494,7 @@ pk=$(mkpkt 010 verifier "$PH")
 rc=$(tp FAKE_HERDR_SCREEN="$SCR" -- send "$pk"); ck 4 "$rc" "trust dialog on screen: refused, never answered"
 [ "$(prompts)" -eq 8 ] && ok "no prompt typed into the trust dialog" || no "prompt sent over a trust dialog"
 grep -q "trust" "$FK/err" && ok "trust dialog is reported to the human" || no "trust dialog not reported"
+ls "$PKD"/dialog-*.screen.txt >/dev/null 2>&1 && ok "dialog refusal saves the screen" || no "dialog screen dump missing"
 printf '  Approaching rate limits\n  Switch to gpt-5.6-luna for lower credit usage?\n› 1. Switch to gpt-5.6-luna\n  2. Keep current model\n  Press enter to confirm or esc to go back\n' > "$SCR"
 pk=$(mkpkt 011 verifier "$PH")
 rc=$(tp FAKE_HERDR_SCREEN="$SCR" FAKE_HERDR_ESC_CLEARS=1 -- send "$pk"); ck 0 "$rc" "rate-limit nudge: dismissed with esc, run proceeds"
@@ -1531,7 +1534,15 @@ grep -q '^## M2: y \[in_progress\]$' "$PD/$pk" && grep -q 'forward constraint fo
 grep -q '^Your role contract is .claude/agents/verifier.md' "$PD/$pk" && ok "packet: role body referenced by path, never copied" || no "packet lacks the role-contract pointer"
 grep -q "^Write $PD/.ai_context/tasks/pdemo/pair/017-verifier-M2.result.md$" "$PD/$pk" && ok "packet: result path is absolute and derived from the packet name" || no "packet result path wrong"
 grep -q '^  base: '"$PH2"'$' "$PD/$pk" && ok "packet: result contract pins the same base" || no "packet result-contract base wrong"
+# rollout linkage: the judge's transcript is the newest Codex rollout whose
+# session_meta names this repo and started after the judge did
+mkdir -p "$FK/codex-home/sessions/2026/09/15"
+printf '{"timestamp":"2099-01-01T00:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"session_id":"a","id":"a","timestamp":"2099-01-01T00:00:00.000Z","cwd":"%s","originator":"codex-tui"}}\n' "$PD" > "$FK/codex-home/sessions/2026/09/15/rollout-a.jsonl"
+printf '{"timestamp":"2098-01-01T00:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"session_id":"b","id":"b","timestamp":"2098-01-01T00:00:00.000Z","cwd":"%s","originator":"codex-tui"}}\n' "$PD" > "$FK/codex-home/sessions/2026/09/15/rollout-b.jsonl"
+printf '{"timestamp":"2099-06-01T00:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"session_id":"c","id":"c","timestamp":"2099-06-01T00:00:00.000Z","cwd":"/elsewhere","originator":"codex-tui"}}\n' > "$FK/codex-home/sessions/2026/09/15/rollout-c.jsonl"
+printf '{"timestamp":"2000-01-01T00:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"session_id":"d","id":"d","timestamp":"2000-01-01T00:00:00.000Z","cwd":"%s","originator":"codex-tui"}}\n' "$PD" > "$FK/codex-home/sessions/2026/09/15/rollout-d.jsonl"
 rc=$(tp -- send "$pk"); ck 0 "$rc" "packet → send round-trips over the fake judge"
+grep -q "	017	end:completed	.*	$FK/codex-home/sessions/2026/09/15/rollout-a.jsonl	" "$RL" && ok "runlog: rollout column names the newest matching Codex transcript (not the other repo's, not the pre-start one)" || no "rollout linkage wrong: $(grep '	017	end' "$RL")"
 rc=$(tp -- packet verifier M3 --mode full); ck 0 "$rc" "packet: verifier full generates"
 pk="$(cat "$FK/out")"
 grep -q 'FULL PROTOCOL' "$PD/$pk" && grep -q '^- \[ \] AC1' "$PD/$pk" && grep -q '^- \[x\] AC2' "$PD/$pk" && ok "packet: full mode inlines the spec's acceptance criteria" || no "packet full mode incomplete"

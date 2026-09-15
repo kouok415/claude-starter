@@ -75,6 +75,15 @@ herdr pane takes the checker seats at every stage; Claude keeps executing.
 Four phases: the transport, the judge's wiring into verification, drift
 and the final panel, the plan convergence loop, and the intake critique.
 
+- **Forensics (phase 4b).** Every runlog row now also records the
+  judge's cumulative token counters and the path of its own Codex
+  transcript (rollout), so a result's self-reported evidence can be
+  checked against what the judge actually ran and a run's cost is a
+  delta between two rows (runlog is 11 columns:
+  `ts seq event role milestone base digest model tokens rollout detail`).
+  Runs that do not settle `completed`, refused dialogs and not-ready
+  startups save the judge's screen next to the packet
+  (`*.screen.txt`).
 - **Intake critique (phase 4).** Two Codex-only seats whose contracts are
   inlined by the script (no `.claude/agents` counterpart exists — the
   orchestrator holds the human conversation): `packet spec-critic -`

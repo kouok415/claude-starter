@@ -22,7 +22,7 @@ LOG="${FAKE_HERDR_LOG:-/dev/null}"
 STATE="${FAKE_HERDR_STATE:-/tmp}"
 printf '%s\n' "$*" >> "$LOG"
 
-status_line='  gpt-5.6-terra medium · /fixture · Approve for me · 0 in · 0 out · Context 0% used'
+status_line='  gpt-5.6-terra medium · /fixture · Approve for me · 12 in · 34 out · Context 0% used'
 agent_json() { # $1 status
   printf '{"agent":"codex","agent_status":"%s","cwd":"/fixture","focused":false,"interactive_ready":true,"name":"judge","pane_id":"w9:p9","tab_id":"w9:t1","workspace_id":"w9"}' "$1"
 }
