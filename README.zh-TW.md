@@ -210,9 +210,12 @@ Codex 預設模型跑的 Codex judge。角色固定 —— Claude 執行、Codex
 Codex hooks（Codex hooks 與 Claude 相容，複製過去的 Stop hook 會在 judge
 裡跑第二道閘門）；每次 run 前後比對 tree 指紋（judge 改了任何東西就作廢
 自己的結果）；掃描 herdr 判成 `idle` 的 Codex 對話框；自己永不輸出
-verdict —— 它只決定 `run_state`。先出 transport；各階段接線（critique、
-驗證分層、plan 收斂迴圈、雙邊 final panel）逐階段寫進
-`.claude/skills/task/pair.md`。
+verdict —— 它只決定 `run_state`。`task-pair.sh packet` 產生 judge 讀的每一份
+packet（milestone 段落、驗收條件、lens 框架、result 契約），檢查者的輸入
+不靠記憶。已接線（`pair.md` §Stage wiring）：`risk: med` 由 judge 取代 Claude
+verifier、`risk: high` 兩邊都要過、drift check 交給 judge、final panel 兩邊各跑
+三個 lens —— 聯集、一輪對抗、逐條裁決記在 `pair/ledger.md`。plan 收斂迴圈與
+spec/brief critique 之後逐階段補上。
 
 ---
 

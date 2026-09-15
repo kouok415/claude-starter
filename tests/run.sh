@@ -512,6 +512,10 @@ sz=$(wc -c < "$REPO/.ai_context/INDEX.md")
 # in reference.md / pair.md, so the pointer checks below stay.
 [ -f "$REPO/.claude/skills/task/pair.md" ] && ok "task pair.md exists (on-demand pair-codex protocol)" || no "task pair.md missing"
 grep -q 'pair.md' "$REPO/.claude/skills/task/SKILL.md" && ok "task body points at pair.md for pair-* profiles" || no "task body lost its pair.md pointer"
+[ "$(grep -c 'pair.md' "$REPO/.claude/skills/task/SKILL.md")" -ge 4 ] && ok "task body points at pair.md from the verify, drift and final stages" || no "task body lacks the per-stage pair.md pointers"
+for sec in '### No-verdict rule' '### §3.3 verification' '### §3.6 drift check' '### §5 final panel' '### `pair/ledger.md`'; do
+  grep -qF "$sec" "$REPO/.claude/skills/task/pair.md" && ok "pair.md carries $sec" || no "pair.md missing $sec"
+done
 sz=$(wc -c < "$REPO/.claude/skills/wrap/SKILL.md")
 [ "$sz" -le 2560 ] && ok "wrap SKILL.md within 2.5 KB ($sz B — task machinery lives in reference.md)" || no "wrap SKILL.md bloated ($sz B > 2560)"
 [ -f "$REPO/.claude/skills/wrap/reference.md" ] && ok "wrap reference.md exists (on-demand task close-out)" || no "wrap reference.md missing"
@@ -1508,6 +1512,56 @@ rc=$(tp -- send "$PKD/016-verifier-M1.md"); ck 2 "$rc" "packet without a role li
 rc=$(tp -- status); ck 0 "$rc" "status runs"
 grep -q 'seq 001  verifier M1  -> completed' "$FK/out" && ok "status summarises seq 001 as completed" || no "status output wrong: $(head -3 "$FK/out")"
 grep -q 'seq 008  verifier M1  -> blocked' "$FK/out" && ok "status summarises seq 008 as blocked" || no "status lost the blocked row"
+
+# --- packet: the judge's inputs are generated, not remembered (phase 2) -----
+cp "$REPO/.claude/agents/verifier.md" "$REPO/.claude/agents/final-verifier.md" "$PD/.claude/agents/" 2>/dev/null || { mkdir -p "$PD/.claude/agents"; cp "$REPO/.claude/agents/verifier.md" "$REPO/.claude/agents/final-verifier.md" "$PD/.claude/agents/"; }
+printf '# Plan: p\n<!-- profile: pair-codex ; size: M -->\n\n## M1: x [done]\n- verify: `true`\n- risk: low\n\n## M2: y [in_progress]\n- verify: `bash t.sh`\n- risk: med\n- demo: run y\n<!-- 2026-09-15: forward constraint for M2 -->\n\n## M3: z [pending]\n- verify: `false`\n- risk: high\n' > "$PD/.ai_context/tasks/pdemo/plan.md"
+printf '# Spec: p\nGoal: g\n\n## Acceptance criteria\n- [ ] AC1: `bash t.sh` exits 0\n- [x] AC2: `test -f x`\n\n## Assumptions\n- [ASSUMED: y]\n' > "$PD/.ai_context/tasks/pdemo/spec.md"
+( cd "$PD" && git add -A && git commit -qm "plan for packets" )
+PH2="$(git -C "$PD" rev-parse HEAD)"
+rc=$(tp -- packet verifier M2 --changed a.sh,b.sh); ck 0 "$rc" "packet: verifier light generates"
+pk="$(cat "$FK/out")"
+[ "$pk" = ".ai_context/tasks/pdemo/pair/017-verifier-M2.md" ] && ok "packet: seq continues after the last packet (017)" || no "packet path/seq wrong: $pk"
+grep -q "^base: $PH2$" "$PD/$pk" && ok "packet: base is HEAD at generation time" || no "packet base wrong"
+grep -q '^mode: light$' "$PD/$pk" && grep -q 'changed files (uncommitted, vs base .*): a.sh,b.sh' "$PD/$pk" && ok "packet: light mode carries the changed-file list" || no "packet light mode text missing"
+grep -q '^## M2: y \[in_progress\]$' "$PD/$pk" && grep -q 'forward constraint for M2' "$PD/$pk" && ok "packet: the FULL milestone section is inlined (comment block included)" || no "packet milestone section incomplete"
+! grep -q '^## M3' "$PD/$pk" && ok "packet: neighbouring milestones are not inlined" || no "packet leaked another milestone"
+grep -q '^contract is .claude/agents/verifier.md' "$PD/$pk" && ok "packet: role body referenced by path, never copied" || no "packet lacks the role-contract pointer"
+grep -q "^Write $PD/.ai_context/tasks/pdemo/pair/017-verifier-M2.result.md$" "$PD/$pk" && ok "packet: result path is absolute and derived from the packet name" || no "packet result path wrong"
+grep -q '^  base: '"$PH2"'$' "$PD/$pk" && ok "packet: result contract pins the same base" || no "packet result-contract base wrong"
+rc=$(tp -- send "$pk"); ck 0 "$rc" "packet → send round-trips over the fake judge"
+rc=$(tp -- packet verifier M3 --mode full); ck 0 "$rc" "packet: verifier full generates"
+pk="$(cat "$FK/out")"
+grep -q 'FULL PROTOCOL' "$PD/$pk" && grep -q '^- \[ \] AC1' "$PD/$pk" && grep -q '^- \[x\] AC2' "$PD/$pk" && ok "packet: full mode inlines the spec's acceptance criteria" || no "packet full mode incomplete"
+rc=$(tp -- packet verifier M2 --mode drift --since "$PH"); ck 0 "$rc" "packet: drift generates"
+pk="$(cat "$FK/out")"
+grep -q "git diff $PH" "$PD/$pk" && grep -q 'ON-TRACK maps to verdict pass' "$PD/$pk" && ok "packet: drift names the diff base and the verdict mapping" || no "packet drift text incomplete"
+rc=$(tp -- packet final-verifier - --lens regression); ck 2 "$rc" "packet: final-verifier without --since refused (the whole-task diff needs its start)"
+rc=$(tp -- packet final-verifier - --lens regression --since "$PH"); ck 0 "$rc" "packet: final-verifier lens generates"
+pk="$(cat "$FK/out")"
+[ "$pk" = ".ai_context/tasks/pdemo/pair/020-final-verifier-regression.md" ] && ok "packet: lens is in the file name" || no "packet lens file name wrong: $pk"
+grep -q '^lens: regression$' "$PD/$pk" && grep -q 'PANEL LENS: regression' "$PD/$pk" && grep -q '^milestone: -$' "$PD/$pk" && grep -q "git diff $PH..HEAD" "$PD/$pk" && ok "packet: lens header + whole-task diff range" || no "packet lens body incomplete"
+printf 'run: completed\nverdict: fail\nbase: %s\nfindings: 1 (blocker/major/minor)\nassumptions: []\n\n- major: suite skips t.sh — `grep skip t.sh`\n' "$PH2" > "$FK/other.result.md"
+rc=$(tp -- packet final-verifier - --lens regression --since "$PH" --rebuttal "$FK/other.result.md"); ck 0 "$rc" "packet: rebuttal round generates"
+pk="$(cat "$FK/out")"
+grep -q '^# Rebuttal round' "$PD/$pk" && grep -q '^> - major: suite skips t.sh' "$PD/$pk" && grep -q 'reproduce it (command + output) or refute it' "$PD/$pk" && ok "packet: rebuttal quotes the other side's findings and demands commands" || no "packet rebuttal incomplete"
+rc=$(tp -- packet verifier M9 --changed a); ck 2 "$rc" "packet: unknown milestone refused"
+rc=$(tp -- packet verifier M2); ck 2 "$rc" "packet: light mode without --changed refused"
+rc=$(tp -- packet verifier M2 --mode drift); ck 2 "$rc" "packet: drift without --since refused"
+rc=$(tp -- packet final-verifier - --since "$PH"); ck 2 "$rc" "packet: final-verifier without a lens refused"
+rc=$(tp -- packet final-verifier M2 --lens correctness --since "$PH"); ck 2 "$rc" "packet: final-verifier with a milestone refused"
+rc=$(tp -- packet verifier M2 --changed a --lens correctness); ck 2 "$rc" "packet: --lens on verifier refused"
+rc=$(tp -- packet planner -); ck 2 "$rc" "packet: unwired role refused"
+grep -q 'not wired' "$FK/err" && ok "packet: unwired role names the reason" || no "packet unwired-role message: $(cat "$FK/err")"
+n_before=$(find "$PKD" -maxdepth 1 -name '*.md' | wc -l)
+rc=$(tp -- packet verifier M2); [ "$(find "$PKD" -maxdepth 1 -name '*.md' | wc -l)" -eq "$n_before" ] && ok "packet: a refused packet leaves no file behind" || no "refused packet wrote a file"
+
+# --- reset: /new between final-panel lenses ----------------------------------
+rc=$(tp -- reset); ck 0 "$rc" "reset: sends /new to the live judge"
+grep -q '^agent prompt judge-pdemo /new$' "$FK/herdr.log" && ok "reset: /new goes through agent prompt (slash command, no --wait)" || no "reset did not send /new"
+grep -q "	-	reset	" "$RL" && ok "runlog: reset row recorded" || no "runlog reset row missing"
+rm -f "$FK/state/agent"
+rc=$(tp -- reset); ck 3 "$rc" "reset: refuses when no judge is live"
 
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"

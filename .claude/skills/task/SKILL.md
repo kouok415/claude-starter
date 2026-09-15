@@ -147,7 +147,9 @@ For each milestone in order:
    plan section — heading, verify/risk lines, comment block (forward
    constraints ride there). The spawn prompt is authoritative: the
    executor never re-reads plan.md.
-3. **Verification depth = the milestone's `risk:`** —
+3. **Verification depth = the milestone's `risk:`** (`pair-*`: the
+   Codex judge takes the `med` seat and joins the `high` seat — `pair.md`
+   §3.3) —
    - `low`: no model verifier. The mechanical gate re-runs the verify at
      turn-end; that strength was policed at plan time.
    - `med`: `verifier` in **light mode** — prompt carries the changed-file
@@ -163,9 +165,9 @@ For each milestone in order:
    §Architecture — write it at kickoff, keep it current.)
 5. **FAIL** → escalation ladder (§4).
 6. **Drift check** (`verifier` drift mode: accumulated diff vs spec.md,
-   intent included — Goal, Out of scope, the `[ASSUMED]` ledger): after
-   every `risk: high` milestone; at the midpoint of M; on L at the
-   profile's cadence.
+   intent included — Goal, Out of scope, the `[ASSUMED]` ledger; `pair-*`:
+   the Codex judge, `pair.md` §3.6): after every `risk: high` milestone;
+   at the midpoint of M; on L at the profile's cadence.
 
 The Stop gate re-runs the in_progress verify whenever you try to end a
 turn; a red gate cannot be narrated over — don't try, fix it.
@@ -189,7 +191,8 @@ reframer not installed → collapse rungs 3–4 into stop-and-report.
 ## 5 · Completion
 
 1. Final check — spawn `final-verifier` per the size table's last
-   column. Panel lenses:
+   column (`pair-*`: always the 3-lens panel, on both sides, union +
+   one rebuttal round — `pair.md` §5). Panel lenses:
    correctness vs spec / regression & side effects / test-integrity
    ("were tests weakened?"). Any FAIL → back into the loop as a repair
    milestone.

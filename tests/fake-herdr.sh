@@ -67,6 +67,9 @@ case "$1 $2" in
     echo idle > "$STATE/agent"
     printf '{"id":"cli:agent:start","result":{"agent":%s,"argv":["codex"],"type":"agent_started"}}\n' "$(agent_json idle)" ;;
   "agent prompt")
+    if [ "$4" = "/new" ]; then   # slash command: no turn, stays idle
+      printf '{"id":"cli:agent:prompt","result":{"agent":%s,"type":"agent_prompted"}}\n' "$(agent_json idle)"; exit 0
+    fi
     pk="$(packet_from "$4")"
     case "${FAKE_HERDR_PROMPT:-ok}" in
       ok) write_result "$pk" ok; st=idle ;;

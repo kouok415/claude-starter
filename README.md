@@ -235,9 +235,15 @@ hooks are Claude-compatible, so a copied Stop hook would run a second gate
 inside the judge), fingerprints the tree around every run (a judge that
 changed anything voids its own result), scans for Codex's modal dialogs
 that herdr reports as `idle`, and never emits a verdict of its own —
-`run_state` is the only thing it decides. The transport ships first;
-stage wiring (critique, verification tiers, the plan convergence loop,
-the two-sided final panel) lands per stage in `.claude/skills/task/pair.md`.
+`run_state` is the only thing it decides. `task-pair.sh packet` generates
+every packet the judge reads (milestone section, acceptance criteria,
+lens framing, result contract), so the checker's inputs are never a
+remembered format. Wired so far (`pair.md` §Stage wiring): the judge
+replaces the Claude verifier at `risk: med`, joins it at `risk: high`,
+takes the drift check, and runs all three final-panel lenses next to
+Claude's three — union, one rebuttal round, per-finding rulings in
+`pair/ledger.md`. The plan convergence loop and the spec/brief critique
+land as later stages.
 
 ---
 

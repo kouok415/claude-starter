@@ -68,11 +68,32 @@ English README are the authority when translations drift):
 
 ---
 
-## Unreleased — pair-codex transport
+## Unreleased — pair-codex transport + judge wiring
 
 `/task --profile=pair-codex` (workshop ADR-028): a Codex judge in a sibling
-herdr pane takes the checker seats; Claude keeps executing. This release
-ships the transport only — stage wiring follows per stage.
+herdr pane takes the checker seats; Claude keeps executing. Two phases
+so far: the transport, then the judge's wiring into verification, drift
+and the final panel (the plan loop and the spec/brief critique are still
+to come).
+
+- **Judge wiring (phase 2).** `task-pair.sh packet <role> <M<n>|->`
+  generates every packet — header, task paths, the inlined milestone
+  section or the spec's acceptance criteria, mode/lens framing, result
+  contract — so the judge's inputs are a script's output, not a memory.
+  Roles wired: `verifier` (`--mode light|full|drift`) and
+  `final-verifier` (`--lens correctness|regression|test-integrity
+  --since <task base>`, optional `--rebuttal FILE`). `task-pair.sh reset`
+  sends `/new` between final-panel lenses. `pair.md` §Stage wiring is the
+  orchestrator protocol: the judge REPLACES the Claude verifier at
+  `risk: med`, JOINS it at `risk: high` (both must pass; disagreement is
+  settled by running the reproduction, never by opinion), takes the drift
+  check, and runs all three final lenses alongside Claude's three —
+  union, one rebuttal round, per-finding rulings in `pair/ledger.md`,
+  open blocker/major findings hold completion like an un-acked
+  checkpoint. A no-verdict run (exit 4/6, `inconclusive`) is retried once
+  with a new packet, then falls back to the Claude seat with a lessons
+  line. SKILL.md gains three per-stage pointers. Validated live: a
+  generated light packet, a `reset`, and two final lenses on luna/low.
 
 - **New profile `pair-codex`** in `scripts/task-profile.sh`: all seven
   agents `inherit`; the plan.md header is the whole mode state, so resume,

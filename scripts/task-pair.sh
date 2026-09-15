@@ -11,11 +11,16 @@
 # verdict of its own — `run_state` is the only thing it decides.
 #
 #   ensure                  find or start the judge (idempotent)
+#   packet <role> <M<n>|-> [--mode light|full|drift] [--lens L]
+#                          [--changed a,b] [--since REF] [--rebuttal FILE]
+#                           write the next packet (header + frozen inputs +
+#                           result contract) and print its path
 #   send <packet> [--timeout MS]
 #                           submit one packet, wait, collect, log
 #   wait <seq>  [--timeout MS]
 #                           keep waiting for an in-flight run (Bash tool caps
 #                           a single call; chain these)
+#   reset                   `/new` — fresh judge context (final-panel lenses)
 #   status                  runlog summary
 #   fingerprint             print the tree fingerprint (test seam)
 #
@@ -347,6 +352,138 @@ wait_run() {
   settle "$seq" "$role" "${milestone:--}" "$base" "$digest" "$packet" "$result" "$resp"
 }
 
+# --- packet: the orchestrator's inputs, frozen by a script not by memory ---
+# What the judge needs is always the same shape; writing it by hand is the
+# silent-degradation class (a forgotten line = a weaker check). The roles
+# accepted here are the ones wired so far; each addition documents its
+# stage in pair.md.
+next_seq() {
+  local n=0 f b
+  for f in "$PAIR_DIR"/[0-9][0-9][0-9]-*.md; do
+    [ -f "$f" ] || continue
+    b="$(basename "$f")"; b=$((10#${b%%-*}))
+    [ "$b" -gt "$n" ] && n="$b"
+  done
+  printf '%03d' $((n + 1))
+}
+
+milestone_section() { # $1 = M<n> -> the full section from plan.md
+  awk -v want="## $1:" '
+    index($0, want) == 1 { take = 1; print; next }
+    take && /^## / { exit }
+    take { print }' "$TASK/plan.md"
+}
+
+acceptance_criteria() { grep -E '^- \[[ x]\] AC' "$TASK/spec.md" 2>/dev/null || true; }
+
+packet() {
+  local role="${1:-}" ms="${2:-}" mode="" lens="" changed="" since="" rebuttal=""
+  [ -n "$role" ] && [ -n "$ms" ] || die "usage: task-pair.sh packet <role> <M<n>|-> [--mode light|full|drift] [--lens L] [--changed a,b] [--since REF] [--rebuttal FILE]"
+  shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --mode) mode="$2"; shift 2 ;;
+      --lens) lens="$2"; shift 2 ;;
+      --changed) changed="$2"; shift 2 ;;
+      --since) since="$2"; shift 2 ;;
+      --rebuttal) rebuttal="$2"; shift 2 ;;
+      *) die "packet: unknown option $1" ;;
+    esac
+  done
+  resolve_task
+  case "$role" in verifier|final-verifier) ;; *) die "packet: role '$role' is not wired for pair mode yet (verifier, final-verifier)" ;; esac
+  [ -f "$ROOT/.claude/agents/$role.md" ] || die "packet: no role contract at .claude/agents/$role.md"
+  local base seq file abs
+  base="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" || die "packet: not a git repo with a HEAD"
+  case "$role" in
+    verifier)
+      [ "$ms" != "-" ] || die "packet: verifier needs a milestone id (M<n>)"
+      [ -n "$mode" ] || mode=light
+      case "$mode" in light|full|drift) ;; *) die "packet: verifier --mode is light|full|drift" ;; esac
+      [ -z "$lens" ] || die "packet: --lens is for final-verifier"
+      [ -n "$(milestone_section "$ms")" ] || die "packet: milestone $ms not found in plan.md"
+      [ "$mode" != light ] || [ -n "$changed" ] || die "packet: light mode needs --changed <files>"
+      [ "$mode" != drift ] || [ -n "$since" ] || die "packet: drift mode needs --since <commit>" ;;
+    final-verifier)
+      [ "$ms" = "-" ] || die "packet: final-verifier takes '-' as milestone (whole task)"
+      [ -z "$mode" ] || die "packet: --mode is for verifier"
+      case "$lens" in correctness|regression|test-integrity) ;; *) die "packet: final-verifier --lens is correctness|regression|test-integrity" ;; esac
+      [ -n "$since" ] || die "packet: final-verifier needs --since <task base commit> (e.g. git merge-base main task/<slug>)" ;;
+  esac
+  [ -z "$rebuttal" ] || [ -f "$rebuttal" ] || die "packet: rebuttal file not found: $rebuttal"
+  seq="$(next_seq)"
+  file="$PAIR_DIR/$seq-$role"
+  [ "$ms" = "-" ] || file="$file-$ms"
+  [ -z "$lens" ] || file="$file-$lens"
+  [ -z "$rebuttal" ] || file="$file-rebuttal"
+  file="$file.md"
+  abs="$ROOT/$file"
+  {
+    printf 'role: %s\nmilestone: %s\nbase: %s\n' "$role" "$ms" "$base"
+    [ -z "$mode" ] || printf 'mode: %s\n' "$mode"
+    [ -z "$lens" ] || printf 'lens: %s\n' "$lens"
+    printf '\n# Task\n'
+    printf 'You are the %s for the active /task in this repo (%s). Your role\n' "$role" "$ROOT"
+    printf 'contract is .claude/agents/%s.md — read it first and follow its protocol.\n' "$role"
+    printf -- '- spec: %s/spec.md\n- brief: %s/brief.md\n- lessons: %s/lessons.md\n' "$TASK" "$TASK" "$TASK"
+    case "$role:$mode" in
+      verifier:light)
+        printf -- '- changed files (uncommitted, vs base %s): %s\n' "$base" "$changed"
+        printf '\nLIGHT MODE (risk: med): protocol steps 1-2 only — re-run the verify,\n'
+        printf 'review the diff for weakened tests and scope creep. No re-discovery.\n' ;;
+      verifier:full)
+        printf '\nFULL PROTOCOL (risk: high): re-run the verify, inspect the diff, and\n'
+        printf 'spot-check the acceptance criteria this milestone touches by running them.\n'
+        printf '\n## Acceptance criteria (spec.md)\n'; acceptance_criteria ;;
+      verifier:drift)
+        printf -- '- accumulated diff to judge: `git diff %s` (since the last drift check)\n' "$since"
+        printf '\nDRIFT CHECK: is the trajectory still pointed at the acceptance criteria?\n'
+        printf 'Judge intent, not letter: Goal, Constraints, Out of scope, and every\n'
+        printf '[ASSUMED: ...] in spec.md section Assumptions — name any the human would veto.\n'
+        printf 'ON-TRACK maps to verdict pass; DRIFTING maps to verdict fail.\n'
+        printf '\n## Acceptance criteria (spec.md)\n'; acceptance_criteria ;;
+      final-verifier:)
+        printf -- '- the whole task diff to judge: `git diff %s..HEAD` / `git log %s..HEAD`\n' "$since" "$since"
+        printf '\nPANEL LENS: %s — judge ONLY this lens, over the WHOLE task. The task\n' "$lens"
+        printf 'branch is fully committed; HEAD is the version under judgment (base above),\n'
+        printf 'the task started at %s.\n' "$since"
+        printf '\n## Acceptance criteria (spec.md)\n'; acceptance_criteria ;;
+    esac
+    if [ "$ms" != "-" ]; then
+      printf '\n'; milestone_section "$ms"
+    fi
+    if [ -n "$rebuttal" ]; then
+      printf '\n# Rebuttal round\nThe other side of the panel raised the findings below on the same\n'
+      printf 'base. For EACH one: reproduce it (command + output) or refute it (command +\n'
+      printf 'output). No opinion without a command. Findings you cannot make checkable\n'
+      printf 'stay open — say so.\n\n'
+      sed -n '/^findings:/,$p' "$rebuttal" | sed 's/^/> /'
+    fi
+    printf '\n# Result contract\n'
+    printf 'Write %s\nstarting with exactly these lines:\n' "${abs%.md}.result.md"
+    printf '  run: completed|failed|blocked\n  verdict: pass|fail|inconclusive\n  base: %s\n' "$base"
+    printf '  findings: <n> (blocker/major/minor)\n  assumptions: [...]\n'
+    printf 'then your evidence: the commands you ran and their output, and each finding\n'
+    printf 'with a reproducible claim (command or file:line) and a severity. Your role\n'
+    printf 'contract says PASS/FAIL; write them as verdict pass/fail. Do not modify any\n'
+    printf 'file outside %s/. When done, reply with only the result path.\n' "$PAIR_DIR"
+  } > "$file"
+  echo "$file"
+}
+
+# --- reset: fresh judge context (a slash command, no model turn) -------------
+reset() {
+  resolve_task; require_herdr
+  [ -n "$(judge_status)" ] || refuse "no judge '$NAME' is live — run ensure"
+  clear_modals
+  herdr agent prompt "$NAME" "/new" >/dev/null 2>&1 || refuse "sending /new failed"
+  sleep 2
+  local st; st="$(judge_status)"
+  case "$st" in idle|done) ;; *) RC=4 die "judge is '$st' after /new — inspect the pane" ;; esac
+  log_row - reset - - - - "$(judge_model)" "/new"
+  echo "task-pair: judge '$NAME' context reset"
+}
+
 status() {
   resolve_task
   [ -f "$JUDGE_FILE" ] && sed 's/^/judge: /' "$JUDGE_FILE"
@@ -362,6 +499,8 @@ cmd="${1:-}"
 [ $# -gt 0 ] && shift
 case "$cmd" in
   ensure) ensure ;;
+  packet) packet "$@" ;;
+  reset) reset ;;
   send) [ -n "${1:-}" ] || die "usage: task-pair.sh send <packet> [--timeout MS]"; send "$@" ;;
   wait) [ -n "${1:-}" ] || die "usage: task-pair.sh wait <seq> [--timeout MS]"; wait_run "$@" ;;
   status) status ;;
@@ -369,5 +508,5 @@ case "$cmd" in
     s="$(tr -d '[:space:]' < .ai_context/tasks/CURRENT 2>/dev/null || true)"
     [ -n "$s" ] && PAIR_DIR=".ai_context/tasks/$s/pair"
     fingerprint ;;
-  *) echo "Usage: task-pair.sh <ensure|send <packet>|wait <seq>|status|fingerprint>" >&2; exit 2 ;;
+  *) echo "Usage: task-pair.sh <ensure|packet <role> <M<n>|->|send <packet>|wait <seq>|reset|status|fingerprint>" >&2; exit 2 ;;
 esac
