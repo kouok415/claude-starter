@@ -3,6 +3,7 @@
 Fifteen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[Unreleased — completion and profile fixes](#unreleased--completion-and-profile-fixes)** — current final verification, terminal human checkpoints, and consistent profile-switch warnings.
 - **[-7. claude-starter v3.14 → v3.14.5](#-7-claude-starter-v314--v3145)** — the
   single-rm-tier patch: the `Bash(rm -rf:*)` ask rule leaves
   `settings.json` — declarative ask rules prompt in every mode (bypass
@@ -63,6 +64,42 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## Unreleased — completion and profile fixes
+
+Three fixes to the v3.14.5 task contracts:
+
+- **Final verification is current.** An old PASS for the final milestone
+  no longer skips completion checks. `stop-gate.sh --sweep` always runs
+  its current verify command, even after a previous PASS. Routine
+  all-`[done]` Stop calls may cache only the same milestone, command and
+  tree fingerprint; non-git trees do not cache. Earlier milestones retain
+  point-in-time semantics: their verifies are not re-run and rowless ones
+  receive `UNARMED`. A missing or forbidden final verify blocks completion.
+- **Checkpoints include the last milestone.** A final in-progress human
+  checkpoint holds even with no pending milestones. Done checkpoints are
+  checked before all-done and explicit-sweep exits. Stop may yield with a
+  repeating sign-off message so the human can respond; `--sweep` blocks
+  every missing ack and integrity failure on every call. A yielded Stop
+  is not authorization to wrap.
+- **Profile aliases warn consistently.** Direct `mixed`, `mixed-judge`
+  and `inherit` calls now perform the same active-plan mismatch and
+  environment-override checks as `apply`. The selected pins still apply;
+  the script does not rewrite the plan. Follow the existing profile-switch
+  protocol to re-cut remaining milestones, update the header and record
+  the switch in lessons.
+
+### Migrating
+
+Sync stock `stop-gate.sh`, `scripts/task-profile.sh`, task/wrap reference
+files and tests with `sync-project.sh --update-stock <project>`.
+Customized copies need these changes merged manually. Existing caches
+need no manual cleanup: completion uses a separate cache key. Keep
+`tasks/CURRENT` semantics and existing ack files; no data schema
+migration is needed. Expect one real final verify at every explicit wrap
+sweep, including tasks that already contain a PASS row.
 
 ---
 

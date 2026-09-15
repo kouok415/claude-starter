@@ -25,7 +25,12 @@ pin() { # <agent> <model>
 }
 
 apply_profile() {
-  local a
+  local a act
+  warn_env
+  act="$(active_profile || true)"
+  if [ -n "$act" ] && [ "$1" != "$act" ]; then
+    echo "task-profile: PROFILE SWITCH mid-task ($act -> $1): plan.md was cut for $act — follow reference.md §Profiles (re-cut remaining milestones, update the header, note it in lessons.md)" >&2
+  fi
   case "$1" in
     mixed-judge)
       for a in $JUDGE; do pin "$a" fable; done
@@ -61,16 +66,11 @@ case "$cmd" in
     warn_env
     grep -H '^model:' "$AGENTS"/*.md ;;
   apply)
-    warn_env
     want="${2:-}"
     act="$(active_profile || true)"
-    if [ -n "$act" ] && [ -n "$want" ] && [ "$want" != "$act" ]; then
-      echo "task-profile: PROFILE SWITCH mid-task ($act -> $want): plan.md was cut for $act — follow reference.md §Profiles (re-cut remaining milestones, update the header, note it in lessons.md)" >&2
-    fi
     [ -n "$want" ] || want="${act:-inherit}"
     apply_profile "$want" ;;
   mixed-judge|mixed|inherit)
-    warn_env
     apply_profile "$cmd" ;;
   *)
     echo "Usage: task-profile.sh <mixed-judge|mixed|inherit|status|apply [profile]>" >&2

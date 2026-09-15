@@ -49,7 +49,8 @@ Selection is per task, applied at intake by `task-profile.sh apply`:
 inherit — **except on resume**, where the active task's plan.md header
 wins (`apply` resolves: explicit flag > active header > inherit, and
 warns when a flag contradicts the header — that is a mid-task switch,
-protocol below). Inspect anytime with `task-profile.sh status`; reset
+protocol below). Direct `mixed`, `mixed-judge` and `inherit` calls perform
+the same mismatch check; none rewrites the plan header. Inspect anytime with `task-profile.sh status`; reset
 with `task-profile.sh inherit` (restores frontmatter byte-identical to
 stock, so `--update-stock` syncs work again). While pinned, agent files
 count as customized — sync lists template updates to them as hand-merge
@@ -112,7 +113,10 @@ A milestone whose section carries `- checkpoint: human` is a human gate:
 its verify PASS holds the run (PAUSED row + repeating systemMessage)
 until the human signs off with `touch .ai_context/tasks/<slug>/ack-<id>`
 — their own shell, or approving the bash-guard confirmation, IS the
-sign-off. Advancing past an un-acked checkpoint is an integrity block.
+sign-off. This includes the final milestone with no pending work.
+Advancing past an un-acked checkpoint is an integrity block, including
+when all milestones are done. Stop can yield with a repeating sign-off
+message; explicit `--sweep` refuses missing acks on every call.
 Mark checkpoints at plan approval (deploys, spend, outward-facing
 steps); they are the mechanical form of "wait for me here".
 

@@ -22,7 +22,7 @@
 # and interrupts once per session (the shared marker gates the interrupt
 # only). A quiet gatelog therefore provably means "clean run", never "the
 # gate was dark". All-[pending] (intake pause) and all-[done] (completion
-# wrap-up) stay legitimate no-ops.
+# wrap-up) stay legitimate states; completion verifies the final milestone.
 #
 # Forbidden verify ops: verify commands execute unattended at every turn
 # end, so catastrophic operations (sudo, git push, rm -rf on an absolute
@@ -41,8 +41,9 @@
 # legitimate no-op, so the gatelog stays empty and "0 gate failures" is
 # vacuous. At the all-[done] state (and via an explicit `--sweep` call from
 # /wrap before CURRENT is deleted) every [done] milestone lacking a PASS row
-# is accounted for: the LAST one — whose point-in-time is exactly now — has
-# its verify RUN (PASS/FAIL rows, red blocks every time); earlier ones get
+# is accounted for. The LAST milestone is checked against the current tree
+# and verify command even with a historical PASS; --sweep always runs it,
+# while repeated Stop calls may use the fingerprint cache. Earlier ones get
 # an UNARMED row (their verifies are point-in-time gates, not permanent
 # invariants — later milestones may legitimately supersede them, so honest
 # vacuity is recorded instead of fake evidence). A quiet gatelog again
@@ -167,7 +168,7 @@ integrity_stop() { # $1 = milestone id or '?', $2 = reason,
   fi
   icls="$(printf '%s' "${3:-generic}" | tr -cd 'A-Za-z0-9._-')"
   imarker="${TMPDIR:-/tmp}/claude-gate-integrity-${sid_s}-${icls}"
-  if [ -f "$imarker" ]; then
+  if [ "$MODE" = stop ] && [ -f "$imarker" ]; then
     [ -n "${4:-}" ] && printf '{"systemMessage":"%s"}\n' "$4"
     exit 0
   fi
@@ -175,8 +176,12 @@ integrity_stop() { # $1 = milestone id or '?', $2 = reason,
   mark_block
   {
     printf 'GATE INTEGRITY — the milestone gate cannot arm: %s\n' "$2"
-    printf 'Fix the task state before finishing. If this is a legitimate mid-intake pause\n'
-    printf 'awaiting the human, say so and finish — this interrupts once per session.\n'
+    if [ "$MODE" = sweep ]; then
+      printf 'Fix the task state before wrapping — explicit --sweep never yields on integrity failures.\n'
+    else
+      printf 'Fix the task state before finishing. If this is a legitimate mid-intake pause\n'
+      printf 'awaiting the human, say so and finish — this interrupts once per session.\n'
+    fi
   } >&2
   exit 2
 }
@@ -268,6 +273,39 @@ yield_stuck() { # $1 = milestone id, $2 = consecutive count, $3 = extra note (''
   exit 0
 }
 
+gatecache="$TASKS/$slug/.gate-cache"
+
+# --- PASS-cache -------------------------------------------------------------
+# The cache file itself is gitignored (.ai_context/tasks/*/.gate-cache), so
+# it never feeds back into its own fingerprint.
+hash_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256
+  else cksum
+  fi
+}
+
+fingerprint() {
+  git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1 || return 1
+  {
+    git -C "$ROOT" rev-parse HEAD
+    git -C "$ROOT" status --porcelain
+    git -C "$ROOT" diff HEAD
+    # Untracked files: content hash — a same-size edit must invalidate.
+    # Files over 1 MB fall back to size+mtime so bulk data stays cheap.
+    git -C "$ROOT" ls-files -o --exclude-standard | while IFS= read -r uf; do
+      p="$ROOT/$uf"
+      sz="$(wc -c < "$p" 2>/dev/null | tr -d ' ' || true)"
+      if [ -n "$sz" ] && [ "$sz" -le 1048576 ]; then
+        printf '%s %s\n' "$uf" "$(hash_stdin < "$p" | awk '{print $1}')"
+      else
+        printf '%s %s %s\n' "$uf" "${sz:-?}" \
+          "$(stat -c %Y "$p" 2>/dev/null || stat -f %m "$p" 2>/dev/null || echo '?')"
+      fi
+    done
+  } 2>/dev/null | hash_stdin | awk '{print $1}'
+}
+
 # --- Zero-stop sweep ---------------------------------------------------------
 # Shared by the all-[done] Stop state and the explicit --sweep mode (called
 # by /wrap before CURRENT is deleted, incl. on abandoned tasks).
@@ -305,42 +343,84 @@ sweep_done_milestones() { # $1 = 1 when the plan is all-[done] (last verify runs
   last_id="$(grep '^## .*\[done\]' "$plan" | tail -1 | sed -n 's/^## \([^:]*\):.*/\1/p')"
   grep '^## .*\[done\]' "$plan" | sed -n 's/^## \([^:]*\):.*/\1/p' | while IFS= read -r id; do
     [ -n "$id" ] || continue
-    grep -qF "${TAB}${id}${TAB}PASS" "$gatelog" 2>/dev/null && continue
     vcmd="$(verify_of "$id")"
     vlog="$(printf '%s' "$vcmd" | tr '\t' ' ')"
-    if [ "$id" = "$last_id" ] && [ "$run_last" = 1 ] && [ -n "$vcmd" ]; then
-      warn_unbounded
-      if guard_forbidden_verify "$vcmd"; then
-        printf '%s\t%s\tINTEGRITY\tforbidden verify, not executed: %s\n' \
-          "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
-        {
-          printf 'GATE REFUSED — the verify command contains a forbidden operation and was NOT run:\n'
-          printf '$ %s\n' "$vcmd"
-          printf 'Rewrite this milestone verify in plan.md, then finish.\n'
-        } >&2
-        echo BLOCK
-      elif out="$(run_cmd "$vcmd" 2>&1)"; then
-        printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
-      else
-        printf '%s\t%s\tFAIL\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
-        {
-          printf 'GATE SWEEP FAILED — %s is marked [done] but its verify fails NOW (zero-stop run: the gate never saw it pass).\n' "$id"
-          printf '$ %s\n' "$vcmd"
-          printf '%s\n' "$out" | tail -n 50
-          printf 'The task cannot wrap red: fix it, or mark %s back to [in_progress] and re-enter the loop.\n' "$id"
-        } >&2
-        echo BLOCK
-      fi
-    else
-      # Earlier [done] milestones (or verify-less ones): their point-in-time
-      # has passed — record honest vacuity exactly once, never fake evidence.
+    if [ "$id" != "$last_id" ] || [ "$run_last" != 1 ]; then
+      # Historical milestones are point-in-time gates; do not re-run them.
+      grep -qF "${TAB}${id}${TAB}PASS" "$gatelog" 2>/dev/null && continue
       grep -qF "${TAB}${id}${TAB}UNARMED" "$gatelog" 2>/dev/null && continue
       printf '%s\t%s\tUNARMED\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" \
         "${vlog:-(no verify command)}" >> "$gatelog" 2>/dev/null || true
+      continue
+    fi
+    # Completion must prove the CURRENT final command/tree, not a past PASS.
+    # Explicit /wrap --sweep always re-runs; repeated Stop calls may cache.
+    if [ -z "$vcmd" ] || guard_forbidden_verify "$vcmd"; then
+      reason="forbidden verify, not executed: $vlog"
+      [ -n "$vcmd" ] || reason='final milestone has no verify command'
+      rm -f "$gatecache" 2>/dev/null || true
+      printf '%s\t%s\tINTEGRITY\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$reason" >> "$gatelog" 2>/dev/null || true
+      printf 'GATE REFUSED — %s: %s. Fix the final verify before wrapping.\n' "$id" "$reason" >&2
+      echo BLOCK
+      continue
+    fi
+    vhash="$(printf '%s' "$vcmd" | hash_stdin | awk '{print $1}')"
+    fp="$(fingerprint || true)"
+    if [ "$MODE" = stop ] && [ -n "$fp" ] && \
+       [ "$(cat "$gatecache" 2>/dev/null)" = "sweep|$id|$vhash|$fp" ]; then
+      continue
+    fi
+    warn_unbounded
+    if out="$(run_cmd "$vcmd" 2>&1)"; then
+      printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
+      fp="$(fingerprint || true)"
+      [ -z "$fp" ] || printf 'sweep|%s|%s|%s' "$id" "$vhash" "$fp" > "$gatecache" 2>/dev/null || true
+    else
+      rm -f "$gatecache" 2>/dev/null || true
+      printf '%s\t%s\tFAIL\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
+      {
+        printf 'GATE SWEEP FAILED — %s is marked [done] but its verify fails NOW.\n' "$id"
+        printf '$ %s\n' "$vcmd"
+        printf '%s\n' "$out" | tail -n 50
+        printf 'The task cannot wrap red: fix it, or mark %s back to [in_progress] and re-enter the loop.\n' "$id"
+      } >&2
+      echo BLOCK
     fi
   done | grep -q BLOCK && return 1
   return 0
 }
+
+# --- Checkpoint tripwire (v3.14) ---------------------------------------------
+# A milestone carrying `- checkpoint: human` in plan.md is a human gate: its
+# PASS pauses the run until `.ai_context/tasks/<slug>/ack-<id>` exists (the
+# ack path is Edit-denied and bash-guard-confirmed — same trust class as
+# gatelog: a tripwire against drift, not a sandbox). Work that advanced past
+# an un-acked checkpoint is a dark state: block once, then keep the human
+# signal repeating.
+ms_checkpoint() { # $1 = milestone id -> rc 0 when it is a human checkpoint
+  awk -v want="## $1:" '
+    index($0, want) == 1 { take = 1; next }
+    /^## / { take = 0 }
+    take && /^- checkpoint:[[:space:]]*human/ { f = 1 }
+    END { exit !f }
+  ' "$plan"
+}
+
+ms="$(grep -m1 '^## .*\[in_progress\]' "$plan" | sed -n 's/^## \([^:]*\):.*/\1/p')"
+
+ck_unacked="$(awk '
+  /^## / { take = 0; if ($0 ~ /\[done\]/) { id = $0; sub(/^## /, "", id); sub(/:.*/, "", id); take = 1 }; next }
+  take && /^- checkpoint:[[:space:]]*human/ { print id }
+' "$plan" | while IFS= read -r cid; do
+  [ -f "$TASKS/$slug/ack-$cid" ] || { printf '%s' "$cid"; break; }
+done)"
+if [ -n "$ck_unacked" ]; then
+  ck_j="$(printf '%s' "$ck_unacked" | tr -cd 'A-Za-z0-9._-')"
+  slugck_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
+  integrity_stop "${ms:-$ck_unacked}" "checkpoint $ck_unacked is [done] without human sign-off — the task cannot advance or wrap. Human: \`touch .ai_context/tasks/$slug/ack-$ck_unacked\` to sign off. Model: restore $ck_unacked to [in_progress] and later milestones to [pending], restate what needs sign-off, and pause" \
+    checkpoint \
+    "claude-starter gate: checkpoint ${ck_j} awaits human sign-off (touch .ai_context/tasks/${slugck_j}/ack-${ck_j}) - the run is held"
+fi
 
 if [ "$MODE" = sweep ]; then
   n_done="$(grep -c '^## .*\[done\]' "$plan" || true)"
@@ -387,39 +467,6 @@ if [ "${n_inprog:-0}" -eq 0 ]; then
     status_refresh
   fi
   exit 0
-fi
-
-ms="$(grep -m1 '^## .*\[in_progress\]' "$plan" | sed -n 's/^## \([^:]*\):.*/\1/p')"
-gatecache="$TASKS/$slug/.gate-cache"
-
-# --- Checkpoint tripwire (v3.14) ---------------------------------------------
-# A milestone carrying `- checkpoint: human` in plan.md is a human gate: its
-# PASS pauses the run until `.ai_context/tasks/<slug>/ack-<id>` exists (the
-# ack path is Edit-denied and bash-guard-confirmed — same trust class as
-# gatelog: a tripwire against drift, not a sandbox). Work that advanced past
-# an un-acked checkpoint is a dark state: block once, then keep the human
-# signal repeating.
-ms_checkpoint() { # $1 = milestone id -> rc 0 when it is a human checkpoint
-  awk -v want="## $1:" '
-    index($0, want) == 1 { take = 1; next }
-    /^## / { take = 0 }
-    take && /^- checkpoint:[[:space:]]*human/ { f = 1 }
-    END { exit !f }
-  ' "$plan"
-}
-
-ck_unacked="$(awk '
-  /^## / { take = 0; if ($0 ~ /\[done\]/) { id = $0; sub(/^## /, "", id); sub(/:.*/, "", id); take = 1 }; next }
-  take && /^- checkpoint:[[:space:]]*human/ { print id }
-' "$plan" | while IFS= read -r cid; do
-  [ -f "$TASKS/$slug/ack-$cid" ] || { printf '%s' "$cid"; break; }
-done)"
-if [ -n "$ck_unacked" ]; then
-  ck_j="$(printf '%s' "$ck_unacked" | tr -cd 'A-Za-z0-9._-')"
-  slugck_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
-  integrity_stop "${ms:-?}" "checkpoint $ck_unacked is [done] without human sign-off, yet ${ms:-?} is already [in_progress] — work advanced past a human gate. Human: \`touch .ai_context/tasks/$slug/ack-$ck_unacked\` to sign off. Model: flip ${ms:-?} back to [pending], restate what needs sign-off, and pause" \
-    checkpoint \
-    "claude-starter gate: checkpoint ${ck_j} awaits human sign-off (touch .ai_context/tasks/${slugck_j}/ack-${ck_j}) - the run is held"
 fi
 
 # Extract the `- verify:` command of the [in_progress] milestone.
@@ -496,7 +543,6 @@ fi
 # Checkpoint milestones skip the prompt entirely: they hold for the ack.
 green_boundary() { # $ms verified green (fresh PASS or cache hit) in stop mode
   [ "$MODE" = stop ] || return 0
-  grep -q '^## .*\[pending\]' "$plan" || return 0
   gslug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
   gms_j="$(printf '%s' "${ms:-?}" | tr -cd 'A-Za-z0-9._-')"
   if ms_checkpoint "${ms:-?}" && [ ! -f "$TASKS/$slug/ack-${ms:-?}" ]; then
@@ -508,6 +554,7 @@ green_boundary() { # $ms verified green (fresh PASS or cache hit) in stop mode
       "$gslug_j" "$gms_j" "$gslug_j" "$gms_j"
     return 0
   fi
+  grep -q '^## .*\[pending\]' "$plan" || return 0
   gmk="${TMPDIR:-/tmp}/claude-gate-green-${sid_s}-$(printf '%s' "$slug-${ms:-?}" | tr -cs 'A-Za-z0-9._-' '_')"
   if [ ! -f "$gmk" ]; then
     : > "$gmk" 2>/dev/null || true
@@ -529,37 +576,6 @@ green_boundary() { # $ms verified green (fresh PASS or cache hit) in stop mode
   printf '{"systemMessage":"claude-starter gate: %s / %s is green; the run is paused at a milestone boundary (pause chosen or waiting on you)."}\n' \
     "$gslug_j" "$gms_j"
   return 0
-}
-
-# --- PASS-cache -------------------------------------------------------------
-# The cache file itself is gitignored (.ai_context/tasks/*/.gate-cache), so
-# it never feeds back into its own fingerprint.
-hash_stdin() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum
-  elif command -v shasum >/dev/null 2>&1; then shasum -a 256
-  else cksum
-  fi
-}
-
-fingerprint() {
-  git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1 || return 1
-  {
-    git -C "$ROOT" rev-parse HEAD
-    git -C "$ROOT" status --porcelain
-    git -C "$ROOT" diff HEAD
-    # Untracked files: content hash — a same-size edit must invalidate.
-    # Files over 1 MB fall back to size+mtime so bulk data stays cheap.
-    git -C "$ROOT" ls-files -o --exclude-standard | while IFS= read -r uf; do
-      p="$ROOT/$uf"
-      sz="$(wc -c < "$p" 2>/dev/null | tr -d ' ' || true)"
-      if [ -n "$sz" ] && [ "$sz" -le 1048576 ]; then
-        printf '%s %s\n' "$uf" "$(hash_stdin < "$p" | awk '{print $1}')"
-      else
-        printf '%s %s %s\n' "$uf" "${sz:-?}" \
-          "$(stat -c %Y "$p" 2>/dev/null || stat -f %m "$p" 2>/dev/null || echo '?')"
-      fi
-    done
-  } 2>/dev/null | hash_stdin | awk '{print $1}'
 }
 
 fp="$(fingerprint || true)"

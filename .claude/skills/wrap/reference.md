@@ -6,9 +6,10 @@ don't pay for it. Two sections; read the one your situation names.
 ## Task close-out (`.ai_context/tasks/CURRENT` exists)
 
 - **Task finished:** FIRST run `bash .claude/hooks/stop-gate.sh --sweep` —
-  it closes zero-stop gaps mechanically (verifies the final `[done]`
-  milestone if unproven, records `UNARMED` rows for earlier gates that
-  never fired); a FAIL means the task is NOT finished. Then write the
+  it re-runs the current final `[done]` verify even after a prior PASS,
+  requires every done checkpoint to have its human ack, and records
+  `UNARMED` for earlier gates that never fired. Any nonzero exit means
+  the task is NOT finished; a yielded Stop cannot authorize wrap. Then write the
   task's journal entry with the scoreboard numbers — profile, size,
   milestones total, gate_failures = **count of `FAIL` rows in
   `tasks/<slug>/gatelog`** (never from memory; note any `INTEGRITY` or

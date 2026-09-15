@@ -741,7 +741,7 @@ grep -q "	M2	PASS" "$D/.ai_context/tasks/demo/gatelog" && ok "final [done] miles
 grep -q "	M1	UNARMED" "$D/.ai_context/tasks/demo/gatelog" && ok "earlier rowless [done] recorded UNARMED (verify NOT re-run — point-in-time gate)" || no "UNARMED row missing"
 zn=$(grep -c '' "$D/.ai_context/tasks/demo/gatelog")
 printf '{"session_id": "tsuite-z1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-[ "$(grep -c '' "$D/.ai_context/tasks/demo/gatelog")" -eq "$zn" ] && ok "sweep idempotent (no duplicate rows on re-stop)" || no "sweep duplicated rows"
+[ "$(grep -c '' "$D/.ai_context/tasks/demo/gatelog")" -eq "$((zn + 1))" ] && ok "non-git final verify re-runs; earlier UNARMED is not duplicated" || no "non-git sweep evidence incorrect"
 sed -i.bak 's/## M2: final \[done\]/## M3: red [done]/; s/- verify: `true`/- verify: `false`/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
 printf '{"session_id": "tsuite-z1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 2 $? "red final [done] verify blocks the wrap-up turn"
@@ -764,6 +764,57 @@ CLAUDE_PROJECT_DIR="$D3" bash "$GATE" --sweep >/dev/null 2>&1
 ck 2 $? "--sweep refuses a forbidden final verify"
 [ ! -f "$D3/pwned" ] && ok "--sweep forbidden verify was NOT executed" || no "--sweep ran a forbidden verify"
 grep -q 'forbidden verify' "$D3/.ai_context/tasks/demo/gatelog" && ok "--sweep forbidden logged as INTEGRITY" || no "--sweep forbidden row missing"
+
+
+echo "=== L1-12b · completion verifies the current tree and command"
+D="$WORK/l112d"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# configured\n' > "$D/CLAUDE.md"
+printf '.ai_context/tasks/*/.gate-cache\n' > "$D/.gitignore"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+printf 'good\n' > "$D/payload.txt"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
+# Plan: final freshness
+## M1: final [in_progress]
+- verify: `test "$(cat payload.txt)" = good`
+- risk: low
+PEOF
+git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm base
+git -C "$D" checkout -qb task/demo
+printf '{"session_id":"tsuite-final-fp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "final fixture records a real in-progress PASS"
+sed -i 's/\[in_progress\]/[done]/' "$D/.ai_context/tasks/demo/plan.md"
+printf 'evil\n' > "$D/payload.txt"
+printf '{"session_id":"tsuite-final-fp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "all-done Stop rejects changed code despite historical PASS"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+ck 2 $? "explicit sweep rejects changed code despite historical PASS"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+ck 2 $? "explicit sweep stays red on repeat"
+[ ! -f "$D/.ai_context/tasks/demo/.gate-cache" ] && ok "final failure clears PASS-cache" || no "final failure left stale cache"
+printf 'good\n' > "$D/payload.txt"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+ck 0 $? "repaired final verify passes"
+final_n=$(grep -c PASS "$D/.ai_context/tasks/demo/gatelog")
+printf '{"session_id":"tsuite-final-fp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "unchanged all-done Stop passes"
+[ "$(grep -c PASS "$D/.ai_context/tasks/demo/gatelog")" -eq "$final_n" ] && ok "unchanged final tree uses fingerprint cache" || no "final cache missed"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+ck 0 $? "explicit sweep revalidates a cached final PASS"
+[ "$(grep -c PASS "$D/.ai_context/tasks/demo/gatelog")" -eq "$((final_n + 1))" ] && ok "explicit sweep executes verify even when cached" || no "explicit sweep trusted cached PASS"
+# Even an ignored plan must not hide a changed verify command from the cache.
+git -C "$D" rm --cached -q .ai_context/tasks/demo/plan.md
+printf '.ai_context/tasks/*/plan.md\n' >> "$D/.gitignore"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+sed -i 's/^- verify:.*/- verify: `false`/' "$D/.ai_context/tasks/demo/plan.md"
+printf '{"session_id":"tsuite-final-command"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "same milestone with changed ignored verify cannot use old PASS"
+sed -i 's/^- verify:.*/- verify: `touch forbidden-ran \&\& git push origin main`/' "$D/.ai_context/tasks/demo/plan.md"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+ck 2 $? "prior PASS cannot hide a forbidden final verify"
+[ ! -f "$D/forbidden-ran" ] && ok "forbidden final verify was never executed" || no "forbidden final verify ran"
+sed -i '/^- verify:/d' "$D/.ai_context/tasks/demo/plan.md"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+ck 2 $? "removing final verify cannot turn a historical PASS into completion"
 
 echo "=== L1-13 · bash-guard: catastrophic-op tripwire (PreToolUse)"
 BG="$REPO/.claude/hooks/bash-guard.sh"
@@ -1170,6 +1221,20 @@ grep -q '^model: inherit$' "$D/.claude/agents/scout.md" && ok "apply: explicit f
 tp_env=$( cd "$D" && CLAUDE_CODE_SUBAGENT_MODEL=sonnet bash scripts/task-profile.sh status 2>&1 >/dev/null )
 echo "$tp_env" | grep -q 'CLAUDE_CODE_SUBAGENT_MODEL' && ok "status warns when CLAUDE_CODE_SUBAGENT_MODEL overrides pins" || no "env-override warning missing"
 
+
+# Every writing entry point must warn, not only `apply`.
+for tp_alias in mixed mixed-judge inherit; do
+  tp_active=mixed-judge
+  [ "$tp_alias" = mixed-judge ] && tp_active=mixed
+  printf '# Plan: p\n<!-- profile: %s ; size: M -->\n## M1: x [in_progress]\n- verify: `true`\n' "$tp_active" > "$D/.ai_context/tasks/pdemo/plan.md"
+  tp_warn=$( cd "$D" && bash scripts/task-profile.sh "$tp_alias" 2>&1 >/dev/null ); tp_rc=$?
+  ck 0 "$tp_rc" "$tp_alias still applies the user-selected profile"
+  echo "$tp_warn" | grep -q "PROFILE SWITCH mid-task ($tp_active -> $tp_alias)" && ok "$tp_alias warns on active profile mismatch" || no "$tp_alias switched without warning"
+done
+printf '# Plan: p\n<!-- profile: mixed-judge ; size: M -->\n' > "$D/.ai_context/tasks/pdemo/plan.md"
+tp_warn=$( cd "$D" && bash scripts/task-profile.sh mixed-judge 2>&1 >/dev/null )
+[ -z "$tp_warn" ] && ok "matching direct profile has no switch warning" || no "matching profile warned"
+
 echo "=== L1-21 · every exit-2 block prints the stdout marker (CLI heuristic, v3.14)"
 # The missing-hook heuristic (exit 2 + EMPTY stdout + stderr matching
 # /no such file|can't open/i) silently drops legitimate blocks — journal
@@ -1261,6 +1326,44 @@ ck 2 $? "acked checkpoint releases the run (M2 arms, red verify blocks normally)
 grep -q 'Edit(./.ai_context/tasks/\*\*/ack-\*)' "$REPO/.claude/settings.json" && ok "ack files Edit-denied" || no "ack Edit-deny missing"
 bgout=$(printf '{"tool_input":{"command":"touch .ai_context/tasks/demo/ack-M1"}}' | CLAUDE_PROJECT_DIR="$D" bash "$REPO/.claude/hooks/bash-guard.sh" 2>/dev/null)
 echo "$bgout" | grep -q '"permissionDecision":"ask"' && ok "bash-guard asks on model-side ack writes (sign-off stays human)" || no "bash-guard ack confirmation missing"
+
+
+echo "=== L1-22b · terminal checkpoints hold through Stop and strict wrap"
+D="$WORK/l122final"; mkdir -p "$D/.ai_context/tasks/demo"
+printf '# configured\n' > "$D/CLAUDE.md"
+echo demo > "$D/.ai_context/tasks/CURRENT"
+cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
+# Plan: terminal checkpoint
+## M1: final [in_progress]
+- verify: `true`
+- checkpoint: human
+PEOF
+out=$(printf '{"session_id":"tsuite-ck-final"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "final in-progress checkpoint allows a human pause"
+echo "$out" | grep -q 'human checkpoint' && ok "final checkpoint holds even without pending milestones" || no "terminal checkpoint hold missing"
+sed -i 's/\[in_progress\]/[done]/' "$D/.ai_context/tasks/demo/plan.md"
+out=$(printf '{"session_id":"tsuite-ck-final"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 2 $rc "all-done task cannot skip final human ack"
+echo "$out" | grep -q 'claude-starter-gate: BLOCK' && ok "terminal checkpoint block has CLI marker" || no "terminal checkpoint marker missing"
+out=$(printf '{"session_id":"tsuite-ck-final"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "repeated Stop yields for human sign-off"
+echo "$out" | grep -q 'awaits human sign-off' && ok "all-done pause keeps the missing ack visible" || no "all-done checkpoint silently passed"
+for ck_try in 1 2; do
+  out=$(CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep 2>/dev/null); rc=$?
+  ck 2 $rc "explicit sweep refuses unacked final checkpoint (attempt $ck_try)"
+  echo "$out" | grep -q 'claude-starter-gate: BLOCK' && ok "checkpoint sweep block carries marker ($ck_try)" || no "checkpoint sweep marker missing ($ck_try)"
+done
+touch "$D/.ai_context/tasks/demo/ack-M1"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+ck 0 $? "human ack releases final wrap"
+# An earlier checkpoint must also be checked when every milestone is done.
+sed -i 's/## M1:/## M0:/' "$D/.ai_context/tasks/demo/plan.md"
+printf '\n## M2: later [done]\n- verify: `true`\n' >> "$D/.ai_context/tasks/demo/plan.md"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+ck 2 $? "all-done sweep also checks earlier unacked checkpoints"
+touch "$D/.ai_context/tasks/demo/ack-M0"
+CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
+ck 0 $? "all acknowledged checkpoints allow completion"
 
 echo "=== L1-8 · S7 pre-commit measures STAGED content"
 D="$WORK/l18"; mkdir -p "$D/.ai_context"
@@ -1394,6 +1497,24 @@ PY
   printf '{"session_id": "tsuite-l2"}' | CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
   ck 2 $? "project gate: red blocks"
   grep -qc "	M2	" "$P/.ai_context/tasks/demo/gatelog" >/dev/null && ok "project gatelog written" || no "project gatelog missing"
+
+  echo "=== L2-3b · completion and profile fixes ship through git archive"
+  mkdir -p "$P/.ai_context/tasks/finalfix"; echo finalfix > "$P/.ai_context/tasks/CURRENT"
+  printf '# Plan: shipped fixes\n<!-- profile: mixed-judge ; size: S -->\n## M1: final [done]\n- verify: `true`\n' > "$P/.ai_context/tasks/finalfix/plan.md"
+  CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" --sweep >/dev/null 2>&1
+  ck 0 $? "spawned final verify records PASS"
+  sed -i 's/- verify: `true`/- verify: `false`/' "$P/.ai_context/tasks/finalfix/plan.md"
+  CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" --sweep >/dev/null 2>&1
+  ck 2 $? "spawned sweep rejects stale final PASS"
+  sed -i 's/- verify: `false`/- verify: `true`/' "$P/.ai_context/tasks/finalfix/plan.md"
+  printf '%s\n' '- checkpoint: human' >> "$P/.ai_context/tasks/finalfix/plan.md"
+  CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" --sweep >/dev/null 2>&1
+  ck 2 $? "spawned sweep refuses missing final ack"
+  touch "$P/.ai_context/tasks/finalfix/ack-M1"
+  CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" --sweep >/dev/null 2>&1
+  ck 0 $? "spawned sweep accepts acknowledged green completion"
+  tp_warn=$(bash "$P/scripts/task-profile.sh" mixed 2>&1 >/dev/null)
+  echo "$tp_warn" | grep -q 'PROFILE SWITCH' && ok "spawned direct profile warns on mismatch" || no "spawned profile alias missed warning"
   rm -f "$P/.ai_context/tasks/CURRENT"
 
   echo "=== L2-5 · no-op latency"
