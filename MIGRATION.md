@@ -68,13 +68,27 @@ English README are the authority when translations drift):
 
 ---
 
-## Unreleased — pair-codex transport, judge wiring, plan loop
+## Unreleased — pair-codex: transport, judge wiring, plan loop, intake critique
 
 `/task --profile=pair-codex` (workshop ADR-028): a Codex judge in a sibling
-herdr pane takes the checker seats; Claude keeps executing. Three phases
-so far: the transport, the judge's wiring into verification, drift and
-the final panel, and the plan convergence loop (the spec/brief critique
-is still to come).
+herdr pane takes the checker seats at every stage; Claude keeps executing.
+Four phases: the transport, the judge's wiring into verification, drift
+and the final panel, the plan convergence loop, and the intake critique.
+
+- **Intake critique (phase 4).** Two Codex-only seats whose contracts are
+  inlined by the script (no `.claude/agents` counterpart exists — the
+  orchestrator holds the human conversation): `packet spec-critic -`
+  attacks the frozen spec (AC executability, plan-changing ambiguity, the
+  "what would make you reject this even with every AC green?" question
+  with concrete Constraint/Out-of-scope candidates, vetoable
+  assumptions) before round 0; `packet brief-audit -` checks the ≤5
+  load-bearing claims of the scout's brief against the repo with read-only
+  commands before planners read it. `pair.md` §1 / §0.5 rule the findings
+  into the ledger (`stage: spec` / `brief`), the attended path puts the
+  direction-question candidates to the human, brief contradictions become
+  dated `## Corrections` lines. Validated live on luna/low: a vibes AC,
+  a silent scope and a vetoable assumption were all caught; two planted
+  false brief claims were contradicted with commands.
 
 - **Plan loop (phase 3).** `packet planner - --lens L [--budget TEXT]`
   asks the judge for a plan candidate bound to `spec:<sha256>`, in the

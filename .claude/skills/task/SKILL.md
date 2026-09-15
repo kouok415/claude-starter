@@ -72,7 +72,8 @@ Spawn `scout` with the goal + repo areas the task touches. It surveys ONCE
 and writes `tasks/<slug>/brief.md`: file map, key interfaces, commands,
 conventions, gotchas. Downstream contexts navigate by it instead of
 re-surveying — that discipline lives in their own agent bodies; brief
-corrections are appended per INDEX's writing protocol.
+corrections are appended per INDEX's writing protocol (`pair-*`: a Codex
+brief audit supplies them before planners read it — `pair.md` §0.5).
 
 ## 1 · Spec — acceptance criteria must be executable
 
@@ -96,6 +97,7 @@ Write `spec.md`:
 Reject vibes criteria ("works well", "clean"). Every AC needs a command or
 a directly observable behavior; if the user can't supply one, propose one
 and confirm it (in `--auto`: record it under Assumptions instead).
+(`pair-*`: a Codex spec critique runs here, before round 0 — `pair.md` §1.)
 
 §Assumptions is the run's decision ledger — the one spec section that
 stays append-only after the freeze: every spec-underdetermined call lands

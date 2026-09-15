@@ -217,7 +217,10 @@ verifier、`risk: high` 兩邊都要過、drift check 交給 judge、final panel
 三個 lens —— 聯集、一輪對抗、逐條裁決記在 `pair/ledger.md`。plan 變成收斂
 迴圈：round 0 加一個 Codex planner 候選，每一輪加一個 Codex critic，兩邊 critic
 攻擊同一個凍結 digest，兩邊都過 plan 才前進 —— 最多十輪，之後帳本上的未解
-項交給人。spec/brief critique 之後補上。
+項交給人。intake 時 Codex spec critique 先攻擊驗收條件的可執行性、把「什麼
+情況下你會 reject」問具體，brief audit 在 planner 讀之前用命令核對 scout 的
+關鍵主張。協定裡每個檢查席位現在都有跨模型的坐者；生產席位（scout、
+executor、reframer）仍是 Claude 的。
 
 ---
 

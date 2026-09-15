@@ -245,8 +245,13 @@ Claude's three — union, one rebuttal round, per-finding rulings in
 `pair/ledger.md`. Planning becomes a convergence loop: a Codex planner
 candidate joins round 0, a Codex critic joins every round, both critics
 attack the same frozen digest, and the plan advances only when both pass
-— ten rounds at most, then the open ledger goes to the human. The
-spec/brief critique lands as a later stage.
+— ten rounds at most, then the open ledger goes to the human. At intake,
+a Codex spec critique attacks acceptance-criteria executability and asks
+the direction question concretely before any plan exists, and a brief
+audit checks the scout's load-bearing claims against the repo before
+planners read them. Every checker seat of the protocol now has a
+cross-model occupant; production seats (scout, executor, reframer) stay
+Claude's.
 
 ---
 

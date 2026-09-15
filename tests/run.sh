@@ -512,8 +512,8 @@ sz=$(wc -c < "$REPO/.ai_context/INDEX.md")
 # in reference.md / pair.md, so the pointer checks below stay.
 [ -f "$REPO/.claude/skills/task/pair.md" ] && ok "task pair.md exists (on-demand pair-codex protocol)" || no "task pair.md missing"
 grep -q 'pair.md' "$REPO/.claude/skills/task/SKILL.md" && ok "task body points at pair.md for pair-* profiles" || no "task body lost its pair.md pointer"
-[ "$(grep -c 'pair.md' "$REPO/.claude/skills/task/SKILL.md")" -ge 5 ] && ok "task body points at pair.md from the verify, drift and final stages" || no "task body lacks the per-stage pair.md pointers"
-for sec in '### No-verdict rule' '### §2 plan' '### §3.3 verification' '### §3.6 drift check' '### §5 final panel' '### `pair/ledger.md`'; do
+[ "$(grep -c 'pair.md' "$REPO/.claude/skills/task/SKILL.md")" -ge 7 ] && ok "task body points at pair.md from the verify, drift and final stages" || no "task body lacks the per-stage pair.md pointers"
+for sec in '### No-verdict rule' '### §1 spec' '### §0.5 brief' '### §2 plan' '### §3.3 verification' '### §3.6 drift check' '### §5 final panel' '### `pair/ledger.md`'; do
   grep -qF "$sec" "$REPO/.claude/skills/task/pair.md" && ok "pair.md carries $sec" || no "pair.md missing $sec"
 done
 sz=$(wc -c < "$REPO/.claude/skills/wrap/SKILL.md")
@@ -1526,7 +1526,7 @@ grep -q "^base: $PH2$" "$PD/$pk" && ok "packet: base is HEAD at generation time"
 grep -q '^mode: light$' "$PD/$pk" && grep -q 'changed files (uncommitted, vs base .*): a.sh,b.sh' "$PD/$pk" && ok "packet: light mode carries the changed-file list" || no "packet light mode text missing"
 grep -q '^## M2: y \[in_progress\]$' "$PD/$pk" && grep -q 'forward constraint for M2' "$PD/$pk" && ok "packet: the FULL milestone section is inlined (comment block included)" || no "packet milestone section incomplete"
 ! grep -q '^## M3' "$PD/$pk" && ok "packet: neighbouring milestones are not inlined" || no "packet leaked another milestone"
-grep -q '^contract is .claude/agents/verifier.md' "$PD/$pk" && ok "packet: role body referenced by path, never copied" || no "packet lacks the role-contract pointer"
+grep -q '^Your role contract is .claude/agents/verifier.md' "$PD/$pk" && ok "packet: role body referenced by path, never copied" || no "packet lacks the role-contract pointer"
 grep -q "^Write $PD/.ai_context/tasks/pdemo/pair/017-verifier-M2.result.md$" "$PD/$pk" && ok "packet: result path is absolute and derived from the packet name" || no "packet result path wrong"
 grep -q '^  base: '"$PH2"'$' "$PD/$pk" && ok "packet: result contract pins the same base" || no "packet result-contract base wrong"
 rc=$(tp -- send "$pk"); ck 0 "$rc" "packet → send round-trips over the fake judge"
@@ -1551,7 +1551,7 @@ rc=$(tp -- packet verifier M2 --mode drift); ck 2 "$rc" "packet: drift without -
 rc=$(tp -- packet final-verifier - --since "$PH"); ck 2 "$rc" "packet: final-verifier without a lens refused"
 rc=$(tp -- packet final-verifier M2 --lens correctness --since "$PH"); ck 2 "$rc" "packet: final-verifier with a milestone refused"
 rc=$(tp -- packet verifier M2 --changed a --lens correctness); ck 2 "$rc" "packet: --lens on verifier refused"
-rc=$(tp -- packet reframer -); ck 2 "$rc" "packet: unwired role refused"
+rc=$(tp -- packet scout -); ck 2 "$rc" "packet: unwired role refused"
 grep -q 'not wired' "$FK/err" && ok "packet: unwired role names the reason" || no "packet unwired-role message: $(cat "$FK/err")"
 n_before=$(find "$PKD" -maxdepth 1 -name '*.md' | wc -l)
 rc=$(tp -- packet verifier M2); [ "$(find "$PKD" -maxdepth 1 -name '*.md' | wc -l)" -eq "$n_before" ] && ok "packet: a refused packet leaves no file behind" || no "refused packet wrote a file"
@@ -1587,6 +1587,24 @@ rc=$(tp -- packet plan-critic - --candidate "$FK/nope.md" --round 1); ck 2 "$rc"
 rc=$(tp -- packet planner -); ck 2 "$rc" "packet: planner without --lens refused"
 rc=$(tp -- packet planner M2 --lens x); ck 2 "$rc" "packet: planner with a milestone refused"
 rm -f "$PKD/ledger.md"
+
+# --- packet: intake seats (phase 4) — Codex-only roles, contract inlined -----
+rc=$(tp -- packet spec-critic -); ck 0 "$rc" "packet: spec-critic generates without an agent file"
+pk="$(cat "$FK/out")"
+grep -q "^base: spec:$spec_d$" "$PD/$pk" && ok "packet: spec-critic binds to the spec digest" || no "spec-critic base wrong"
+grep -q 'Your contract is this packet' "$PD/$pk" && ! grep -q 'role contract is .claude/agents' "$PD/$pk" && ok "packet: spec-critic contract is inlined (no .claude/agents copy)" || no "spec-critic contract pointer wrong"
+grep -q '^    - \[ \] AC1: `bash t.sh` exits 0$' "$PD/$pk" && grep -q '^    - \[ASSUMED: y\]$' "$PD/$pk" && ok "packet: the whole spec is inlined frozen" || no "spec not inlined"
+grep -q 'what would make the human REJECT this even with' "$PD/$pk" && grep -q '1. Executability' "$PD/$pk" && ok "packet: spec-critic carries the four checks incl. the direction question" || no "spec-critic checks missing"
+rc=$(tp -- send "$pk"); ck 0 "$rc" "packet: spec-critic round-trips over the fake judge"
+printf '# Brief: p\n## Map\n- t.sh — the verify\n## Gotchas\n- none\n' > "$PD/.ai_context/tasks/pdemo/brief.md"
+brief_d="$(sha256sum "$PD/.ai_context/tasks/pdemo/brief.md" | awk '{print $1}')"
+rc=$(tp -- packet brief-audit -); ck 0 "$rc" "packet: brief-audit generates"
+pk="$(cat "$FK/out")"
+grep -q "^base: brief:$brief_d$" "$PD/$pk" && grep -q '^    - t.sh — the verify$' "$PD/$pk" && grep -q 'contradicted load-bearing' "$PD/$pk" && ok "packet: brief-audit binds to the brief digest and inlines it" || no "brief-audit body wrong"
+rm -f "$PD/.ai_context/tasks/pdemo/brief.md"
+rc=$(tp -- packet brief-audit -); ck 2 "$rc" "packet: brief-audit without a brief refused (scout first)"
+rc=$(tp -- packet spec-critic - --lens x); ck 2 "$rc" "packet: spec-critic takes no options"
+rc=$(tp -- packet spec-critic M1); ck 2 "$rc" "packet: spec-critic with a milestone refused"
 
 # --- reset: /new between final-panel lenses ----------------------------------
 rc=$(tp -- reset); ck 0 "$rc" "reset: sends /new to the live judge"

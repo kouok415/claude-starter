@@ -417,8 +417,12 @@ packet() {
     esac
   done
   resolve_task
-  case "$role" in verifier|final-verifier|planner|plan-critic) ;; *) die "packet: role '$role' is not wired for pair mode yet (verifier, final-verifier, planner, plan-critic)" ;; esac
-  [ -f "$ROOT/.claude/agents/$role.md" ] || die "packet: no role contract at .claude/agents/$role.md"
+  case "$role" in
+    verifier|final-verifier|planner|plan-critic)
+      [ -f "$ROOT/.claude/agents/$role.md" ] || die "packet: no role contract at .claude/agents/$role.md" ;;
+    spec-critic|brief-audit) ;;   # Codex-only seats: the contract is inlined below (this script is its single source)
+    *) die "packet: role '$role' is not wired for pair mode yet (verifier, final-verifier, planner, plan-critic, spec-critic, brief-audit)" ;;
+  esac
   local base seq file abs
   base="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" || die "packet: not a git repo with a HEAD"
   case "$role" in
@@ -430,6 +434,16 @@ packet() {
       [ -z "$mode$changed$since$rebuttal$candidate$round" ] || die "packet: planner accepts only --lens and --budget"
       [ -f "$TASK/spec.md" ] || die "packet: $TASK/spec.md missing"
       base="$(file_digest spec "$TASK/spec.md")" ;;
+    spec-critic)
+      [ "$ms" = "-" ] || die "packet: spec-critic takes '-' as milestone"
+      [ -z "$mode$changed$since$rebuttal$candidate$round$lens$budget" ] || die "packet: spec-critic takes no options"
+      [ -f "$TASK/spec.md" ] || die "packet: $TASK/spec.md missing"
+      base="$(file_digest spec "$TASK/spec.md")" ;;
+    brief-audit)
+      [ "$ms" = "-" ] || die "packet: brief-audit takes '-' as milestone"
+      [ -z "$mode$changed$since$rebuttal$candidate$round$lens$budget" ] || die "packet: brief-audit takes no options"
+      [ -f "$TASK/brief.md" ] || die "packet: $TASK/brief.md missing (the scout writes it first)"
+      base="$(file_digest brief "$TASK/brief.md")" ;;
     plan-critic)
       [ "$ms" = "-" ] || die "packet: plan-critic takes '-' as milestone"
       [ -n "$candidate" ] || die "packet: plan-critic needs --candidate <frozen plan file>"
@@ -468,8 +482,11 @@ packet() {
     [ -z "$lens" ] || printf 'lens: %s\n' "$lens"
     [ -z "$round" ] || printf 'round: %s\n' "$round"
     printf '\n# Task\n'
-    printf 'You are the %s for the active /task in this repo (%s). Your role\n' "$role" "$ROOT"
-    printf 'contract is .claude/agents/%s.md — read it first and follow its protocol.\n' "$role"
+    printf 'You are the %s for the active /task in this repo (%s).\n' "$role" "$ROOT"
+    case "$role" in
+      spec-critic|brief-audit) printf 'Your contract is this packet. Read-only: you run commands to check, never to change.\n' ;;
+      *) printf 'Your role contract is .claude/agents/%s.md — read it first and follow its protocol.\n' "$role" ;;
+    esac
     printf -- '- spec: %s/spec.md\n- brief: %s/brief.md\n- lessons: %s/lessons.md\n' "$TASK" "$TASK" "$TASK"
     case "$role:$mode" in
       verifier:light)
@@ -486,6 +503,34 @@ packet() {
         printf 'Judge intent, not letter: Goal, Constraints, Out of scope, and every\n'
         printf '[ASSUMED: ...] in spec.md section Assumptions — name any the human would veto.\n'
         printf 'ON-TRACK maps to verdict pass; DRIFTING maps to verdict fail.\n'
+        printf '\n## Acceptance criteria (spec.md)\n'; acceptance_criteria ;;
+      spec-critic:)
+        printf '\nSPEC CRITIQUE — attack the FROZEN spec below before a single plan exists.\n'
+        printf 'Four checks, findings for each:\n'
+        printf '1. Executability: every acceptance criterion must be a command or a directly\n'
+        printf '   observable behavior. "works well", "clean", "robust" = blocker; propose the\n'
+        printf '   command that would make it checkable.\n'
+        printf '2. Ambiguity that changes the plan: Goal / Constraints / Out of scope readings\n'
+        printf '   that would lead to materially different work = major; state both readings.\n'
+        printf '3. The direction question: what would make the human REJECT this even with\n'
+        printf '   every AC green? Give concrete candidates (each a proposed Constraint or\n'
+        printf '   Out-of-scope line) — severity major if the spec is silent on it.\n'
+        printf '4. Assumptions: every [ASSUMED: ...] the human would plausibly veto = major.\n'
+        printf 'A finding cites the AC id or the spec line it attacks. verdict pass = no\n'
+        printf 'blocker and no major remain.\n'
+        printf '\n## Spec (frozen, digest %s)\n\n' "$base"
+        sed 's/^/    /' "$TASK/spec.md" ;;
+      brief-audit:)
+        printf '\nBRIEF AUDIT — every later context navigates by brief.md; a wrong load-\n'
+        printf 'bearing claim misleads all of them. Pick the <=5 claims the plan will most\n'
+        printf 'depend on (paths, interfaces, commands, gotchas) and check each against the\n'
+        printf 'repo with a read-only command. Report each as confirmed / contradicted /\n'
+        printf 'unverifiable with the command and its output. A contradicted load-bearing\n'
+        printf 'claim = blocker; an unverifiable one = minor. Also name what the brief is\n'
+        printf 'missing that the spec needs (major if the spec touches it). verdict pass =\n'
+        printf 'no contradiction.\n'
+        printf '\n## Brief (frozen, digest %s)\n\n' "$base"
+        sed 's/^/    /' "$TASK/brief.md"
         printf '\n## Acceptance criteria (spec.md)\n'; acceptance_criteria ;;
       planner:)
         printf -- '- milestone budget: %s\n' "${budget:-$DEFAULT_BUDGET}"
@@ -547,6 +592,14 @@ packet() {
         printf 'breaks — checkable claim — concrete fix`, and one closing line on the\n'
         printf 'skeleton. Do not modify any file outside %s/. When done, reply with only\n' "$PAIR_DIR"
         printf 'the result path.\n' ;;
+      spec-critic)
+        printf 'then numbered findings: `severity — check 1|2|3|4 — AC id or spec line —\n'
+        printf 'what is wrong — proposed replacement text`. Do not modify any file outside\n'
+        printf '%s/. When done, reply with only the result path.\n' "$PAIR_DIR" ;;
+      brief-audit)
+        printf 'then one line per checked claim: `confirmed|contradicted|unverifiable —\n'
+        printf 'claim — command — output`, then missing items. Do not modify any file\n'
+        printf 'outside %s/. When done, reply with only the result path.\n' "$PAIR_DIR" ;;
       *)
         printf 'then your evidence: the commands you ran and their output, and each finding\n'
         printf 'with a reproducible claim (command or file:line) and a severity. Your role\n'

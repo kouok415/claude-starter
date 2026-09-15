@@ -123,6 +123,35 @@ agent for that seat (`verifier` / `final-verifier`), and append to
 `lessons.md`: `pair: judge no-verdict ×2 at <stage> M<n> (<reasons>) —
 Claude seat used`. Exit 4 means the human must act in the pane first.
 
+### §1 spec — critique before the first plan
+
+After spec.md is drafted and BEFORE round 0 (the planner packet binds to
+the spec digest, so the spec must settle first):
+`packet spec-critic -` → `send`. The seat is Codex-only (no Claude agent
+does this — you hold the human conversation), so its contract is inlined
+by the script. Rule each finding into `pair/ledger.md` (`stage: spec`):
+
+- executability blockers ⇒ rewrite the AC as a command (accepted);
+- ambiguity / direction-question candidates ⇒ attended: put them to the
+  human with the direction question — Codex's candidates make "what would
+  make you reject this even with every AC green?" concrete; `--auto`:
+  decide, record as `[ASSUMED: ...]`;
+- vetoable assumptions ⇒ same path.
+
+One critique round; a second only if a blocker was rewritten (it runs
+against the new digest). Spec edits after that are the plan-stage
+critics' business (their packets carry the ACs).
+
+### §0.5 brief — audit after the scout
+
+After the scout writes brief.md and BEFORE planners read it:
+`packet brief-audit -` → `send`. Contradicted load-bearing claims ⇒ you
+append dated one-liners under `## Corrections` in brief.md (INDEX's
+writing protocol) and a ledger row (`stage: brief`); a contradicted
+claim the whole plan would rest on ⇒ re-spawn the scout for that area.
+Missing items the spec needs ⇒ append them too. Unverifiable claims stay
+tagged `[UNVERIFIED]` as the scout left them.
+
 ### §2 plan — the convergence loop
 
 Plan-stage packets bind to digests, not commits: `planner` to
@@ -231,10 +260,13 @@ whatever the size table's last column says (user ruling, ADR-028).
     | verify | M3 | codex | major | `bash t.sh` exits 1 | confirmed |
     | final | test-integrity | claude | minor | tolerance loosened in x_test.py:40 | rejected: `git log -p` shows spec.md AC2 change with lessons entry |
 
-`stage` is `plan` / `verify` / `drift` / `final`; plan rows use `ref:
-r<round>/<id>` and are what the next critic packet carries.
+`stage` is `spec` / `brief` / `plan` / `verify` / `drift` / `final`; plan
+rows use `ref: r<round>/<id>` and are what the next critic packet
+carries.
 
-### Not wired yet
+### Seats that stay Claude-only
 
-The spec/brief critique (intake, §0–0.5) lands as its own stage; `packet`
-refuses `scout`/`reframer`/spec roles until then.
+`scout` (writes brief.md), `executor`, `reframer`: production seats.
+`packet` refuses them — the judge checks, it does not produce the
+artifacts the task runs on. (The planner candidate is the one exception,
+and it is an input to your synthesis, never the plan itself.)
