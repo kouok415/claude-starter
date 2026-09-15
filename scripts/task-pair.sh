@@ -13,8 +13,11 @@
 #   ensure                  find or start the judge (idempotent)
 #   packet <role> <M<n>|-> [--mode light|full|drift] [--lens L]
 #                          [--changed a,b] [--since REF] [--rebuttal FILE]
+#                          [--budget TEXT] [--candidate FILE] [--round N]
 #                           write the next packet (header + frozen inputs +
 #                           result contract) and print its path
+#   digest <file>           `plan:<sha256>` of a frozen plan candidate — the
+#                           version a critic pass is bound to
 #   send <packet> [--timeout MS]
 #                           submit one packet, wait, collect, log
 #   wait <seq>  [--timeout MS]
@@ -376,9 +379,29 @@ milestone_section() { # $1 = M<n> -> the full section from plan.md
 
 acceptance_criteria() { grep -E '^- \[[ x]\] AC' "$TASK/spec.md" 2>/dev/null || true; }
 
+PLAN_ROUND_CAP=10   # user ruling (ADR-028): past this the ledger goes to the human
+DEFAULT_BUDGET="the milestone budget of the active profile (reference.md, Profiles); if unsure assume <=15 tool calls per fresh executor context"
+
+file_digest() { printf '%s:%s' "$1" "$(hash_stdin < "$2" | awk '{print $1}')"; }
+
+# The plan.md format the Stop gate parses — inlined into planner packets so
+# a Codex candidate is gate-parseable on arrival.
+plan_format() {
+  cat <<'FMT'
+    # Plan: <title>
+    <!-- profile: pair-codex ; size: S | M | L -->
+    <!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+
+    ## M1: <milestone title> [pending]
+    - verify: `<command that fails today and passes when this milestone is done>`
+    - risk: low | med | high
+    - demo: <the verify translated for the human: "run X, you will see Y">
+FMT
+}
+
 packet() {
-  local role="${1:-}" ms="${2:-}" mode="" lens="" changed="" since="" rebuttal=""
-  [ -n "$role" ] && [ -n "$ms" ] || die "usage: task-pair.sh packet <role> <M<n>|-> [--mode light|full|drift] [--lens L] [--changed a,b] [--since REF] [--rebuttal FILE]"
+  local role="${1:-}" ms="${2:-}" mode="" lens="" changed="" since="" rebuttal="" budget="" candidate="" round=""
+  [ -n "$role" ] && [ -n "$ms" ] || die "usage: task-pair.sh packet <role> <M<n>|-> [--mode light|full|drift] [--lens L] [--changed a,b] [--since REF] [--rebuttal FILE] [--budget TEXT] [--candidate FILE] [--round N]"
   shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -387,15 +410,35 @@ packet() {
       --changed) changed="$2"; shift 2 ;;
       --since) since="$2"; shift 2 ;;
       --rebuttal) rebuttal="$2"; shift 2 ;;
+      --budget) budget="$2"; shift 2 ;;
+      --candidate) candidate="$2"; shift 2 ;;
+      --round) round="$2"; shift 2 ;;
       *) die "packet: unknown option $1" ;;
     esac
   done
   resolve_task
-  case "$role" in verifier|final-verifier) ;; *) die "packet: role '$role' is not wired for pair mode yet (verifier, final-verifier)" ;; esac
+  case "$role" in verifier|final-verifier|planner|plan-critic) ;; *) die "packet: role '$role' is not wired for pair mode yet (verifier, final-verifier, planner, plan-critic)" ;; esac
   [ -f "$ROOT/.claude/agents/$role.md" ] || die "packet: no role contract at .claude/agents/$role.md"
   local base seq file abs
   base="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" || die "packet: not a git repo with a HEAD"
   case "$role" in
+    planner)
+      # Plan-stage packets bind to the SPEC version, not a commit: the plan
+      # is being written, nothing is committed yet.
+      [ "$ms" = "-" ] || die "packet: planner takes '-' as milestone"
+      [ -n "$lens" ] || die "packet: planner needs --lens <strategic lens>"
+      [ -z "$mode$changed$since$rebuttal$candidate$round" ] || die "packet: planner accepts only --lens and --budget"
+      [ -f "$TASK/spec.md" ] || die "packet: $TASK/spec.md missing"
+      base="$(file_digest spec "$TASK/spec.md")" ;;
+    plan-critic)
+      [ "$ms" = "-" ] || die "packet: plan-critic takes '-' as milestone"
+      [ -n "$candidate" ] || die "packet: plan-critic needs --candidate <frozen plan file>"
+      [ -f "$candidate" ] || die "packet: candidate not found: $candidate"
+      [ -n "$round" ] || die "packet: plan-critic needs --round N (1..$PLAN_ROUND_CAP)"
+      [[ "$round" =~ ^[0-9]+$ ]] && [ "$round" -ge 1 ] || die "packet: --round must be a positive integer"
+      [ "$round" -le "$PLAN_ROUND_CAP" ] || RC=6 die "packet: plan round cap $PLAN_ROUND_CAP reached — the loop stops here; hand the open ledger rows to the human (kickoff brief)"
+      [ -z "$mode$changed$since$rebuttal$lens" ] || die "packet: plan-critic accepts only --candidate, --round and --budget"
+      base="$(file_digest plan "$candidate")" ;;
     verifier)
       [ "$ms" != "-" ] || die "packet: verifier needs a milestone id (M<n>)"
       [ -n "$mode" ] || mode=light
@@ -415,6 +458,7 @@ packet() {
   file="$PAIR_DIR/$seq-$role"
   [ "$ms" = "-" ] || file="$file-$ms"
   [ -z "$lens" ] || file="$file-$lens"
+  [ -z "$round" ] || file="$file-r$round"
   [ -z "$rebuttal" ] || file="$file-rebuttal"
   file="$file.md"
   abs="$ROOT/$file"
@@ -422,6 +466,7 @@ packet() {
     printf 'role: %s\nmilestone: %s\nbase: %s\n' "$role" "$ms" "$base"
     [ -z "$mode" ] || printf 'mode: %s\n' "$mode"
     [ -z "$lens" ] || printf 'lens: %s\n' "$lens"
+    [ -z "$round" ] || printf 'round: %s\n' "$round"
     printf '\n# Task\n'
     printf 'You are the %s for the active /task in this repo (%s). Your role\n' "$role" "$ROOT"
     printf 'contract is .claude/agents/%s.md — read it first and follow its protocol.\n' "$role"
@@ -442,6 +487,34 @@ packet() {
         printf '[ASSUMED: ...] in spec.md section Assumptions — name any the human would veto.\n'
         printf 'ON-TRACK maps to verdict pass; DRIFTING maps to verdict fail.\n'
         printf '\n## Acceptance criteria (spec.md)\n'; acceptance_criteria ;;
+      planner:)
+        printf -- '- milestone budget: %s\n' "${budget:-$DEFAULT_BUDGET}"
+        printf '\nPLAN CANDIDATE, lens: %s — commit fully to this lens; the orchestrator\n' "$lens"
+        printf 'synthesizes across candidates, you do not hedge. Navigate by brief.md, spot-\n'
+        printf 'check at most ~5 load-bearing claims, tag what you could not verify as\n'
+        printf '[ASSUMPTION: ...]. Below the result header, write the candidate in EXACTLY\n'
+        printf 'this plan.md format (the Stop gate parses it; every milestone needs a verify\n'
+        printf 'command that fails today and passes when done):\n\n'
+        plan_format
+        printf '\n## Acceptance criteria (spec.md)\n'; acceptance_criteria ;;
+      plan-critic:)
+        printf -- '- milestone budget: %s\n' "${budget:-$DEFAULT_BUDGET}"
+        printf '\nPLAN CRITIQUE, round %s of %s. Attack the FROZEN candidate below (do not\n' "$round" "$PLAN_ROUND_CAP"
+        printf 'read plan.md — it may be changing). Follow your checklist; also spot-check\n'
+        printf 'brief.md. Rules that make convergence real:\n'
+        printf -- '- every finding carries a checkable claim (a command, a file:line, an AC id);\n'
+        printf '  a finding without one is at most minor;\n'
+        printf -- '- a finding the ledger shows as rejected may be re-raised ONLY with new\n'
+        printf '  evidence — cite it, or drop it;\n'
+        printf -- '- verdict pass means: no blocker and no major finding remain. Minor findings\n'
+        printf '  do not block.\n'
+        printf '\n## Acceptance criteria (spec.md)\n'; acceptance_criteria
+        printf '\n## Candidate (frozen, digest %s)\n\n' "$base"
+        sed 's/^/    /' "$candidate"
+        if [ -f "$PAIR_DIR/ledger.md" ] && grep -q '^| plan |' "$PAIR_DIR/ledger.md"; then
+          printf '\n## Ledger so far (stage: plan)\n\n'
+          { grep -m1 '^| stage |' "$PAIR_DIR/ledger.md"; grep -m1 '^|---' "$PAIR_DIR/ledger.md"; grep '^| plan |' "$PAIR_DIR/ledger.md"; } | sed 's/^/    /'
+        fi ;;
       final-verifier:)
         printf -- '- the whole task diff to judge: `git diff %s..HEAD` / `git log %s..HEAD`\n' "$since" "$since"
         printf '\nPANEL LENS: %s — judge ONLY this lens, over the WHOLE task. The task\n' "$lens"
@@ -463,10 +536,23 @@ packet() {
     printf 'Write %s\nstarting with exactly these lines:\n' "${abs%.md}.result.md"
     printf '  run: completed|failed|blocked\n  verdict: pass|fail|inconclusive\n  base: %s\n' "$base"
     printf '  findings: <n> (blocker/major/minor)\n  assumptions: [...]\n'
-    printf 'then your evidence: the commands you ran and their output, and each finding\n'
-    printf 'with a reproducible claim (command or file:line) and a severity. Your role\n'
-    printf 'contract says PASS/FAIL; write them as verdict pass/fail. Do not modify any\n'
-    printf 'file outside %s/. When done, reply with only the result path.\n' "$PAIR_DIR"
+    case "$role" in
+      planner)
+        printf 'then the candidate plan in the format above (verdict: pass means you\n'
+        printf 'produced a complete candidate; inconclusive means you could not), then any\n'
+        printf 'brief.md discrepancies you found. Do not modify any file outside %s/.\n' "$PAIR_DIR"
+        printf 'When done, reply with only the result path.\n' ;;
+      plan-critic)
+        printf 'then numbered findings: `severity (blocker|major|minor) [structural] — what\n'
+        printf 'breaks — checkable claim — concrete fix`, and one closing line on the\n'
+        printf 'skeleton. Do not modify any file outside %s/. When done, reply with only\n' "$PAIR_DIR"
+        printf 'the result path.\n' ;;
+      *)
+        printf 'then your evidence: the commands you ran and their output, and each finding\n'
+        printf 'with a reproducible claim (command or file:line) and a severity. Your role\n'
+        printf 'contract says PASS/FAIL; write them as verdict pass/fail. Do not modify any\n'
+        printf 'file outside %s/. When done, reply with only the result path.\n' "$PAIR_DIR" ;;
+    esac
   } > "$file"
   echo "$file"
 }
@@ -500,6 +586,7 @@ cmd="${1:-}"
 case "$cmd" in
   ensure) ensure ;;
   packet) packet "$@" ;;
+  digest) [ -f "${1:-}" ] || die "usage: task-pair.sh digest <file>"; file_digest plan "$1"; echo ;;
   reset) reset ;;
   send) [ -n "${1:-}" ] || die "usage: task-pair.sh send <packet> [--timeout MS]"; send "$@" ;;
   wait) [ -n "${1:-}" ] || die "usage: task-pair.sh wait <seq> [--timeout MS]"; wait_run "$@" ;;
@@ -508,5 +595,5 @@ case "$cmd" in
     s="$(tr -d '[:space:]' < .ai_context/tasks/CURRENT 2>/dev/null || true)"
     [ -n "$s" ] && PAIR_DIR=".ai_context/tasks/$s/pair"
     fingerprint ;;
-  *) echo "Usage: task-pair.sh <ensure|packet <role> <M<n>|->|send <packet>|wait <seq>|reset|status|fingerprint>" >&2; exit 2 ;;
+  *) echo "Usage: task-pair.sh <ensure|packet <role> <M<n>|->|digest <file>|send <packet>|wait <seq>|reset|status|fingerprint>" >&2; exit 2 ;;
 esac

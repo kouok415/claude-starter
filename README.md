@@ -242,8 +242,11 @@ remembered format. Wired so far (`pair.md` §Stage wiring): the judge
 replaces the Claude verifier at `risk: med`, joins it at `risk: high`,
 takes the drift check, and runs all three final-panel lenses next to
 Claude's three — union, one rebuttal round, per-finding rulings in
-`pair/ledger.md`. The plan convergence loop and the spec/brief critique
-land as later stages.
+`pair/ledger.md`. Planning becomes a convergence loop: a Codex planner
+candidate joins round 0, a Codex critic joins every round, both critics
+attack the same frozen digest, and the plan advances only when both pass
+— ten rounds at most, then the open ledger goes to the human. The
+spec/brief critique lands as a later stage.
 
 ---
 

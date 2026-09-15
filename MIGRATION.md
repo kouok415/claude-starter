@@ -68,13 +68,28 @@ English README are the authority when translations drift):
 
 ---
 
-## Unreleased — pair-codex transport + judge wiring
+## Unreleased — pair-codex transport, judge wiring, plan loop
 
 `/task --profile=pair-codex` (workshop ADR-028): a Codex judge in a sibling
-herdr pane takes the checker seats; Claude keeps executing. Two phases
-so far: the transport, then the judge's wiring into verification, drift
-and the final panel (the plan loop and the spec/brief critique are still
-to come).
+herdr pane takes the checker seats; Claude keeps executing. Three phases
+so far: the transport, the judge's wiring into verification, drift and
+the final panel, and the plan convergence loop (the spec/brief critique
+is still to come).
+
+- **Plan loop (phase 3).** `packet planner - --lens L [--budget TEXT]`
+  asks the judge for a plan candidate bound to `spec:<sha256>`, in the
+  gate-parseable plan.md format; `packet plan-critic - --candidate FILE
+  --round N` binds a critique to `plan:<sha256>` of a frozen copy
+  (`task-pair.sh digest FILE`), inlines the candidate and the plan-stage
+  ledger rows, and states the anti-ping-pong rules (checkable claims,
+  no re-raising rejected findings without new evidence, pass = no
+  blocker/major). Round 11 is refused (exit 6): the ten-round cap is
+  mechanical, the open ledger goes to the human. `pair.md` §2 is the
+  protocol: Codex planner in round 0, both critics on the same frozen
+  digest every round, per-finding rulings (`accepted: <plan change>` /
+  `rejected: <evidence>` / `open`), any plan edit invalidates both
+  passes, reframer patches re-enter the loop. Validated live on
+  luna/low: a planner candidate and a critic round.
 
 - **Judge wiring (phase 2).** `task-pair.sh packet <role> <M<n>|->`
   generates every packet — header, task paths, the inlined milestone

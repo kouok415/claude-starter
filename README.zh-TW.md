@@ -214,8 +214,10 @@ verdict —— 它只決定 `run_state`。`task-pair.sh packet` 產生 judge 讀
 packet（milestone 段落、驗收條件、lens 框架、result 契約），檢查者的輸入
 不靠記憶。已接線（`pair.md` §Stage wiring）：`risk: med` 由 judge 取代 Claude
 verifier、`risk: high` 兩邊都要過、drift check 交給 judge、final panel 兩邊各跑
-三個 lens —— 聯集、一輪對抗、逐條裁決記在 `pair/ledger.md`。plan 收斂迴圈與
-spec/brief critique 之後逐階段補上。
+三個 lens —— 聯集、一輪對抗、逐條裁決記在 `pair/ledger.md`。plan 變成收斂
+迴圈：round 0 加一個 Codex planner 候選，每一輪加一個 Codex critic，兩邊 critic
+攻擊同一個凍結 digest，兩邊都過 plan 才前進 —— 最多十輪，之後帳本上的未解
+項交給人。spec/brief critique 之後補上。
 
 ---
 

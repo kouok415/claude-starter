@@ -29,7 +29,8 @@ Requirements, all checked mechanically by `scripts/task-pair.sh`:
 | Command | Does | Exit |
 |---|---|---|
 | `ensure` | find the judge (`judge-<slug>`) or split a pane and start it: `codex -s workspace-write -c features.hooks=false -c 'project_doc_fallback_filenames=["CLAUDE.md"]'` — no model/effort args | 0 · 3 refused · 4 human needed |
-| `packet <role> <M<n>\|-> [--mode light\|full\|drift] [--lens L] [--changed a,b] [--since REF] [--rebuttal FILE]` | write the next packet: header, task paths, the inlined milestone section / acceptance criteria, mode or lens framing, result contract; prints its path | 0 · 2 refused (unknown milestone, missing inputs, unwired role) |
+| `packet <role> <M<n>\|-> [--mode light\|full\|drift] [--lens L] [--changed a,b] [--since REF] [--rebuttal FILE] [--budget TEXT] [--candidate FILE] [--round N]` | write the next packet: header, task paths, the inlined milestone section / acceptance criteria / frozen plan candidate, mode or lens framing, ledger rows, result contract; prints its path | 0 · 2 refused (unknown milestone, missing inputs, unwired role) · 6 plan round cap |
+| `digest <file>` | `plan:<sha256>` of a frozen plan candidate — the version a critic pass is bound to | 0 |
 | `send <packet>` | freeze + digest the packet, fingerprint the tree, prompt the judge, wait (≤540 s per call), collect, log | 0 completed · 4 blocked/dialog · 5 in flight or busy · 6 no usable result |
 | `wait <seq>` | keep waiting for an in-flight run (chain after exit 5) | as `send` |
 | `reset` | `/new` to the judge — fresh context between final-panel lenses; logged | 0 · 3 no judge · 4 not idle after |
@@ -122,6 +123,48 @@ agent for that seat (`verifier` / `final-verifier`), and append to
 `lessons.md`: `pair: judge no-verdict ×2 at <stage> M<n> (<reasons>) —
 Claude seat used`. Exit 4 means the human must act in the pane first.
 
+### §2 plan — the convergence loop
+
+Plan-stage packets bind to digests, not commits: `planner` to
+`spec:<sha256 of spec.md>`, `plan-critic` to `plan:<sha256 of the frozen
+candidate file>` (`task-pair.sh digest <file>` prints it). A pass is a
+pass on that digest only.
+
+    round 0   Claude planner(s) per the size table  +  Codex planner, one lens
+              → you synthesize v1 (plan.md)
+    round r   freeze v_r: copy plan.md to pair/plan-v<r>.md; D_r = digest
+              spawn Claude plan-critic (background) on the frozen copy
+              packet plan-critic - --candidate pair/plan-v<r>.md --round r → send
+              both results: no blocker, no major ⇒ CONVERGED → kickoff brief
+              else rule every finding (below) → v_{r+1} → next round
+    cap 10    `packet --round 11` is refused (exit 6): stop, put the open
+              ledger rows in the kickoff brief, the human decides
+
+1. **Round 0.** `packet planner - --lens <lens> --budget "<the profile's
+   milestone budget>"` → `send`. The candidate is the result body below
+   the header, in the gate-parseable plan.md format. Give Codex a lens the
+   Claude planners do not have (M: Claude 1 + Codex 1; L: Claude 3 +
+   Codex 1). Synthesize as today.
+2. **Every round.** Both critics attack the SAME frozen file; neither reads
+   plan.md. Claude's findings go into the ledger too (`source: claude`).
+3. **Ruling, per finding, into `pair/ledger.md`** (`stage: plan`, `ref:
+   r<round>/<id>`): `accepted: <the concrete plan change>` — an accept
+   without a plan edit is not a ruling; `rejected: <reason with evidence>`;
+   `open` only for spec/scope/preference questions that belong to the
+   human. Minor findings never block convergence; a finding without a
+   checkable claim is at most minor.
+4. **Re-raise rule.** The next critic packet carries the plan-stage ledger
+   rows automatically; a rejected finding may come back only with new
+   evidence. If it comes back without, rule it `rejected: repeated without
+   evidence` and move on — do not argue with it.
+5. **Digest binding.** Any edit to plan.md after a critic passed
+   invalidates that pass: freeze again, new round. This includes a rung-4
+   reframer patch mid-run — the remaining milestones re-enter the loop
+   from round 1 (completed milestones stay).
+6. **Structural escalation** (SKILL.md §0.5 M rule) still applies: two
+   consecutive candidates with blocker-level structural findings ⇒ the
+   3-lens Claude fan-out; the Codex lens joins it.
+
 ### §3.3 verification, by risk
 
 - `low` — unchanged: the gate is the only net.
@@ -188,10 +231,10 @@ whatever the size table's last column says (user ruling, ADR-028).
     | verify | M3 | codex | major | `bash t.sh` exits 1 | confirmed |
     | final | test-integrity | claude | minor | tolerance loosened in x_test.py:40 | rejected: `git log -p` shows spec.md AC2 change with lessons entry |
 
-`stage` is `verify` / `drift` / `final` (the plan loop adds `plan`).
+`stage` is `plan` / `verify` / `drift` / `final`; plan rows use `ref:
+r<round>/<id>` and are what the next critic packet carries.
 
 ### Not wired yet
 
-Plan convergence rounds (Codex planner candidate + critic seat, ledger
-rows `stage: plan`) and the spec/brief critique land as their own stages;
-`packet` refuses those roles until then.
+The spec/brief critique (intake, §0–0.5) lands as its own stage; `packet`
+refuses `scout`/`reframer`/spec roles until then.

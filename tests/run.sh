@@ -512,8 +512,8 @@ sz=$(wc -c < "$REPO/.ai_context/INDEX.md")
 # in reference.md / pair.md, so the pointer checks below stay.
 [ -f "$REPO/.claude/skills/task/pair.md" ] && ok "task pair.md exists (on-demand pair-codex protocol)" || no "task pair.md missing"
 grep -q 'pair.md' "$REPO/.claude/skills/task/SKILL.md" && ok "task body points at pair.md for pair-* profiles" || no "task body lost its pair.md pointer"
-[ "$(grep -c 'pair.md' "$REPO/.claude/skills/task/SKILL.md")" -ge 4 ] && ok "task body points at pair.md from the verify, drift and final stages" || no "task body lacks the per-stage pair.md pointers"
-for sec in '### No-verdict rule' '### §3.3 verification' '### §3.6 drift check' '### §5 final panel' '### `pair/ledger.md`'; do
+[ "$(grep -c 'pair.md' "$REPO/.claude/skills/task/SKILL.md")" -ge 5 ] && ok "task body points at pair.md from the verify, drift and final stages" || no "task body lacks the per-stage pair.md pointers"
+for sec in '### No-verdict rule' '### §2 plan' '### §3.3 verification' '### §3.6 drift check' '### §5 final panel' '### `pair/ledger.md`'; do
   grep -qF "$sec" "$REPO/.claude/skills/task/pair.md" && ok "pair.md carries $sec" || no "pair.md missing $sec"
 done
 sz=$(wc -c < "$REPO/.claude/skills/wrap/SKILL.md")
@@ -1514,7 +1514,7 @@ grep -q 'seq 001  verifier M1  -> completed' "$FK/out" && ok "status summarises 
 grep -q 'seq 008  verifier M1  -> blocked' "$FK/out" && ok "status summarises seq 008 as blocked" || no "status lost the blocked row"
 
 # --- packet: the judge's inputs are generated, not remembered (phase 2) -----
-cp "$REPO/.claude/agents/verifier.md" "$REPO/.claude/agents/final-verifier.md" "$PD/.claude/agents/" 2>/dev/null || { mkdir -p "$PD/.claude/agents"; cp "$REPO/.claude/agents/verifier.md" "$REPO/.claude/agents/final-verifier.md" "$PD/.claude/agents/"; }
+mkdir -p "$PD/.claude/agents"; cp "$REPO/.claude/agents/verifier.md" "$REPO/.claude/agents/final-verifier.md" "$REPO/.claude/agents/planner.md" "$REPO/.claude/agents/plan-critic.md" "$PD/.claude/agents/"
 printf '# Plan: p\n<!-- profile: pair-codex ; size: M -->\n\n## M1: x [done]\n- verify: `true`\n- risk: low\n\n## M2: y [in_progress]\n- verify: `bash t.sh`\n- risk: med\n- demo: run y\n<!-- 2026-09-15: forward constraint for M2 -->\n\n## M3: z [pending]\n- verify: `false`\n- risk: high\n' > "$PD/.ai_context/tasks/pdemo/plan.md"
 printf '# Spec: p\nGoal: g\n\n## Acceptance criteria\n- [ ] AC1: `bash t.sh` exits 0\n- [x] AC2: `test -f x`\n\n## Assumptions\n- [ASSUMED: y]\n' > "$PD/.ai_context/tasks/pdemo/spec.md"
 ( cd "$PD" && git add -A && git commit -qm "plan for packets" )
@@ -1551,10 +1551,42 @@ rc=$(tp -- packet verifier M2 --mode drift); ck 2 "$rc" "packet: drift without -
 rc=$(tp -- packet final-verifier - --since "$PH"); ck 2 "$rc" "packet: final-verifier without a lens refused"
 rc=$(tp -- packet final-verifier M2 --lens correctness --since "$PH"); ck 2 "$rc" "packet: final-verifier with a milestone refused"
 rc=$(tp -- packet verifier M2 --changed a --lens correctness); ck 2 "$rc" "packet: --lens on verifier refused"
-rc=$(tp -- packet planner -); ck 2 "$rc" "packet: unwired role refused"
+rc=$(tp -- packet reframer -); ck 2 "$rc" "packet: unwired role refused"
 grep -q 'not wired' "$FK/err" && ok "packet: unwired role names the reason" || no "packet unwired-role message: $(cat "$FK/err")"
 n_before=$(find "$PKD" -maxdepth 1 -name '*.md' | wc -l)
 rc=$(tp -- packet verifier M2); [ "$(find "$PKD" -maxdepth 1 -name '*.md' | wc -l)" -eq "$n_before" ] && ok "packet: a refused packet leaves no file behind" || no "refused packet wrote a file"
+
+# --- packet: plan loop roles (phase 3) ---------------------------------------
+rc=$(tp -- packet planner - --lens risk-first --budget "<=15 tool calls"); ck 0 "$rc" "packet: planner candidate generates"
+pk="$(cat "$FK/out")"
+spec_d="$(sha256sum "$PD/.ai_context/tasks/pdemo/spec.md" | awk '{print $1}')"
+grep -q "^base: spec:$spec_d$" "$PD/$pk" && ok "packet: planner binds to the spec digest, not a commit" || no "planner base wrong: $(grep '^base:' "$PD/$pk")"
+grep -q '^lens: risk-first$' "$PD/$pk" && grep -q 'milestone budget: <=15 tool calls' "$PD/$pk" && ok "packet: planner carries lens + budget" || no "planner lens/budget missing"
+grep -q '^    ## M1: <milestone title> \[pending\]$' "$PD/$pk" && grep -q 'profile: pair-codex ; size: S | M | L' "$PD/$pk" && ok "packet: planner inlines the gate-parseable plan.md format" || no "planner format block missing"
+rc=$(tp FAKE_HERDR_PROMPT=ok -- send "$pk"); ck 0 "$rc" "packet: planner packet round-trips (spec digest echoed as base)"
+printf '# Plan: cand\n<!-- profile: pair-codex ; size: M -->\n\n## M1: a [pending]\n- verify: `true`\n- risk: low\n' > "$FK/cand.md"
+cand_d="plan:$(sha256sum "$FK/cand.md" | awk '{print $1}')"
+rc=$(tp -- digest "$FK/cand.md"); ck 0 "$rc" "digest: prints the candidate digest"
+[ "$(cat "$FK/out")" = "$cand_d" ] && ok "digest: plan:<sha256> of the frozen file" || no "digest output wrong: $(cat "$FK/out")"
+rc=$(tp -- packet plan-critic - --candidate "$FK/cand.md" --round 1); ck 0 "$rc" "packet: plan-critic round 1 generates"
+pk="$(cat "$FK/out")"
+[ "$pk" = ".ai_context/tasks/pdemo/pair/023-plan-critic-r1.md" ] && ok "packet: round is in the file name" || no "plan-critic file name wrong: $pk"
+grep -q "^base: $cand_d$" "$PD/$pk" && grep -q '^round: 1$' "$PD/$pk" && ok "packet: critic pass is bound to the candidate digest" || no "plan-critic base/round wrong"
+grep -q '^    ## M1: a \[pending\]$' "$PD/$pk" && grep -q 'do not$' "$PD/$pk" && ok "packet: the candidate is inlined frozen (not read from plan.md)" || no "candidate not inlined"
+! grep -q 'Ledger so far' "$PD/$pk" && ok "packet: round 1 has no ledger section" || no "round 1 carried a ledger"
+grep -q 'rejected may be re-raised ONLY with new' "$PD/$pk" && grep -q 'verdict pass means: no blocker and no major' "$PD/$pk" && ok "packet: anti-ping-pong rules are in the critic contract" || no "critic rules missing"
+printf '| stage | ref | source | severity | claim | resolution |\n|---|---|---|---|---|---|\n| final | x | claude | minor | y | rejected: z |\n| plan | r1/1 | codex | major | M1 verify true cannot fail | accepted: verify is bash t.sh |\n' > "$PKD/ledger.md"
+rc=$(tp -- packet plan-critic - --candidate "$FK/cand.md" --round 2); ck 0 "$rc" "packet: plan-critic round 2 generates"
+pk="$(cat "$FK/out")"
+grep -q '^    | plan | r1/1 | codex | major |' "$PD/$pk" && ! grep -q '| final | x |' "$PD/$pk" && ok "packet: round 2 carries the plan-stage ledger rows only" || no "ledger inclusion wrong"
+rc=$(tp -- packet plan-critic - --candidate "$FK/cand.md" --round 11); ck 6 "$rc" "packet: round 11 refused — the 10-round cap is mechanical"
+grep -q 'round cap 10' "$FK/err" && ok "packet: cap message hands the ledger to the human" || no "cap message wrong: $(cat "$FK/err")"
+rc=$(tp -- packet plan-critic - --candidate "$FK/cand.md"); ck 2 "$rc" "packet: plan-critic without --round refused"
+rc=$(tp -- packet plan-critic - --round 1); ck 2 "$rc" "packet: plan-critic without --candidate refused"
+rc=$(tp -- packet plan-critic - --candidate "$FK/nope.md" --round 1); ck 2 "$rc" "packet: missing candidate file refused"
+rc=$(tp -- packet planner -); ck 2 "$rc" "packet: planner without --lens refused"
+rc=$(tp -- packet planner M2 --lens x); ck 2 "$rc" "packet: planner with a milestone refused"
+rm -f "$PKD/ledger.md"
 
 # --- reset: /new between final-panel lenses ----------------------------------
 rc=$(tp -- reset); ck 0 "$rc" "reset: sends /new to the live judge"
