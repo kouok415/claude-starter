@@ -111,9 +111,9 @@ append).
    plan yourself (S). Planners spot-check at most ~5 load-bearing claims;
    the survey already happened.
 2. Spawn `plan-critic` over the candidate(s). It attacks; it never fixes.
-   (`pair-*`: a Codex planner joins round 0 and a Codex critic joins every
-   round; iterate until BOTH critics pass on the same frozen digest, cap
-   10 rounds — `pair.md` §2.)
+   (`pair-*`: a Codex planner joins round 0; round 1 runs this critic and
+   a Codex critic on the same frozen digest; from round 2 only the Codex
+   critic, until it passes a frozen digest, cap 10 rounds — `pair.md` §2.)
    It also spot-checks brief.md's load-bearing claims, and flags any
    `risk: low` milestone with a weak verify command (low risk skips model
    verification — the gate is its only net, so the gate must be strong).

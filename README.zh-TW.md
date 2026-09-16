@@ -215,9 +215,11 @@ packet（milestone 段落、驗收條件、lens 框架、result 契約），檢�
 不靠記憶。已接線（`pair.md` §Stage wiring）：`risk: med` 由 judge 取代 Claude
 verifier、`risk: high` 兩邊都要過、drift check 交給 judge、final panel 兩邊各跑
 三個 lens —— 聯集、一輪對抗、逐條裁決記在 `pair/ledger.md`。plan 變成收斂
-迴圈：round 0 加一個 Codex planner 候選，每一輪加一個 Codex critic，兩邊 critic
-攻擊同一個凍結 digest，兩邊都過 plan 才前進 —— 最多十輪，之後帳本上的未解
-項交給人。intake 時 Codex spec critique 先攻擊驗收條件的可執行性、把「什麼
+迴圈：round 0 加一個 Codex planner 候選，round 1 由 Claude critic 和 Codex
+critic 攻擊同一個凍結 digest，round 2 起只剩 Codex critic，它在某個凍結
+digest 上過了 plan 才前進 —— 最多十輪，之後帳本上的未解項交給人。每個
+packet 都在 judge 的新 thread 跑（`send` 先送 `/new`），檢查者不會把自己前幾
+輪的判斷帶進 verdict。intake 時 Codex spec critique 先攻擊驗收條件的可執行性、把「什麼
 情況下你會 reject」問具體，brief audit 在 planner 讀之前用命令核對 scout 的
 關鍵主張。協定裡每個檢查席位現在都有跨模型的坐者；生產席位（scout、
 executor、reframer）仍是 Claude 的。

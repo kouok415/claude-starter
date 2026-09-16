@@ -19,11 +19,13 @@
 #   digest <file>           `plan:<sha256>` of a frozen plan candidate — the
 #                           version a critic pass is bound to
 #   send <packet> [--timeout MS]
-#                           submit one packet, wait, collect, log
+#                           `/new` the judge, submit one packet, wait,
+#                           collect, log — every packet runs in a fresh
+#                           thread (ADR-030)
 #   wait <seq>  [--timeout MS]
 #                           keep waiting for an in-flight run (Bash tool caps
 #                           a single call; chain these)
-#   reset                   `/new` — fresh judge context (final-panel lenses)
+#   reset                   `/new` by hand — send does it before every packet
 #   status                  runlog summary
 #   fingerprint             print the tree fingerprint (test seam)
 #
@@ -347,6 +349,9 @@ send() {
     blocked) clear_modals; RC=4 die "judge is blocked — inspect the pane" ;;
     *) RC=5 die "judge is '$st' — a run is in flight; use wait" ;;
   esac
+  # Every packet runs in a fresh thread (ADR-030): the judge's memory of
+  # earlier stages is anchoring, not evidence — packets carry what it needs.
+  fresh_thread "$seq"
   digest="$(hash_stdin < "$packet" | awk '{print $1}')"
   fp_before="$(fingerprint || echo nogit)"
   abs_packet="$ROOT/$packet"; abs_result="$ROOT/$result"
@@ -653,20 +658,26 @@ packet() {
 }
 
 # --- reset: fresh judge context (a slash command, no model turn) -------------
+# `/new` to the judge and wait for idle. $1 = seq to attribute the runlog
+# row to (`-` for a hand reset). The TUI redraw after /new can read as
+# `working` for a moment; poll a few seconds before calling it stuck.
+fresh_thread() {
+  local seq="$1" st="" _i
+  clear_modals
+  herdr agent prompt "$NAME" "/new" >/dev/null 2>&1 || refuse "sending /new failed"
+  for _i in 1 2 3 4 5; do
+    st="$(judge_status)"
+    case "$st" in idle|done) break ;; esac
+    sleep 2
+  done
+  case "$st" in idle|done) ;; *) dump_screen "reset-$(date -u +%Y%m%dT%H%M%SZ).screen.txt"; RC=4 die "judge is '$st' after /new — inspect the pane" ;; esac
+  log_row "$seq" reset - - - - "/new"
+}
+
 reset() {
   resolve_task; require_herdr
   [ -n "$(judge_status)" ] || refuse "no judge '$NAME' is live — run ensure"
-  clear_modals
-  herdr agent prompt "$NAME" "/new" >/dev/null 2>&1 || refuse "sending /new failed"
-  # The TUI redraw after /new can read as `working` for a moment; give it
-  # a few seconds to settle before calling it stuck.
-  local st="" _i
-  for _i in 1 2 3 4 5; do
-    sleep 2; st="$(judge_status)"
-    case "$st" in idle|done) break ;; esac
-  done
-  case "$st" in idle|done) ;; *) dump_screen "reset-$(date -u +%Y%m%dT%H%M%SZ).screen.txt"; RC=4 die "judge is '$st' after /new — inspect the pane" ;; esac
-  log_row - reset - - - - "/new"
+  fresh_thread -
   echo "task-pair: judge '$NAME' context reset"
 }
 
@@ -675,10 +686,12 @@ status() {
   [ -f "$JUDGE_FILE" ] && sed 's/^/judge: /' "$JUDGE_FILE"
   [ -f "$RUNLOG" ] || { echo "runlog: empty"; return 0; }
   awk -F"$TAB" '
-    $3 == "start" { role[$2] = $4; ms[$2] = $5; last[$2] = "running"; n[$2] = 1 }
+    $3 == "start" { role[$2] = $4; ms[$2] = $5; last[$2] = "running"; n[$2] = 1
+                    if (prev != "reset") stale[$2] = 1 }
     $3 ~ /^end:/ { last[$2] = substr($3, 5) " " $11 }
     $3 == "waiting" { last[$2] = "waiting" }
-    END { for (s in n) printf "seq %s  %s %s  -> %s\n", s, role[s], ms[s], last[s] }' "$RUNLOG" | sort
+    { prev = $3 }
+    END { for (s in n) printf "seq %s  %s %s  -> %s%s\n", s, role[s], ms[s], last[s], (s in stale) ? "  [no fresh thread before start]" : "" }' "$RUNLOG" | sort
 }
 
 cmd="${1:-}"

@@ -1,7 +1,8 @@
 # /task pair-codex — the Codex judge over herdr
 
 Loaded only when the active profile is `pair-*`. Nothing here is injected
-by default. Design and evidence: workshop ADR-028 and
+by default. Design and evidence: workshop ADR-028 (refined by ADR-029 plan
+loop, ADR-030 fresh thread per packet) and
 `tools/reviews/2026-09-15-task-pair-mode.md`.
 
 ## What the profile means
@@ -31,10 +32,10 @@ Requirements, all checked mechanically by `scripts/task-pair.sh`:
 | `ensure` | find the judge (`judge-<slug>`) or split a pane and start it: `codex -s workspace-write -c features.hooks=false -c 'project_doc_fallback_filenames=["CLAUDE.md"]'` — no model/effort args | 0 · 3 refused · 4 human needed |
 | `packet <role> <M<n>\|-> [--mode light\|full\|drift] [--lens L] [--changed a,b] [--since REF] [--rebuttal FILE] [--budget TEXT] [--candidate FILE] [--round N]` | write the next packet: header, task paths, the inlined milestone section / acceptance criteria / frozen plan candidate, mode or lens framing, ledger rows, result contract; prints its path | 0 · 2 refused (unknown milestone, missing inputs, unwired role) · 6 plan round cap |
 | `digest <file>` | `plan:<sha256>` of a frozen plan candidate — the version a critic pass is bound to | 0 |
-| `send <packet>` | freeze + digest the packet, fingerprint the tree, prompt the judge, wait (≤540 s per call), collect, log | 0 completed · 4 blocked/dialog · 5 in flight or busy · 6 no usable result |
+| `send <packet>` | freeze + digest the packet, fingerprint the tree, `/new` the judge (every packet runs in a fresh thread), prompt, wait (≤540 s per call), collect, log | 0 completed · 4 blocked/dialog · 5 in flight or busy · 6 no usable result |
 | `wait <seq>` | keep waiting for an in-flight run (chain after exit 5) | as `send` |
-| `reset` | `/new` to the judge — fresh context between final-panel lenses; logged | 0 · 3 no judge · 4 not idle after |
-| `status` | judge record + one line per seq from the runlog | 0 |
+| `reset` | `/new` to the judge by hand — `send` already does it before every packet; logged | 0 · 3 no judge · 4 not idle after |
+| `status` | judge record + one line per seq from the runlog; flags any `start` row that no `reset` row precedes | 0 |
 
 The script decides only `run_state`; the verdict is whatever the judge
 wrote in the result file. It never prints PASS/FAIL. A run that ends
@@ -87,7 +88,10 @@ packet uses the plan digest instead.
   (format under §Stage wiring). Only you write it.
 - `runlog` — script-written, tab-separated:
   `ts seq event role milestone base digest model tokens rollout detail`;
-  events `start`, `waiting`, `end:<state>`, `reset`. `model` and `tokens`
+  events `reset`, `start`, `waiting`, `end:<state>` — `send` writes a
+  `reset` row (same seq) right before its `start` row; a `start` row with
+  no `reset` before it means the judge was prompted around the script.
+  `model` and `tokens`
   (cumulative `in/out`) are the status line as observed at that moment —
   Codex can switch its own model under rate pressure, so read the
   scoreboard per model, never per profile alone; a run's cost is the
@@ -105,9 +109,11 @@ packet uses the plan digest instead.
 
 ## Operator notes
 
-- The judge is one fresh Codex session per task; its context persists
-  across milestones. Before each final-panel lens, `herdr agent prompt
-  judge-<slug> "/new"` resets it (verified offline).
+- The judge is one Codex session per task, but every packet runs in a
+  fresh thread: `send` sends `/new` and waits for idle before prompting
+  (ADR-030). What it remembers of earlier stages is anchoring, not
+  evidence — packets carry paths to everything it needs. `reset` remains
+  for a hand `/new`.
 - herdr reports `idle` while Codex modal dialogs are open. The script scans
   the screen before and after every prompt: the rate-limit "switch model"
   nudge is dismissed with `esc` (keeps the model); a directory-trust or
@@ -173,11 +179,17 @@ pass on that digest only.
 
     round 0   Claude planner(s) per the size table  +  Codex planner, one lens
               → you synthesize v1 (plan.md)
-    round r   freeze v_r: copy plan.md to pair/plan-v<r>.md; D_r = digest
-              spawn Claude plan-critic (background) on the frozen copy
-              packet plan-critic - --candidate pair/plan-v<r>.md --round r → send
+    round 1   freeze v1: copy plan.md to pair/plan-v1.md; D_1 = digest
+              spawn Claude plan-critic (background) on the frozen copy — the
+              baseline's one critic pass, on the candidate where Claude's
+              own blind spots are densest
+              packet plan-critic - --candidate pair/plan-v1.md --round 1 → send
               both results: no blocker, no major ⇒ CONVERGED → kickoff brief
-              else rule every finding (below) → v_{r+1} → next round
+              else rule every finding (below) → v2 → round 2
+    round r≥2 freeze v_r; Codex critic only:
+              packet plan-critic - --candidate pair/plan-v<r>.md --round r → send
+              no blocker, no major ⇒ CONVERGED
+              else rule every finding → v_{r+1} → next round
     cap 10    `packet --round 11` is refused (exit 6): stop, put the open
               ledger rows in the kickoff brief, the human decides
 
@@ -186,8 +198,13 @@ pass on that digest only.
    the header, in the gate-parseable plan.md format. Give Codex a lens the
    Claude planners do not have (M: Claude 1 + Codex 1; L: Claude 3 +
    Codex 1). Synthesize as today.
-2. **Every round.** Both critics attack the SAME frozen file; neither reads
-   plan.md. Claude's findings go into the ledger too (`source: claude`).
+2. **Critics.** Round 1 runs both critics on the SAME frozen file; from
+   round 2 the Codex critic is the only seat — Claude's critic shares
+   weights with the planner and the synthesizer, so its value is one fresh
+   look at v1, not a vote every round (ADR-029). Neither critic reads
+   plan.md. Claude's round-1 findings go into the ledger too (`source:
+   claude`). A Codex no-verdict ×2 in any round hands that round's seat
+   to a Claude `plan-critic` (§No-verdict rule).
 3. **Ruling, per finding, into `pair/ledger.md`** (`stage: plan`, `ref:
    r<round>/<id>`): `accepted: <the concrete plan change>` — an accept
    without a plan edit is not a ruling; `rejected: <reason with evidence>`;
@@ -239,20 +256,19 @@ whatever the size table's last column says (user ruling, ADR-028).
    returned verdict + findings verbatim as
    `pair/claude-<lens>.result.md` (same header as a judge result) — the
    rebuttal round needs files, not transcripts.
-2. Codex side, per lens in turn: `reset` → `packet final-verifier -
-   --lens <lens> --since <task base commit>` → `send` (`--since` is where
-   the task branch started, e.g. `git merge-base main task/<slug>`; the
-   judge diffs `<since>..HEAD`). `reset` is what keeps the three lenses
-   independent inside one Codex session.
+2. Codex side, per lens in turn: `packet final-verifier - --lens <lens>
+   --since <task base commit>` → `send` (`--since` is where the task
+   branch started, e.g. `git merge-base main task/<slug>`; the judge
+   diffs `<since>..HEAD`). `send`'s own `/new` is what keeps the three
+   lenses independent inside one Codex session.
 3. Union all six results. Every finding is a candidate; nothing is
    averaged away.
 4. One rebuttal round, only for lenses where exactly one side failed:
    - Codex failed, Claude passed → spawn a fresh `final-verifier` for that
      lens with the Codex result path and: "for each finding, reproduce it
      (command + output) or refute it (command + output)".
-   - Claude failed, Codex passed → `reset` → `packet final-verifier -
-     --lens <lens> --since <base> --rebuttal pair/claude-<lens>.result.md`
-     → `send`.
+   - Claude failed, Codex passed → `packet final-verifier - --lens <lens>
+     --since <base> --rebuttal pair/claude-<lens>.result.md` → `send`.
 5. Resolution, per finding, into `pair/ledger.md`:
    - reproduced by either side ⇒ `confirmed` ⇒ FAIL ⇒ repair milestone;
    - refuted with a command ⇒ `rejected: <command + output>`;

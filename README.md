@@ -243,9 +243,12 @@ replaces the Claude verifier at `risk: med`, joins it at `risk: high`,
 takes the drift check, and runs all three final-panel lenses next to
 Claude's three — union, one rebuttal round, per-finding rulings in
 `pair/ledger.md`. Planning becomes a convergence loop: a Codex planner
-candidate joins round 0, a Codex critic joins every round, both critics
-attack the same frozen digest, and the plan advances only when both pass
-— ten rounds at most, then the open ledger goes to the human. At intake,
+candidate joins round 0, round 1 puts the Claude critic and a Codex
+critic on the same frozen digest, and from round 2 the Codex critic
+alone has to pass a frozen digest — ten rounds at most, then the open
+ledger goes to the human. Every packet runs in a fresh judge thread
+(`send` issues `/new` first), so the checker never carries its own
+earlier rounds into a verdict. At intake,
 a Codex spec critique attacks acceptance-criteria executability and asks
 the direction question concretely before any plan exists, and a brief
 audit checks the scout's load-bearing claims against the repo before

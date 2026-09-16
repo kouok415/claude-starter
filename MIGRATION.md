@@ -75,6 +75,17 @@ herdr pane takes the checker seats at every stage; Claude keeps executing.
 Four phases: the transport, the judge's wiring into verification, drift
 and the final panel, the plan convergence loop, and the intake critique.
 
+- **Plan loop shape + fresh thread per packet (ADR-029 / ADR-030).**
+  Round 1 of the plan loop runs the Claude `plan-critic` and the Codex
+  critic on the same frozen digest; from round 2 the Codex critic is the
+  only seat (the Claude critic shares weights with the planner and the
+  synthesizer — one fresh look at v1 is the baseline's critic pass, a
+  vote every round only slows convergence). `send` now sends `/new` to
+  the judge and waits for idle before every packet: the judge's memory of
+  earlier stages is anchoring, not evidence, and packets already carry
+  paths to everything it needs. The runlog gets a `reset` row (same seq)
+  before every `start` row; `status` flags a `start` row that no `reset`
+  row precedes. `reset` stays for a hand `/new`.
 - **Forensics (phase 4b).** Every runlog row now also records the
   judge's cumulative token counters and the path of its own Codex
   transcript (rollout), so a result's self-reported evidence can be
@@ -109,7 +120,8 @@ and the final panel, the plan convergence loop, and the intake critique.
   blocker/major). Round 11 is refused (exit 6): the ten-round cap is
   mechanical, the open ledger goes to the human. `pair.md` §2 is the
   protocol: Codex planner in round 0, both critics on the same frozen
-  digest every round, per-finding rulings (`accepted: <plan change>` /
+  digest in round 1, Codex alone from round 2, per-finding rulings
+  (`accepted: <plan change>` /
   `rejected: <evidence>` / `open`), any plan edit invalidates both
   passes, reframer patches re-enter the loop. Validated live on
   luna/low: a planner candidate and a critic round.

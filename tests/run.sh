@@ -1410,7 +1410,7 @@ tp() {
       FAKE_HERDR_LOG="$FK/herdr.log" FAKE_HERDR_STATE="$FK/state" "${envs[@]}" \
       bash scripts/task-pair.sh "$@" ) >"$FK/out" 2>"$FK/err"; echo $?
 }
-prompts() { grep -c '^agent prompt' "$FK/herdr.log" 2>/dev/null || echo 0; }
+prompts() { grep '^agent prompt' "$FK/herdr.log" 2>/dev/null | grep -vc ' /new$' || echo 0; }   # packet prompts only (/new is a slash command)
 no_verdict_printed() { ! grep -q 'PASS\|FAIL' "$FK/out" "$FK/err"; }
 RL="$PKD/runlog"
 
@@ -1451,6 +1451,13 @@ grep -q 'state=completed (verdict=pass)' "$FK/out" && ok "send: summary carries 
 no_verdict_printed && ok "script prints no PASS/FAIL of its own" || no "script printed a verdict"
 grep -q '	gpt-5.6-terra medium	12/34	' "$RL" && ok "runlog rows record the observed model and token counters" || no "runlog model/tokens columns wrong: $(tail -1 "$RL")"
 [ ! -e "$PKD/001-verifier.screen.txt" ] && ok "completed run leaves no screen dump" || no "screen dump written for a completed run"
+# Fresh thread per packet (ADR-030): send itself sends /new right before the
+# packet prompt, and the runlog shows the reset row before the start row.
+grep '^agent prompt' "$FK/herdr.log" | grep -B1 'Read and execute' | head -1 | grep -q ' /new$' \
+  && ok "send: /new is the prompt right before the packet prompt" || no "send did not open a fresh thread: $(grep '^agent prompt' "$FK/herdr.log" | cut -c1-60 | tr '\n' '|')"
+grep -B1 "	001	start	" "$RL" | head -1 | grep -q "	001	reset	" && ok "runlog: reset row (same seq) precedes the start row" || no "runlog start row not preceded by a reset row: $(cat "$RL")"
+rc=$(tp -- status); ck 0 "$rc" "status runs"
+grep -q 'no fresh thread' "$FK/out" && no "status flags a fresh-thread run as stale" || ok "status: no stale-thread flag on a send-driven run"
 
 # --- send: every way a run can end without a usable result -----------------
 pk=$(mkpkt 002 verifier "$PH")
@@ -1619,10 +1626,18 @@ rc=$(tp -- packet brief-audit -); ck 2 "$rc" "packet: brief-audit without a brie
 rc=$(tp -- packet spec-critic - --lens x); ck 2 "$rc" "packet: spec-critic takes no options"
 rc=$(tp -- packet spec-critic M1); ck 2 "$rc" "packet: spec-critic with a milestone refused"
 
-# --- reset: /new between final-panel lenses ----------------------------------
+# --- status invariant: every start row follows a reset row ------------------
+# A start row that no reset row precedes means a judge prompted around the
+# script (or a runlog from before ADR-030); status flags it, never hides it.
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' 2026-01-01T00:00:00Z 099 start verifier M1 "$PH" d m t r "timeout=1ms" >> "$RL"
+rc=$(tp -- status); ck 0 "$rc" "status: tolerates a start row without a reset row"
+grep -q 'seq 099 .*no fresh thread before start' "$FK/out" && ok "status flags a start row that no reset row precedes" || no "status missed the stale-thread run: $(grep 'seq 099' "$FK/out")"
+[ "$(grep -c 'no fresh thread' "$FK/out")" -eq 1 ] && ok "status: send-driven runs carry no stale-thread flag" || no "stale-thread flag on send-driven runs: $(grep 'no fresh thread' "$FK/out")"
+
+# --- reset: /new by hand (send does it itself before every packet) ----------
 rc=$(tp -- reset); ck 0 "$rc" "reset: sends /new to the live judge"
 grep -q '^agent prompt judge-pdemo /new$' "$FK/herdr.log" && ok "reset: /new goes through agent prompt (slash command, no --wait)" || no "reset did not send /new"
-grep -q "	-	reset	" "$RL" && ok "runlog: reset row recorded" || no "runlog reset row missing"
+grep -q "	-	reset	" "$RL" && ok "runlog: hand reset row recorded (seq -)" || no "runlog reset row missing"
 rm -f "$FK/state/agent"
 rc=$(tp -- reset); ck 3 "$rc" "reset: refuses when no judge is live"
 
