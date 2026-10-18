@@ -564,6 +564,7 @@ fi
 lenses="$(sed -n 's/^description:.*lens (\([^)]*\)).*/\1/p' "$REPO/.claude/agents/planner.md" | tr ',' '\n' | tr -d ' .' | grep -v '^$')"
 miss=""; for l in $lenses; do grep -q "^- \*\*$l\*\* — " "$REPO/.claude/skills/task/reference.md" || miss="$miss $l"; done
 { [ -n "$lenses" ] && [ -z "$miss" ]; } && ok "every lens planner.md names is defined in task reference.md ($(echo $lenses | tr '\n' ' '))" || no "planner lenses without a definition:${miss:- none parsed}"
+grep -q '^| 2 | fresh `executor` | .*premise' "$REPO/.claude/skills/task/SKILL.md" && grep -q 'premise it rested on' "$REPO/.claude/skills/task/SKILL.md" && ok "rung 2 carries rung 1's premise; failed rungs log their premise" || no "ladder lost the premise step (rung 2 / lessons line)"
 grep -q 'exit 0 = vacuous' "$REPO/.claude/agents/plan-critic.md" && grep -q '126/127' "$REPO/.claude/agents/plan-critic.md" && ok "plan-critic observes fails-today (runs risk:low verifies)" || no "plan-critic lost the observed-red check"
 grep -qF 'Read(./**/.env)' "$REPO/.claude/settings.json" && ok "nested .env read-deny present" || no "nested .env deny missing"
 grep -qxF '**/.env' "$REPO/.gitignore" && ok "nested .env gitignored" || no "nested .env gitignore missing"

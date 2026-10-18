@@ -96,8 +96,8 @@ What happens, in order:
    verify is red, `stop-gate.sh` blocks it and feeds the failure back.
    You'll see `GATE FAILED` plus the command output. Done stops being
    prose.
-5. **Stuck?** — the escalation ladder runs itself: retry differently →
-   divergent parallel attempts → `reframer` rewrites the problem → after
+5. **Stuck?** — the escalation ladder runs itself: retry differently
+   (testing the failed attempt's premise first) → divergent parallel attempts → `reframer` rewrites the problem → after
    three strikes it stops and reports honestly.
 6. **Completion** — a three-lens review panel, then `/wrap` archives a
    scoreboard (profile, gate failures, highest rung used) to `journal/`

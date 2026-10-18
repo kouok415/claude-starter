@@ -185,13 +185,14 @@ turn; a red gate cannot be narrated over — don't try, fix it.
 | Rung | Who | Input |
 |---|---|---|
 | 1 | `executor` | milestone + brief + spec + lessons |
-| 2 | fresh `executor` | + rung-1 failure evidence + "use a materially different approach" |
+| 2 | fresh `executor` | + rung-1 failure evidence + rung 1's premise in one line + "test that premise first, or use an approach that does not rest on it" — a new approach on the same premise is the same approach |
 | 3 | 3 × `executor` in parallel **worktrees** — read `reference.md` §Rung-3 protocol BEFORE starting; `verifier` picks the winner |
 | 4 | `reframer` | all failure evidence; it re-cuts the milestone / patches the spec — back to rung 1 on the revised problem |
 | exhausted | **stop** | append `lessons.md`, write a `journal/` entry, report honestly (three-strikes rule) |
 
-After every failed rung: append what-was-tried / why-it-failed to
-`lessons.md` — the next fresh context must not re-learn it. Changing a
+After every failed rung: append what-was-tried / why-it-failed / the
+premise it rested on to `lessons.md` — the next fresh context must not
+re-learn it, and rungs 3–4 see which premises already failed. Changing a
 milestone's `- verify:` after it went red needs its own lessons.md line
 (why the old command was wrong, what the new one no longer checks): the
 gatelog keeps both commands, and the final test-integrity lens and

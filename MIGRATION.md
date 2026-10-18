@@ -5,7 +5,7 @@ English README are the authority when translations drift):
 
 - **[Unreleased — templates, /setup, TUTORIAL](#unreleased--templates-setup-tutorial)** — the research template asks for a "What we don't know" section and empty-search records; `/setup` drafts a Verify that proves use, not liveness; TUTORIAL §7 gains a message → meaning → action table.
 - **[Unreleased — pair ledger rulings](#unreleased--pair-ledger-rulings)** — `pair/ledger.md` gains a `seats` column and a fixed `source` enum; minors can be ruled `noted`; high-stakes findings can only be fixed or left `open`.
-- **[Unreleased — sharper checker prompts](#unreleased--sharper-checker-prompts)** — the plan-critic runs `risk: low` verifies before work starts; verifier, final panel and executor get concrete checklists for vacuous tests, symptom masking, unseen readers and hand-synced lists; planner lenses are defined.
+- **[Unreleased — sharper checker prompts](#unreleased--sharper-checker-prompts)** — the plan-critic runs `risk: low` verifies before work starts; rung 2 starts from rung 1's premise; verifier, final panel and executor get concrete checklists for vacuous tests, symptom masking, unseen readers and hand-synced lists; planner lenses are defined.
 - **[Unreleased — checker audits](#unreleased--checker-audits)** — `harness-report.sh` flags verify commands changed after a FAIL and `risk: med/high` milestones that finished without their verifier; verifier spawns get their own spawnlog class; README box trees are tested against the shipped files.
 - **[Unreleased — /number-check](#unreleased--number-check)** — a stock skill that vets a measured number (backtest, benchmark, metric) before it is reported; the analysis DoD points at it, sync suggests the same line to existing projects.
 - **[Unreleased — pair-codex transport](#unreleased--pair-codex-transport)** — `/task --profile=pair-codex`: a Codex judge over herdr takes the checker seats; `scripts/task-pair.sh` + `pair.md` + fake-herdr tests (transport only).
@@ -158,7 +158,10 @@ cursor/plugins pstack, 2026-10-18).
 - **executor** — reports a missing cheap signal when the key fact took
   digging.
 - **task skill** — planner lenses are defined (`reference.md` §Planner
-  lenses; a new test keeps them in step with `planner.md`); synthesis
+  lenses; a new test keeps them in step with `planner.md`); rung 2 of the
+  escalation ladder carries rung 1's premise in one line and must test it
+  or not rest on it, and every failed rung logs its premise in
+  `lessons.md` (an experiment — watch `highest_rung`); synthesis
   drops hypotheticals with no real call site and "I would do it
   differently"; the completion report gives each `[ASSUMED]` as call /
   why / risk if wrong / what changes if vetoed.

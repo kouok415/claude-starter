@@ -201,8 +201,9 @@ It converts "one heroic context" into a gated pipeline:
    the turn tries to end; a red gate means the turn *cannot* end (an
    unchanged tree hits the PASS-cache instead of re-running). The
    Definition of done stops being prose.
-6. **Escalation** — retry differently → 3 divergent worktree attempts →
-   `reframer` rewrites the problem → stop and report (three strikes).
+6. **Escalation** — retry differently, starting from rung 1's premise
+   (test it, or drop it) → 3 divergent worktree attempts → `reframer`
+   rewrites the problem → stop and report (three strikes).
 
 State lives in `.ai_context/tasks/<slug>/` (`spec.md`, `plan.md`,
 `brief.md`, `lessons.md`) and is re-injected after `/clear` and compaction,

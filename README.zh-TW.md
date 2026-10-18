@@ -184,8 +184,9 @@ repo 是自足的:`global/CLAUDE.md` 就在裡面。之後重跑會顯示 diff�
 5. **Stop gate** —— 回合想結束時 `stop-gate.sh` 重跑當前里程碑的
    verify;紅燈就結束不了(樹沒變動則命中 PASS-cache,不重跑)。
    Definition of done 從散文變成物理法則。
-6. **升級梯** —— 換方法重試 → 3 個分歧策略平行(worktree)→
-   `reframer` 改寫問題本身 → 停下回報(三振規則)。
+6. **升級梯** —— 換方法重試,先處理第 1 階的前提(直接測它,或改用不依賴它的
+   做法)→ 3 個分歧策略平行(worktree)→ `reframer` 改寫問題本身 → 停下回報
+   (三振規則)。
 
 狀態放在 `.ai_context/tasks/<slug>/`(`spec.md`、`plan.md`、`brief.md`、
 `lessons.md`),`/clear` 和壓縮後會自動重新注入,run 不怕 context
