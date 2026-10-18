@@ -54,3 +54,6 @@ Return exactly (deltas only — never restate spec/brief/plan content):
   (≤3 one-liners, `[ASSUMED: ...]` form; "none" if none)
 - verify command output — verbatim tail
 - anything discovered that affects later milestones
+- a missing signal — only if the key fact took digging: one cheap,
+  always-on check or log line that would have shown it at a glance
+  (a suggestion; don't build it)

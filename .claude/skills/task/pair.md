@@ -197,7 +197,8 @@ pass on that digest only.
    milestone budget>"` → `send`. The candidate is the result body below
    the header, in the gate-parseable plan.md format. Give Codex a lens the
    Claude planners do not have (M: Claude 1 + Codex 1; L: Claude 3 +
-   Codex 1). Synthesize as today.
+   Codex 1 — `reference.md` §Planner lenses; L's fourth lens is defined in
+   one line in `--lens`). Synthesize as today.
 2. **Critics.** Round 1 runs both critics on the SAME frozen file; from
    round 2 the Codex critic is the only seat — Claude's critic shares
    weights with the planner and the synthesizer, so its value is one fresh

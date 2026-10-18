@@ -1,8 +1,9 @@
 # Migration guide
 
-Seventeen migrations live here (docs are bilingual elsewhere; this file and the
+Eighteen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[Unreleased — sharper checker prompts](#unreleased--sharper-checker-prompts)** — the plan-critic runs `risk: low` verifies before work starts; verifier, final panel and executor get concrete checklists for vacuous tests, symptom masking, unseen readers and hand-synced lists; planner lenses are defined.
 - **[Unreleased — checker audits](#unreleased--checker-audits)** — `harness-report.sh` flags verify commands changed after a FAIL and `risk: med/high` milestones that finished without their verifier; verifier spawns get their own spawnlog class; README box trees are tested against the shipped files.
 - **[Unreleased — /number-check](#unreleased--number-check)** — a stock skill that vets a measured number (backtest, benchmark, metric) before it is reported; the analysis DoD points at it, sync suggests the same line to existing projects.
 - **[Unreleased — pair-codex transport](#unreleased--pair-codex-transport)** — `/task --profile=pair-codex`: a Codex judge over herdr takes the checker seats; `scripts/task-pair.sh` + `pair.md` + fake-herdr tests (transport only).
@@ -67,6 +68,49 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## Unreleased — sharper checker prompts
+
+Stock agent and task-skill text only — no hook, setting or schema changes.
+Each item replaces a judgment the checker used to make by reasoning with
+a concrete question or an observation (sources: workshop review of
+cursor/plugins pstack, 2026-10-18).
+
+- **plan-critic** — runs each `risk: low` verify that clears its
+  gate-safety check on the current tree and lists `M<n>: <command> → exit
+  <code>`: exit 0 is a vacuous gate (blocker), 126/127 a broken command
+  (blocker). A behavior-preserving milestone may be green today only as a
+  pin (behavior tests — type check and lint are not pins) plus a
+  structural predicate that fails today. Gate safety adds three
+  idempotence questions (run twice? after a run that died? does what it
+  leaves read as stale?). The framing allows "no blocker" as a verdict
+  and aims findings at the execution, not the spec's intent. The Codex
+  plan-critic packet carries the same observed-red clause.
+- **verifier** (diff review, light mode included) — new or changed tests
+  get two hypothetical changes (behavior broken → must go red; internals
+  changed → must stay green) and four usual causes of vacuous tests;
+  guards, retries, swallowed errors, clamps and dropped state are checked
+  as possible symptom masking.
+- **final-verifier** — the regression lens names the one fact that makes
+  the diff safe and proves it by running code, looks where grep can't see
+  (formats, schemas, other readers of the same bytes, persisted state), and
+  treats a second way of doing something or a new hand-synced list as a
+  finding; the test-integrity lens applies the two-change test to new
+  tests.
+- **executor** — reports a missing cheap signal when the key fact took
+  digging.
+- **task skill** — planner lenses are defined (`reference.md` §Planner
+  lenses; a new test keeps them in step with `planner.md`); synthesis
+  drops hypotheticals with no real call site and "I would do it
+  differently"; the completion report gives each `[ASSUMED]` as call /
+  why / risk if wrong / what changes if vetoed.
+
+### Migrating
+
+`sync-project.sh --update-stock <project>`. Customized agent files: diff
+against the template and merge by hand — nothing else depends on them.
 
 ---
 

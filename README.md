@@ -189,8 +189,10 @@ It converts "one heroic context" into a gated pipeline:
    facts are inherited, never re-derived.
 3. **Plan** — ceremony scales with recorded task size: **S** drafts inline
    (no spawns), **M** = 1 `planner` + red-team `plan-critic`, **L** = 3
-   planner lenses + critic. Small milestones, each with a `verify:` command
-   and a `risk:` grade.
+   planner lenses + critic (minimal-change / risk-first / redesign-first,
+   defined in `task/reference.md`). Small milestones, each with a `verify:`
+   command and a `risk:` grade; the critic runs every `risk: low` verify on
+   the pre-work tree, so "fails today" is observed, not argued.
 4. **Milestone loop** — S executes in the main context; M/L spawn a fresh
    `executor` per milestone. Verification depth follows risk: `low` = the
    mechanical gate only, `med` = light diff review, `high` = full

@@ -174,7 +174,10 @@ repo 是自足的:`global/CLAUDE.md` 就在裡面。之後重跑會顯示 diff�
    導航。context 為了判斷獨立性保持全新;事實用繼承的,不重新推導。
 3. **計畫** —— 儀式隨記錄的規模縮放:**S** 直接起草(零 spawn)、
    **M** = 1 個 `planner` + 紅隊 `plan-critic`、**L** = 3 個視角
-   planner + critic。小里程碑,每個帶 `verify:` 指令和 `risk:` 等級。
+   planner + critic(minimal-change / risk-first / redesign-first,定義在
+   `task/reference.md`)。小里程碑,每個帶 `verify:` 指令和 `risk:` 等級;
+   critic 會在動工前的樹上實際跑每個 `risk: low` 的 verify ——「今天會失敗」
+   是觀測出來的,不是推論出來的。
 4. **里程碑迴圈** —— S 在主 context 執行;M/L 每個里程碑用全新
    `executor`。驗證深度看風險:`low` 只靠機械閘門、`med` 輕量 diff
    審查、`high` 完整對抗式 `verifier`。過關即 commit。

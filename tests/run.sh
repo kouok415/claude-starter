@@ -558,6 +558,10 @@ if [ -f "$REPO/templates/CLAUDE.md.analysis" ]; then
 else
   skp "analysis DoD → skill check (spawned project — template-repo only)"
 fi
+lenses="$(sed -n 's/^description:.*lens (\([^)]*\)).*/\1/p' "$REPO/.claude/agents/planner.md" | tr ',' '\n' | tr -d ' .' | grep -v '^$')"
+miss=""; for l in $lenses; do grep -q "^- \*\*$l\*\* — " "$REPO/.claude/skills/task/reference.md" || miss="$miss $l"; done
+{ [ -n "$lenses" ] && [ -z "$miss" ]; } && ok "every lens planner.md names is defined in task reference.md ($(echo $lenses | tr '\n' ' '))" || no "planner lenses without a definition:${miss:- none parsed}"
+grep -q 'exit 0 = vacuous' "$REPO/.claude/agents/plan-critic.md" && grep -q '126/127' "$REPO/.claude/agents/plan-critic.md" && ok "plan-critic observes fails-today (runs risk:low verifies)" || no "plan-critic lost the observed-red check"
 grep -qF 'Read(./**/.env)' "$REPO/.claude/settings.json" && ok "nested .env read-deny present" || no "nested .env deny missing"
 grep -qxF '**/.env' "$REPO/.gitignore" && ok "nested .env gitignored" || no "nested .env gitignore missing"
 grep -q 'gate-cache' "$REPO/.gitignore" && ok "gate-cache gitignored (fingerprint-safe)" || no "gate-cache ignore missing"
@@ -1688,6 +1692,7 @@ grep -q "^base: $cand_d$" "$PD/$pk" && grep -q '^round: 1$' "$PD/$pk" && ok "pac
 grep -q '^    ## M1: a \[pending\]$' "$PD/$pk" && grep -q 'do not$' "$PD/$pk" && ok "packet: the candidate is inlined frozen (not read from plan.md)" || no "candidate not inlined"
 ! grep -q 'Ledger so far' "$PD/$pk" && ok "packet: round 1 has no ledger section" || no "round 1 carried a ledger"
 grep -q 'rejected may be re-raised ONLY with new' "$PD/$pk" && grep -q 'verdict pass means: no blocker and no major' "$PD/$pk" && ok "packet: anti-ping-pong rules are in the critic contract" || no "critic rules missing"
+grep -q 'checklist 1 is observed, not reasoned' "$PD/$pk" && ok "packet: the Codex critic runs the risk:low verifies too (observed red)" || no "observed-red clause missing from the critic packet"
 printf '| stage | ref | source | severity | claim | resolution |\n|---|---|---|---|---|---|\n| final | x | claude | minor | y | rejected: z |\n| plan | r1/1 | codex | major | M1 verify true cannot fail | accepted: verify is bash t.sh |\n' > "$PKD/ledger.md"
 rc=$(tp -- packet plan-critic - --candidate "$FK/cand.md" --round 2); ck 0 "$rc" "packet: plan-critic round 2 generates"
 pk="$(cat "$FK/out")"

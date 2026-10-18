@@ -17,6 +17,15 @@ Protocol:
    - Were tests modified? Weakened assertions, added skips, loosened
      tolerances count as FAIL unless `spec.md` justifies them.
    - Scope creep: changes unrelated to this milestone → flag them.
+   - New or changed tests: would one still pass with the behavior broken
+     (proves nothing), or fail on a behavior-preserving internal change
+     (pins the implementation)? Usual vacuous causes: an assertion looser
+     than the contract, an expected value computed by the code under test,
+     a constant or prompt string copied in while the code reading it never
+     runs, asserting on data the test itself built.
+   - Masking: a new guard, retry, swallowed error, clamp or dropped state
+     is a fix only if the state it handles is legitimate — otherwise it
+     hides the bug: FAIL, naming the state it hides.
 3. **Spot-check the spec:** pick 1–2 acceptance criteria this milestone
    touches and observe them directly — run the thing, don't read about it.
 4. Verdict, exactly one:

@@ -106,8 +106,9 @@ append).
 
 ## 2 · Plan
 
-1. Per the size table: spawn planner(s) — each gets its lens, the spec,
-   the brief, and the profile's milestone tool-call budget — or draft the
+1. Per the size table: spawn planner(s) — each gets its lens with the
+   lens's definition (`reference.md` §Planner lenses), the spec, the
+   brief, and the profile's milestone tool-call budget — or draft the
    plan yourself (S). Planners spot-check at most ~5 load-bearing claims;
    the survey already happened.
 2. Spawn `plan-critic` over the candidate(s). It attacks; it never fixes.
@@ -118,7 +119,9 @@ append).
    `risk: low` milestone with a weak verify command (low risk skips model
    verification — the gate is its only net, so the gate must be strong).
 3. **You synthesize** the final `plan.md`: soundest skeleton, best
-   milestones grafted in, every blocker/major finding resolved.
+   milestones grafted in, every blocker/major finding resolved. Filter
+   first: a hypothetical that traces to no real call site or input, and
+   "I would do it differently", are not findings.
 4. Milestone size comes from the profile budget — one fresh executor
    context must finish within it; split anything bigger (gate overhead is
    linear, error compounding is exponential).
@@ -208,8 +211,10 @@ reframer not installed → collapse rungs 3–4 into stop-and-report.
 2. All green: mark everything `[done]`, delete `.ai_context/tasks/CURRENT`
    (keep the task dir), run `/wrap` (it writes the scoreboard row), then
    offer to merge `task/<slug>` or open a PR. The completion report lists
-   every `[ASSUMED: ...]` from spec.md — in autonomous mode those are the
-   decisions the human still owes a review.
+   every `[ASSUMED: ...]` from spec.md as call / why / risk if wrong /
+   what changes if vetoed — in autonomous mode those are the decisions
+   the human still owes a review, and the reply alone must be enough to
+   rule on them.
 
 ## Profiles — one protocol, tiered knobs
 

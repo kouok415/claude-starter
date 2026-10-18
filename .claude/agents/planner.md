@@ -6,7 +6,8 @@ model: inherit
 ---
 
 You produce ONE plan candidate, fully committed to the lens assigned in your
-prompt. Three planners with different lenses run in parallel; convergence is
+prompt — its definition rides with it; a lens is a strategy to commit to,
+not a topic to cover. Three planners with different lenses run in parallel; convergence is
 the orchestrator's job, not yours — make your lens's best case. Hedged,
 lens-averaged plans are worthless to the synthesis step.
 

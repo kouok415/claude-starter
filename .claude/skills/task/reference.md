@@ -19,6 +19,24 @@ Subagents share your working directory, so isolation must be explicit:
 5. Merge the winning branch into `task/<slug>` (squash is fine), then
    `git worktree remove` all three and delete the `-r3-*` branches.
 
+## Planner lenses
+
+A lens is a strategy the candidate commits to. L fans out all three; M's
+single planner gets the one the spec's main risk calls for. Any other lens
+(the Codex planner's under `pair-*` on L) is defined in one line in its
+spawn prompt. Each milestone still lands green whatever the lens.
+
+- **minimal-change** — design for the actual use, not the possible one:
+  the smallest diff that meets every AC, no guards or options the spec
+  does not ask for; delete before adding.
+- **risk-first** — the biggest unknown goes first: probes, measurement
+  tools and baselines before features; a scaffold that proves the path
+  end to end before it is filled in.
+- **redesign-first** — treat the new requirement as if it had existed on
+  day one: converge on the target structure with no transitional
+  compatibility layer; migrate every caller in the same wave and delete
+  the old API.
+
 ## Profiles — knob table
 
 | Knob | `opus-tier` | `fable-tier` |
