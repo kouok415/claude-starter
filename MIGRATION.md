@@ -1,8 +1,9 @@
 # Migration guide
 
-Fifteen migrations live here (docs are bilingual elsewhere; this file and the
+Sixteen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[Unreleased — /number-check](#unreleased--number-check)** — a stock skill that vets a measured number (backtest, benchmark, metric) before it is reported; the analysis DoD points at it, sync suggests the same line to existing projects.
 - **[Unreleased — pair-codex transport](#unreleased--pair-codex-transport)** — `/task --profile=pair-codex`: a Codex judge over herdr takes the checker seats; `scripts/task-pair.sh` + `pair.md` + fake-herdr tests (transport only).
 - **[Unreleased — completion and profile fixes](#unreleased--completion-and-profile-fixes)** — current final verification, terminal human checkpoints, and consistent profile-switch warnings.
 - **[-7. claude-starter v3.14 → v3.14.5](#-7-claude-starter-v314--v3145)** — the
@@ -65,6 +66,34 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## Unreleased — /number-check
+
+A new stock skill, `.claude/skills/number-check/SKILL.md`: seven questions
+a measured number must answer from runs before it is reported or acted on
+— did the work happen (trade / row counts), did anything fail quietly
+(errors, NaN), is it past a ceiling, does it reproduce (spread), is the
+comparison fair (tuned vs default), what limits it, does it matter end to
+end — and a verdict of better / worse / no measurable difference /
+inconclusive. Model-invocable; `/number-check` or 「檢查數字」 runs it
+directly.
+
+- **New spawns:** `templates/CLAUDE.md.analysis` gains one Definition of
+  done line that makes the skill a rule. The code and research templates
+  are unchanged.
+- **Existing projects:** sync adds the skill (`copy_if_missing` +
+  `stock_update`). CLAUDE.md is never edited by sync, so the DoD line is
+  printed as a suggestion — once, on the sync that installs the skill, and
+  only when CLAUDE.md does not already mention it.
+
+### Migrating
+
+`sync-project.sh <project>` installs the skill. If the project reports
+measured numbers, paste the suggested line into its Definition of done;
+otherwise ignore it. Nothing else changes: no hook, setting, or schema is
+touched.
 
 ---
 

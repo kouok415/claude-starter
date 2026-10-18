@@ -284,7 +284,8 @@ claude-starter/
 │       ├── wrap/SKILL.md       /wrap — end-of-session memory write-back
 │       ├── task/SKILL.md       /task — long-horizon milestone harness
 │       ├── task/reference.md   worktree protocol + profile knobs (on demand)
-│       └── setup/SKILL.md      /setup — first-session birth protocol
+│       ├── setup/SKILL.md      /setup — first-session birth protocol
+│       └── number-check/SKILL.md  /number-check — vet a measured number before reporting it
 ├── .ai_context/                Layer 3 (schema v3) — INDEX, state, decisions…
 ├── .secrets/                   Runtime-only credentials (Read-denied · gitignored)
 ├── .pre-commit-config.yaml     H1 secret scan + S7 size cap

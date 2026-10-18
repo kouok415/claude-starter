@@ -94,6 +94,7 @@ copy_if_missing .claude/skills/task/SKILL.md
 copy_if_missing .claude/skills/task/reference.md
 copy_if_missing .claude/skills/task/pair.md
 copy_if_missing .claude/skills/setup/SKILL.md
+copy_if_missing .claude/skills/number-check/SKILL.md
 copy_if_missing .claude/agents/scout.md
 copy_if_missing .claude/agents/planner.md
 copy_if_missing .claude/agents/plan-critic.md
@@ -148,6 +149,7 @@ stock_update .claude/skills/task/SKILL.md
 stock_update .claude/skills/task/reference.md
 stock_update .claude/skills/task/pair.md
 stock_update .claude/skills/setup/SKILL.md
+stock_update .claude/skills/number-check/SKILL.md
 stock_update .claude/agents/scout.md
 stock_update .claude/agents/planner.md
 stock_update .claude/agents/plan-critic.md
@@ -221,6 +223,15 @@ done
 
 if [ -f "$TARGET/CLAUDE.md" ] && ! grep -qi 'definition of done' "$TARGET/CLAUDE.md"; then
   suggest+=("CLAUDE.md has no 'Definition of done' section — copy one from templates/CLAUDE.md.<kind>")
+fi
+
+# /number-check ships as a skill; the DoD line that makes it a rule lives in
+# CLAUDE.md, which sync never edits. Suggest it once — on the sync that
+# installs the skill — so projects that report no numbers are not nagged.
+if printf '%s\n' "${added[@]}" | grep -qx '.claude/skills/number-check/SKILL.md' \
+   && [ -f "$TARGET/CLAUDE.md" ] && ! grep -q 'number-check' "$TARGET/CLAUDE.md"; then
+  suggest+=("new skill /number-check installed — if this project reports measured numbers (backtests, benchmarks, metrics), add to CLAUDE.md's Definition of done:
+      - Every reported number passed \`/number-check\`: work count (trades / rows), quiet-failure count (errors / NaN), run or window spread, and the limiter stated with it.")
 fi
 
 if [ -f "$TARGET/.pre-commit-config.yaml" ] && [ ! -f "$TARGET/.git/hooks/pre-commit" ]; then

@@ -252,7 +252,8 @@ claude-starter/
 │       ├── wrap/SKILL.md       /wrap —— session 收尾記憶寫回
 │       ├── task/SKILL.md       /task —— 長程里程碑 harness
 │       ├── task/reference.md   worktree 協定 + profile 旋鈕(按需載入)
-│       └── setup/SKILL.md      /setup —— 第一次 session 的出生協定
+│       ├── setup/SKILL.md      /setup —— 第一次 session 的出生協定
+│       └── number-check/SKILL.md  /number-check —— 回報量測數字前先檢查它
 ├── .ai_context/                第 3 層(schema v3)
 ├── .secrets/                   Runtime-only 憑證(Read 拒讀 · git 不追蹤)
 ├── .pre-commit-config.yaml     H1 密鑰掃描 + S7 大小上限

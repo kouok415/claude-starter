@@ -33,6 +33,9 @@ metric). A number without a pinned definition is not a result.
   and the exact command recorded next to the result.
 - No lookahead / survivorship bias in the data path — state how you checked.
 - Limitations and data-quality caveats stated alongside the findings.
+- Every reported number passed `/number-check`: work count (trades /
+  rows), quiet-failure count (errors / NaN), run or window spread, and
+  the limiter stated with it.
 - Findings dated into `.ai_context/journal/`; stable conclusions promoted
   to `knowledge/`.
 

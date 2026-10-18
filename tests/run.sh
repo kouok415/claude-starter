@@ -425,6 +425,22 @@ if [ -f "$REPO/sync-project.sh" ]; then
   echo "$out" | grep -q 'run /setup' && ok "adopt hands off to /setup" || no "adopt handoff missing"
   { [ -f "$D/.claude/agents/scout.md" ] && [ -f "$D/.claude/skills/task/reference.md" ]; } && ok "v3.3 files (scout, reference) land via sync" || no "scout/reference missing after sync"
   { [ -f "$D/.claude/agents/final-verifier.md" ] && [ -f "$D/scripts/task-profile.sh" ]; } && ok "v3.13 files (final-verifier, task-profile) land via sync" || no "final-verifier/task-profile missing after sync"
+  # /number-check: the skill lands by sync; its DoD line is only suggested,
+  # once (the installing sync), and never to a CLAUDE.md that names it.
+  D7="$WORK/l14d"; mkdir -p "$D7/.ai_context"
+  cp "$REPO/.ai_context/INDEX.md" "$D7/.ai_context/"
+  printf '# p\n\n## Definition of done\n\n- tests pass\n' > "$D7/CLAUDE.md"
+  out1=$("$REPO/sync-project.sh" "$D7" 2>&1)
+  out2=$("$REPO/sync-project.sh" "$D7" 2>&1)
+  [ -f "$D7/.claude/skills/number-check/SKILL.md" ] && ok "sync installs the number-check skill" || no "number-check skill not installed by sync"
+  echo "$out1" | grep -q 'new skill /number-check installed' && ok "installing sync suggests the number-check DoD line" || no "number-check DoD suggestion missing on the installing sync"
+  echo "$out2" | grep -q 'new skill /number-check installed' && no "number-check suggestion repeats on a later sync (nag)" || ok "number-check suggestion fires once (installing sync only)"
+  grep -q 'number-check' "$D7/CLAUDE.md" && no "sync edited CLAUDE.md (must only suggest)" || ok "sync leaves CLAUDE.md untouched (suggestion only)"
+  D8="$WORK/l14e"; mkdir -p "$D8/.ai_context"
+  cp "$REPO/.ai_context/INDEX.md" "$D8/.ai_context/"
+  printf '# p\n\n## Definition of done\n\n- Every reported number passed `/number-check`.\n' > "$D8/CLAUDE.md"
+  out3=$("$REPO/sync-project.sh" "$D8" 2>&1)
+  echo "$out3" | grep -q 'new skill /number-check installed' && no "number-check suggested to a CLAUDE.md that already names it" || ok "no number-check suggestion when CLAUDE.md already names it"
 else
   skp "sync pairing + adopt tests (spawned project — template-repo only)"
 fi
@@ -522,6 +538,14 @@ sz=$(wc -c < "$REPO/.claude/skills/wrap/SKILL.md")
 [ -f "$REPO/.claude/skills/wrap/reference.md" ] && ok "wrap reference.md exists (on-demand task close-out)" || no "wrap reference.md missing"
 grep -q 'reference.md' "$REPO/.claude/skills/wrap/SKILL.md" && ok "wrap body points at the reference" || no "wrap body lost its reference pointer"
 grep -qF 'duration_min,outcome,harness' "$REPO/.claude/skills/wrap/reference.md" && ok "wrap reference carries the scoreboard header (harness column)" || no "wrap reference missing the scoreboard header"
+nc="$REPO/.claude/skills/number-check/SKILL.md"
+{ [ "$(sed -n 1p "$nc" 2>/dev/null)" = '---' ] && grep -q '^name: number-check$' "$nc" && grep -q '^description: .' "$nc"; } && ok "number-check skill registers (name + description frontmatter)" || no "number-check skill missing or its frontmatter is broken"
+if [ -f "$REPO/templates/CLAUDE.md.analysis" ]; then
+  ref="$(grep -o 'number passed `/[a-z-]*`' "$REPO/templates/CLAUDE.md.analysis" | sed 's/.*`\/\(.*\)`/\1/' | head -1)"
+  { [ -n "$ref" ] && [ -f "$REPO/.claude/skills/$ref/SKILL.md" ]; } && ok "analysis DoD points at a skill that exists (/$ref)" || no "analysis DoD names no existing skill (got '/$ref')"
+else
+  skp "analysis DoD → skill check (spawned project — template-repo only)"
+fi
 grep -qF 'Read(./**/.env)' "$REPO/.claude/settings.json" && ok "nested .env read-deny present" || no "nested .env deny missing"
 grep -qxF '**/.env' "$REPO/.gitignore" && ok "nested .env gitignored" || no "nested .env gitignore missing"
 grep -q 'gate-cache' "$REPO/.gitignore" && ok "gate-cache gitignored (fingerprint-safe)" || no "gate-cache ignore missing"
@@ -1713,6 +1737,7 @@ else
            .claude/skills/wrap/SKILL.md .claude/skills/wrap/reference.md \
            .claude/skills/task/SKILL.md \
            .claude/skills/task/reference.md .claude/skills/setup/SKILL.md \
+           .claude/skills/number-check/SKILL.md \
            .claude/agents/scout.md .claude/agents/planner.md .claude/agents/plan-critic.md \
            .claude/agents/executor.md .claude/agents/verifier.md .claude/agents/reframer.md \
            .claude/agents/final-verifier.md \
