@@ -28,7 +28,13 @@
   tagged `[TENTATIVE]` (H3).
 - Evidence grades: **A** primary/official, **B** reputable secondary,
   **C** single-source/anecdotal. Two independent sources upgrade C → B.
-- Actively look for disconfirming evidence before concluding.
+- Actively look for disconfirming evidence before concluding. A
+  hypothesis built into the question is one candidate, not the conclusion
+  to confirm — weigh at least one rival.
+- Confidence words (because, causes, fixes, was designed to) sit next to
+  their citation; without one, the claim is `[TENTATIVE]`.
+- An empty search is a finding: record where you looked and the terms
+  you used.
 - Session findings → `.ai_context/journal/YYYY-MM-DD-<topic>.md`;
   distilled, stable knowledge → `.ai_context/knowledge/`.
 
@@ -41,6 +47,9 @@
 
 - Load-bearing claims sourced at grade B or better; counterevidence sought
   and addressed; remaining uncertainty stated explicitly.
+- Every deliverable ends with **What we don't know**: open questions, and
+  each empty search with its sources and terms. A deliverable that lists
+  no gaps has not looked for them.
 - Findings distilled into `knowledge/`, not left buried in journal entries.
 - `.ai_context/state.md` reflects where the investigation stands and the
   next 1–3 steps.

@@ -1,8 +1,9 @@
 # Migration guide
 
-Nineteen migrations live here (docs are bilingual elsewhere; this file and the
+Twenty migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[Unreleased — templates, /setup, TUTORIAL](#unreleased--templates-setup-tutorial)** — the research template asks for a "What we don't know" section and empty-search records; `/setup` drafts a Verify that proves use, not liveness; TUTORIAL §7 gains a message → meaning → action table.
 - **[Unreleased — pair ledger rulings](#unreleased--pair-ledger-rulings)** — `pair/ledger.md` gains a `seats` column and a fixed `source` enum; minors can be ruled `noted`; high-stakes findings can only be fixed or left `open`.
 - **[Unreleased — sharper checker prompts](#unreleased--sharper-checker-prompts)** — the plan-critic runs `risk: low` verifies before work starts; verifier, final panel and executor get concrete checklists for vacuous tests, symptom masking, unseen readers and hand-synced lists; planner lenses are defined.
 - **[Unreleased — checker audits](#unreleased--checker-audits)** — `harness-report.sh` flags verify commands changed after a FAIL and `risk: med/high` milestones that finished without their verifier; verifier spawns get their own spawnlog class; README box trees are tested against the shipped files.
@@ -69,6 +70,30 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## Unreleased — templates, /setup, TUTORIAL
+
+- **`templates/CLAUDE.md.research`** (new spawns only — sync never edits
+  CLAUDE.md): a hypothesis built into the question is one candidate, not
+  the conclusion; confidence words sit next to their citation or the
+  claim is `[TENTATIVE]`; an empty search is recorded with its sources and
+  terms; the DoD requires a closing **What we don't know** section.
+  Existing research projects can paste the four lines by hand.
+- **`/setup`** (stock skill): the drafted Verify must prove use, not
+  liveness — a real request succeeds, side effects are checked, and a
+  dry-run flag counts only once its skips were observed.
+- **TUTORIAL §7** (EN + zh-TW): one row per harness message — what it
+  means, what to do. The broken-verify bullet now says to leave a
+  `lessons.md` reason (see checker audits). Two template-only tests keep
+  the quoted prefixes in step with the strings the hooks print and the
+  two tables the same length.
+
+### Migrating
+
+`sync-project.sh --update-stock <project>` for `/setup`. Nothing else
+reaches existing projects automatically.
 
 ---
 

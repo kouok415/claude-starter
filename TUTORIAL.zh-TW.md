@@ -132,8 +132,10 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 ## 7. 疑難排解
 
 - **閘門一直紅,但問題出在 verify 命令本身** —— 直接改 `plan.md` 裡
-  那條 `- verify:`。閘門同一輪 stop 最多強制續跑一次(不可能死鎖),
-  下一個 turn 重新武裝。
+  那條 `- verify:`,並在 `lessons.md` 追加一行:舊命令錯在哪、新命令少驗了
+  什麼 —— FAIL 之後換掉卻沒留理由的 verify,final panel 和
+  `harness-report.sh` 都會標出來。閘門同一輪 stop 最多強制續跑一次(不可能
+  死鎖),下一個 turn 重新武裝。
 - **想放棄整個任務** —— 刪 `.ai_context/tasks/CURRENT`,harness 立即
   解除;任務目錄留著,想續跑再把 slug 寫回去。
 - **hooks 好像沒生效** —— hooks 在 session 啟動時載入;改過
@@ -144,6 +146,30 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 - **verify 命令是無提示執行的。** 閘門在每次回合結束時直接跑當前里程碑
   的 `- verify:`,不會彈權限確認——保持它們唯讀、快速(< 5 分鐘);
   plan-critic 會攔破壞性命令,計畫審查就是你的檢查點。
+
+**每種訊息代表什麼。** harness 的訊息都以固定前綴開頭,常見的如下。
+
+| 你看到 | 代表 | 怎麼做 |
+|---|---|---|
+| `SETUP GATE` | CLAUDE.md 還帶著 `UNCONFIGURED` sentinel | 讓 `/setup` 跑;或說明你不要 —— 讓行一次,下個 session 再武裝 |
+| `GATE FAILED (red block n of 2 …)` | `[in_progress]` 里程碑的 verify 是紅的,這個 turn 結束不了 | 讓它修;命令本身錯了,看第一條 |
+| `NOTE — spawnlog has no executor row` | 里程碑已武裝,但 executor 從沒啟動 | 不用做事 —— 它會被要求 spawn 第 1 階,而不是升級 |
+| `… is RED — blocked n stops in a row … yielding now`(`STUCK` 列) | 連續三次紅燈:閘門把里程碑交給你 | 讀 `gatelog` + `lessons.md`;修掉原因、改 verify(附理由),或放棄 |
+| `GATE INTEGRITY — the milestone gate cannot arm` | 任務狀態壞了(`CURRENT` 空白、plan.md 不見、零個或多個 `[in_progress]`、分支不對);記成 `INTEGRITY` | 修掉訊息指出的狀態;intake 中途暫停是合法的 —— 說出來 |
+| `GATE REFUSED — … forbidden operation` | verify 含提權命令、git push 或絕對路徑的 `rm -rf`;沒有執行 | 在 plan.md 改寫那條 verify |
+| `… executor in flight … verify deferred`(`WAITING` 列) | executor 還在跑;每次 spawn 延後一次 | 等 —— 它結束時會喚醒 session |
+| `MILESTONE COMPLETE …` | 綠燈邊界;模型必須說明要繼續還是暫停 | 它若問了你問題,就回答 |
+| `… is green; the run is paused at a milestone boundary`(`PAUSED` 列) | run 停在綠燈上等你 | 說繼續,或改方向 |
+| `… is a human checkpoint - run held; sign off with: touch …` | `checkpoint: human` 里程碑通過了 | 看過 demo,再執行它指定的 `touch` |
+| `bash-guard` 跳出的確認提示 | 離開專案樹的 `rm -rf`,或碰到 `.env` 的命令 | 只核准你真的要的 |
+| `BASH GUARD — blocked (…)` | force-push、提權命令、`rm -rf /`:永不無人值守執行;記在 `private/bash-guard.log` | 真的要,就自己跑 |
+| 讀 `.env*` / `.secrets/` 被權限拒絕 | H1:Claude 永遠不讀密鑰 | 密鑰放那裡;程式在 runtime 讀 |
+| `WARNING: state.md last updated …` / `… is newer than state.md` | 記憶過期,或上個 session 沒跑 `/wrap` 就結束 | `/wrap` |
+| `WARNING: task … has [pending] milestones but none [in_progress]` | 閘門是關的 | 讓它把下一個里程碑標成 `[in_progress]` |
+| `WARNING: … bytes (cap …)` | 會被注入的檔案超過上限 | 照訊息說的蒸餾 |
+| `lessons.md` 裡的 `pair: judge no-verdict ×2 …` | Codex judge 兩次沒給 verdict;改用 Claude 席 | 看 judge pane(exit 4 = 那裡有對話框要你處理) |
+| `harness-report.sh`:`verify changed after FAIL` | gate 在失敗後被移動了 | 去 `lessons.md` 找理由;沒有就問為什麼 |
+| `harness-report.sh`:`verification depth gap` | `risk: med/high` 的里程碑沒經過 verifier 就完成了 | 補驗,或知情地接受風險 |
 
 ## 8. 速查表
 

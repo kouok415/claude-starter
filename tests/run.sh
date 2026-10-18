@@ -1202,6 +1202,24 @@ else
   skp "box-tree parity (spawned project — template-repo only)"
 fi
 
+echo "=== L1-18c · TUTORIAL message table quotes strings the harness really prints"
+if [ -f "$REPO/TUTORIAL.md" ] && [ -f "$REPO/TUTORIAL.zh-TW.md" ]; then
+  msg_rows() { awk -v h="$2" 'index($0, h)==1 {f=1; next} /^## 8\./ {f=0} f && /^\| / && !/^\|---/ && ++n>1' "$1"; }
+  frags="$(msg_rows "$REPO/TUTORIAL.md" '**What each message means.**' | cut -d'|' -f2 | grep -o '`[^`]*`' | tr -d '`' \
+           | sed -e 's/…/\n/g' -e 's/ n /\n/g' | sed 's/^ *//; s/ *$//' | awk 'length >= 6')"
+  miss=""; nf=0
+  while IFS= read -r fr; do
+    [ -n "$fr" ] || continue; nf=$((nf+1))
+    grep -qF -- "$fr" "$REPO"/.claude/hooks/*.sh "$REPO"/scripts/*.sh "$REPO"/.claude/skills/task/*.md "$REPO/.claude/settings.json" || miss="$miss [$fr]"
+  done <<< "$frags"
+  { [ "$nf" -ge 20 ] && [ -z "$miss" ]; } && ok "every quoted message fragment exists in the hooks/scripts ($nf fragments)" || no "TUTORIAL quotes messages the harness does not print:${miss:- (only $nf fragments parsed)}"
+  ne="$(msg_rows "$REPO/TUTORIAL.md" '**What each message means.**' | wc -l)"
+  nz="$(msg_rows "$REPO/TUTORIAL.zh-TW.md" '**每種訊息代表什麼。**' | wc -l)"
+  { [ "$ne" -gt 0 ] && [ "$ne" = "$nz" ]; } && ok "zh-TW message table has the same $ne rows" || no "message tables differ: EN $ne rows, zh-TW $nz"
+else
+  skp "TUTORIAL message table (spawned project — template-repo only)"
+fi
+
 echo "=== L1-19 · task legibility: STATUS.md view + statusline (v3.12)"
 TS="$REPO/scripts/task-status.sh"
 TSL="$REPO/scripts/task-statusline.sh"
@@ -1938,6 +1956,7 @@ if [ ! -d "$R" ]; then
 else
   grep -q 'research project' "$R/CLAUDE.md" && ok "research CLAUDE.md in place" || no "research template wrong"
   grep -q '## Long-horizon tasks' "$R/CLAUDE.md" && ok "research template carries /task section" || no "research /task section missing"
+  grep -q "What we don't know" "$R/CLAUDE.md" && grep -q 'An empty search is a finding' "$R/CLAUDE.md" && ok "research DoD requires a What-we-don't-know section + empty-search records" || no "research epistemics lines missing from the spawned CLAUDE.md"
   mkdir -p "$R/.ai_context/tasks/demo"; echo demo > "$R/.ai_context/tasks/CURRENT"
   printf '# r\n## Commands\n- Test: `true`\n' > "$R/CLAUDE.md"
   write_plan "$R/.ai_context/tasks/demo/plan.md" "test -s reports/x.md"

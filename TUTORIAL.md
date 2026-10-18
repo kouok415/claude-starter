@@ -147,9 +147,12 @@ the brief from the code). Full guide: [MIGRATION.md](./MIGRATION.md).
 ## 7. Troubleshooting
 
 - **Gate keeps failing but the verify command itself is broken** — edit
-  that milestone's `- verify:` line in `plan.md`. The gate forces at most
-  one continuation per stop cycle (no deadlock possible) and re-arms next
-  turn.
+  that milestone's `- verify:` line in `plan.md`, and append one
+  `lessons.md` line saying why the old command was wrong and what the new
+  one no longer checks — the final panel and `harness-report.sh` flag a
+  verify that changed after a FAIL with no reason. The gate forces at
+  most one continuation per stop cycle (no deadlock possible) and re-arms
+  next turn.
 - **Abandon a task** — delete `.ai_context/tasks/CURRENT`; the harness
   disarms instantly. The task directory stays; write the slug back to
   resume later.
@@ -162,6 +165,31 @@ the brief from the code). Full guide: [MIGRATION.md](./MIGRATION.md).
   milestone's `- verify:` at every turn-end without permission prompts —
   keep them read-only and fast (< 5 min). The plan-critic rejects
   destructive ones; plan review is your checkpoint.
+
+**What each message means.** Harness messages start with a fixed
+prefix; the ones you will meet:
+
+| You see | It means | Do |
+|---|---|---|
+| `SETUP GATE` | CLAUDE.md still carries the `UNCONFIGURED` sentinel | let `/setup` run — or say you decline; it yields once and re-arms next session |
+| `GATE FAILED (red block n of 2 …)` | the `[in_progress]` milestone's verify is red; the turn cannot end | let it fix the work; if the command is wrong, see the first bullet |
+| `NOTE — spawnlog has no executor row` | the milestone was armed but no executor ever started | nothing — it is told to spawn rung 1 instead of escalating |
+| `… is RED — blocked n stops in a row … yielding now` (`STUCK` row) | three red stops: the gate handed the milestone to you | read `gatelog` + `lessons.md`; fix the cause, change the verify (with a reason), or abandon |
+| `GATE INTEGRITY — the milestone gate cannot arm` | task state is broken (empty `CURRENT`, missing plan.md, zero or several `[in_progress]`, wrong branch); logged as `INTEGRITY` | fix the named state; a mid-intake pause is legitimate — say so |
+| `GATE REFUSED — … forbidden operation` | the verify contains a privileged command, git push or `rm -rf` on an absolute path; it was not run | rewrite that verify in plan.md |
+| `… executor in flight … verify deferred` (`WAITING` row) | an executor is still running; one deferral per spawn | wait — its completion wakes the session |
+| `MILESTONE COMPLETE …` | a green boundary; the model must say continue or pause | answer it if it asked you something |
+| `… is green; the run is paused at a milestone boundary` (`PAUSED` row) | the run stopped on green and is waiting | say continue, or redirect |
+| `… is a human checkpoint - run held; sign off with: touch …` | a `checkpoint: human` milestone passed | review its demo, then run the `touch` it names |
+| a confirmation prompt from `bash-guard` | `rm -rf` leaving the project tree, or a command touching `.env` | approve only what you meant |
+| `BASH GUARD — blocked (…)` | force-push, a privileged command or `rm -rf /`: never run unattended; logged to `private/bash-guard.log` | run it yourself if you really mean it |
+| a permission denial reading `.env*` / `.secrets/` | H1: Claude never reads secrets | keep them there; code reads them at runtime |
+| `WARNING: state.md last updated …` / `… is newer than state.md` | memory is stale, or the last session ended without `/wrap` | `/wrap` |
+| `WARNING: task … has [pending] milestones but none [in_progress]` | the gate is OFF | have it mark the next milestone `[in_progress]` |
+| `WARNING: … bytes (cap …)` | an injected file grew past its cap | distill it as the message says |
+| `pair: judge no-verdict ×2 …` in `lessons.md` | the Codex judge gave no verdict twice; the Claude seat was used | look at the judge pane (exit 4 = a dialog there needs you) |
+| `harness-report.sh`: `verify changed after FAIL` | a gate moved after it failed | find the reason in `lessons.md`; none → ask why |
+| `harness-report.sh`: `verification depth gap` | a `risk: med/high` milestone finished without its verifier | re-check it, or accept the risk knowingly |
 
 ## 8. Cheat sheet
 

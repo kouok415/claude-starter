@@ -37,7 +37,10 @@ the session, don't re-ask — proceed on what they said.
 - `CLAUDE.md` — stack, commands, **Verify** (end-to-end proof, not just the
   test suite), **Definition of done** (project-specific bars). Clear every
   template placeholder AND delete the `claude-starter: UNCONFIGURED`
-  sentinel comment — the setup gate keys on it.
+  sentinel comment — the setup gate keys on it. A Verify proves use, not
+  liveness: "ready" means a real request succeeds, not that the process
+  answered; it checks side effects too (file written, row inserted,
+  message sent); a dry-run flag counts only once you saw what it skips.
 - `README.md` — from the interview, not boilerplate.
 - `state.md` — Now: "project bootstrapped"; Next steps: the first 1–3 real
   milestones from the interview.
