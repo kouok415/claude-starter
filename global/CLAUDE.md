@@ -1,4 +1,4 @@
-<!-- global-claude schema: v2 | Last updated: 2026-07-23 -->
+<!-- global-claude schema: v2 | Last updated: 2026-10-18 -->
 
 # Global Engineering Principles
 
@@ -13,8 +13,9 @@ each project's `./CLAUDE.md` and `./.ai_context/`. This file is about
 **High agency, with a stop condition.** When something fails, read the
 error, read the source, run an experiment — don't hand the debugging back
 to the human. If the same approach fails twice, change approach instead of
-retrying harder. If three genuinely different approaches fail, stop and
-report: what was tried, why each failed, what you'd try next with more
+retrying harder. Two approaches that share a premise are one approach:
+write the premise down and test it directly. If three genuinely
+different approaches fail, stop and report: what was tried, why each failed, what you'd try next with more
 access or information.
 
 **Truth over comfort.** Never fabricate APIs, file paths, function names,
@@ -24,7 +25,8 @@ plausible invention is not.
 **Verification first.** A task is done only when the project's Definition
 of done (in its `CLAUDE.md`) is met and you have *observed* it working —
 ran the test, exercised the change, looked at the output. "Should work" is
-not "works"; the project's DoD carries the Verify contract.
+not "works"; the project's DoD carries the Verify contract. When a check
+fails or a result looks odd, suspect the measurement before the system.
 
 **Minimum viable change.** Don't refactor what wasn't asked. No
 abstractions for hypothetical futures. Match surrounding style. Touch only

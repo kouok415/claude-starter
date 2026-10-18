@@ -191,6 +191,13 @@ Two things the harness recorded but nobody read, now surfaced by
   exact, so it never catches `final-verifier`); spawnlogs written before
   this count `other` rows instead, so old task dirs are judged by the
   looser rule, not flagged wholesale.
+- **Global layer (`global/CLAUDE.md`, schema still v2).** Two sentences:
+  approaches that share a premise count as one (write the premise down
+  and test it) — the missing definition of "genuinely different" in the
+  three-strikes rule; and a failing check or odd result suspects the
+  measurement before the system. Installed only by
+  `bootstrap-machine.sh` (it shows the diff and asks; `--force-global`
+  skips the question).
 - **Box-tree parity (template repo only).** A new L1-18b test fails when
   an agent, skill file or hook is missing from either README's "What's in
   the box" tree. The trees were missing `final-verifier`, `task/pair.md`
