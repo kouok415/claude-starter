@@ -1,8 +1,9 @@
 # Migration guide
 
-Eighteen migrations live here (docs are bilingual elsewhere; this file and the
+Nineteen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[Unreleased — pair ledger rulings](#unreleased--pair-ledger-rulings)** — `pair/ledger.md` gains a `seats` column and a fixed `source` enum; minors can be ruled `noted`; high-stakes findings can only be fixed or left `open`.
 - **[Unreleased — sharper checker prompts](#unreleased--sharper-checker-prompts)** — the plan-critic runs `risk: low` verifies before work starts; verifier, final panel and executor get concrete checklists for vacuous tests, symptom masking, unseen readers and hand-synced lists; planner lenses are defined.
 - **[Unreleased — checker audits](#unreleased--checker-audits)** — `harness-report.sh` flags verify commands changed after a FAIL and `risk: med/high` milestones that finished without their verifier; verifier spawns get their own spawnlog class; README box trees are tested against the shipped files.
 - **[Unreleased — /number-check](#unreleased--number-check)** — a stock skill that vets a measured number (backtest, benchmark, metric) before it is reported; the analysis DoD points at it, sync suggests the same line to existing projects.
@@ -68,6 +69,36 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## Unreleased — pair ledger rulings
+
+`pair.md` text and one packet line; no script logic changes.
+
+- **Countable cross-model catches.** The ledger header is now
+  `| stage | ref | source | seats | severity | claim | resolution |`.
+  `source` is `codex | claude | both | orchestrator`; `seats` is `2` where
+  both seats judged the same base (plan round 1, `risk: high` verify,
+  final panel) and `1` elsewhere. Fleet ledgers already used `both` and
+  `orchestrator` informally; without `seats`, a Codex-only finding at
+  `risk: med` (where Claude never looked) was indistinguishable from one
+  Claude missed.
+- **`noted` ruling (plan stage).** A minor finding can be acknowledged
+  without a plan change: `noted: <why the plan stays>`. Before, `accepted`
+  required a plan edit and `rejected` required counter-evidence, so true
+  but unimportant minors were accepted (fleet plan stage: 104 of 108
+  accepted) and plans grew round after round. Noted findings follow the
+  re-raise rule like rejected ones; the critic packet says so.
+- **High-stakes findings are the human's.** Security, data loss and real
+  money / live orders: the orchestrator never rules them `rejected` or
+  `noted` at any stage — fixed, or `open` with the refuting evidence
+  attached; open blocker/major rows hold completion.
+
+### Migrating
+
+`sync-project.sh --update-stock <project>`. A ledger begun before this
+keeps its six-column header; new ledgers use seven.
 
 ---
 

@@ -204,17 +204,19 @@ pass on that digest only.
    weights with the planner and the synthesizer, so its value is one fresh
    look at v1, not a vote every round (ADR-029). Neither critic reads
    plan.md. Claude's round-1 findings go into the ledger too (`source:
-   claude`). A Codex no-verdict ×2 in any round hands that round's seat
+   claude`, or `both` when the Codex critic raised the same one). A Codex no-verdict ×2 in any round hands that round's seat
    to a Claude `plan-critic` (§No-verdict rule).
 3. **Ruling, per finding, into `pair/ledger.md`** (`stage: plan`, `ref:
    r<round>/<id>`): `accepted: <the concrete plan change>` — an accept
    without a plan edit is not a ruling; `rejected: <reason with evidence>`;
-   `open` only for spec/scope/preference questions that belong to the
-   human. Minor findings never block convergence; a finding without a
-   checkable claim is at most minor.
+   `noted: <why the plan stays>` — minor findings only: true, not worth a
+   plan change (a minor need not be accepted to be acknowledged); `open`
+   only for spec/scope/preference questions that belong to the human, and
+   for high-stakes findings (§ledger). Minor findings never block
+   convergence; a finding without a checkable claim is at most minor.
 4. **Re-raise rule.** The next critic packet carries the plan-stage ledger
-   rows automatically; a rejected finding may come back only with new
-   evidence. If it comes back without, rule it `rejected: repeated without
+   rows automatically; a rejected or noted finding may come back only with
+   new evidence. If it comes back without, rule it `rejected: repeated without
    evidence` and move on — do not argue with it.
 5. **Digest binding.** Any edit to plan.md after a critic passed
    invalidates that pass: freeze again, new round. This includes a rung-4
@@ -238,8 +240,8 @@ pass on that digest only.
   `packet verifier M<n> --mode full`. Either `fail` ⇒ FAIL. When the two
   disagree, run the failing side's reproduction command yourself: it
   reproduces ⇒ FAIL stands; it does not ⇒ append the finding to
-  `pair/ledger.md` as `rejected: <command + output>` and treat that side
-  as pass. No opinion overrides a command; no rebuttal round at
+  `pair/ledger.md` as `rejected: <command + output>` (high-stakes: `open`
+  with that evidence, §ledger) and treat that side as pass. No opinion overrides a command; no rebuttal round at
   milestone level.
 
 ### §3.6 drift check
@@ -272,7 +274,8 @@ whatever the size table's last column says (user ruling, ADR-028).
      --since <base> --rebuttal pair/claude-<lens>.result.md` → `send`.
 5. Resolution, per finding, into `pair/ledger.md`:
    - reproduced by either side ⇒ `confirmed` ⇒ FAIL ⇒ repair milestone;
-   - refuted with a command ⇒ `rejected: <command + output>`;
+   - refuted with a command ⇒ `rejected: <command + output>`
+     (high-stakes: `open` with that evidence, §ledger);
    - neither ⇒ `open` — listed to the human. Open blocker/major findings
      hold completion like an un-acked checkpoint: attended runs ask;
      `--auto` runs stop at the completion report with the list. Never a
@@ -284,14 +287,27 @@ whatever the size table's last column says (user ruling, ADR-028).
 
 ### `pair/ledger.md` (orchestrator-written, append-only)
 
-    | stage | ref | source | severity | claim | resolution |
-    |---|---|---|---|---|---|
-    | verify | M3 | codex | major | `bash t.sh` exits 1 | confirmed |
-    | final | test-integrity | claude | minor | tolerance loosened in x_test.py:40 | rejected: `git log -p` shows spec.md AC2 change with lessons entry |
+    | stage | ref | source | seats | severity | claim | resolution |
+    |---|---|---|---|---|---|---|
+    | verify | M3 | codex | 1 | major | `bash t.sh` exits 1 | confirmed |
+    | plan | r1/2 | both | 2 | minor | M4 demo line names no command | noted: M4 verify already prints the count |
+    | final | test-integrity | claude | 2 | minor | tolerance loosened in x_test.py:40 | rejected: `git log -p` shows spec.md AC2 change with lessons entry |
 
 `stage` is `spec` / `brief` / `plan` / `verify` / `drift` / `final`; plan
 rows use `ref: r<round>/<id>` and are what the next critic packet
-carries.
+carries. `source` is who raised it: `codex`, `claude`, `both` (each seat
+raised it independently on the same base) or `orchestrator` (you, or an
+executor's own report); a Claude agent sitting the Codex seat after a
+no-verdict is `claude`. `seats` is how many seats judged that base — `2`
+at plan round 1, `risk: high` verify and the final panel, `1` everywhere
+else — so a `codex`-only row counts as a catch Claude missed only where
+`seats` is `2`. A ledger started before these columns keeps its header.
+
+**High-stakes findings are the human's.** A finding about security, data
+loss, or real money / live orders is never `rejected` or `noted` by you,
+at any stage: fix it (`accepted` / `confirmed`) or rule it `open` with
+your refuting evidence in the row. Open rows are listed in the completion
+report; open blocker/major ones hold completion like §5 step 5's.
 
 ### Seats that stay Claude-only
 

@@ -545,6 +545,9 @@ grep -q 'pair.md' "$REPO/.claude/skills/task/SKILL.md" && ok "task body points a
 for sec in '### No-verdict rule' '### §1 spec' '### §0.5 brief' '### §2 plan' '### §3.3 verification' '### §3.6 drift check' '### §5 final panel' '### `pair/ledger.md`'; do
   grep -qF "$sec" "$REPO/.claude/skills/task/pair.md" && ok "pair.md carries $sec" || no "pair.md missing $sec"
 done
+grep -qF '| stage | ref | source | seats | severity | claim | resolution |' "$REPO/.claude/skills/task/pair.md" && grep -q '`both` (each seat' "$REPO/.claude/skills/task/pair.md" && ok "pair ledger schema: source enum incl. both + seats column (cross-model catches countable)" || no "pair ledger schema lost source/seats"
+grep -q '`noted: <why the plan stays>` — minor findings only' "$REPO/.claude/skills/task/pair.md" && ok "pair plan rulings offer noted for minors" || no "pair noted ruling missing"
+grep -q 'High-stakes findings are the human' "$REPO/.claude/skills/task/pair.md" && [ "$(grep -c 'high-stakes: `open`' "$REPO/.claude/skills/task/pair.md")" -ge 2 ] && ok "high-stakes findings: never rejected by the orchestrator, at every reject site" || no "high-stakes rule missing or not wired to the reject sites"
 sz=$(wc -c < "$REPO/.claude/skills/wrap/SKILL.md")
 [ "$sz" -le 2560 ] && ok "wrap SKILL.md within 2.5 KB ($sz B — task machinery lives in reference.md)" || no "wrap SKILL.md bloated ($sz B > 2560)"
 [ -f "$REPO/.claude/skills/wrap/reference.md" ] && ok "wrap reference.md exists (on-demand task close-out)" || no "wrap reference.md missing"
@@ -1691,7 +1694,7 @@ pk="$(cat "$FK/out")"
 grep -q "^base: $cand_d$" "$PD/$pk" && grep -q '^round: 1$' "$PD/$pk" && ok "packet: critic pass is bound to the candidate digest" || no "plan-critic base/round wrong"
 grep -q '^    ## M1: a \[pending\]$' "$PD/$pk" && grep -q 'do not$' "$PD/$pk" && ok "packet: the candidate is inlined frozen (not read from plan.md)" || no "candidate not inlined"
 ! grep -q 'Ledger so far' "$PD/$pk" && ok "packet: round 1 has no ledger section" || no "round 1 carried a ledger"
-grep -q 'rejected may be re-raised ONLY with new' "$PD/$pk" && grep -q 'verdict pass means: no blocker and no major' "$PD/$pk" && ok "packet: anti-ping-pong rules are in the critic contract" || no "critic rules missing"
+grep -q 'rejected or noted may be re-raised ONLY' "$PD/$pk" && grep -q 'verdict pass means: no blocker and no major' "$PD/$pk" && ok "packet: anti-ping-pong rules are in the critic contract" || no "critic rules missing"
 grep -q 'checklist 1 is observed, not reasoned' "$PD/$pk" && ok "packet: the Codex critic runs the risk:low verifies too (observed red)" || no "observed-red clause missing from the critic packet"
 printf '| stage | ref | source | severity | claim | resolution |\n|---|---|---|---|---|---|\n| final | x | claude | minor | y | rejected: z |\n| plan | r1/1 | codex | major | M1 verify true cannot fail | accepted: verify is bash t.sh |\n' > "$PKD/ledger.md"
 rc=$(tp -- packet plan-critic - --candidate "$FK/cand.md" --round 2); ck 0 "$rc" "packet: plan-critic round 2 generates"
