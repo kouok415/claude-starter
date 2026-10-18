@@ -188,7 +188,11 @@ turn; a red gate cannot be narrated over — don't try, fix it.
 | exhausted | **stop** | append `lessons.md`, write a `journal/` entry, report honestly (three-strikes rule) |
 
 After every failed rung: append what-was-tried / why-it-failed to
-`lessons.md` — the next fresh context must not re-learn it. `fable-tier`
+`lessons.md` — the next fresh context must not re-learn it. Changing a
+milestone's `- verify:` after it went red needs its own lessons.md line
+(why the old command was wrong, what the new one no longer checks): the
+gatelog keeps both commands, and the final test-integrity lens and
+`harness-report.sh` flag a change with no reason. `fable-tier`
 skips rung 3 (two failed distinct approaches from a strong model = the
 problem is mis-posed; diagnose, don't resample). Planner / plan-critic /
 reframer not installed → collapse rungs 3–4 into stop-and-report.

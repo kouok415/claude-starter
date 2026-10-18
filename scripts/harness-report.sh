@@ -55,6 +55,8 @@ fi
 # --- normalize the three sources into one pipe-delimited stream ------------
 # SB|date|slug|profile|size|milestones|gate_failures|rung|interv|duration|outcome|harness
 # GL|slug|fail_rows|integrity_rows|unarmed_rows|stuck_rows
+# VC|slug|milestone|last_fail_cmd|pass_cmd
+# DG|slug|gaps|med_high_done|milestones
 # FR|date|harness|area|severity|summary|ref
 normalize() {
   if [ -f "$SB" ]; then
@@ -73,10 +75,18 @@ normalize() {
     for gl in "$AI"/tasks/*/gatelog; do
       [ -f "$gl" ] || continue
       slug="$(basename "$(dirname "$gl")")"
+      # VC rows: a milestone that went green on a command none of its FAILs
+      # ran — the verify was changed after it failed (A5: whoever wants the
+      # green should not be the only one who saw the gate move).
       awk -F'\t' -v s="$slug" '
-        $3=="FAIL"{fail++} $3=="INTEGRITY"{integ++} $3=="UNARMED"{unarm++}
+        $3=="FAIL"{fail++; failed[$2]=1; fcmd[$2 SUBSEP $4]=1; lastf[$2]=$4}
+        $3=="PASS" && ($2 in failed) && !(($2 SUBSEP $4) in fcmd) && !($2 in vc) {
+          vc[$2]=1; vcl[++nvc]=$2 "|" cut(lastf[$2]) "|" cut($4) }
+        $3=="INTEGRITY"{integ++} $3=="UNARMED"{unarm++}
         $3=="STUCK"{stuck++}
-        END{ printf "GL|%s|%d|%d|%d|%d\n", s, fail, integ, unarm, stuck }' "$gl"
+        function cut(c){ gsub(/\|/,"/",c); return (length(c)>70 ? substr(c,1,67) "..." : c) }
+        END{ printf "GL|%s|%d|%d|%d|%d\n", s, fail, integ, unarm, stuck
+             for (i=1;i<=nvc;i++) printf "VC|%s|%s\n", s, vcl[i] }' "$gl"
     done
     # Task-dir census for the integrity cross-checks: CURRENT slug, plus
     # per-dir [done]-milestone counts and how many have gate evidence.
@@ -97,6 +107,33 @@ normalize() {
         fi
       done < <(sed -n 's/^## \([^:]*\):.*\[done\].*/\1/p' "$pl")
       printf 'TD|%s|%d|%d\n' "$tslug" "$dn" "$cv"
+      # Verification depth (M/L only — S skips the verifier step by design):
+      # a [done] risk:med/high milestone whose verifier seat left no trace.
+      # Claude seat = a spawnlog verifier row for the milestone ("other" in
+      # spawnlogs that predate the verifier class); pair-*: the Codex seat
+      # (runlog verifier start row) takes med and joins high. No spawnlog =
+      # SubagentStart never fired here, so the Claude seat goes unjudged.
+      sl=/dev/null; rl=/dev/null
+      [ -s "$tdir/spawnlog" ] && sl="$tdir/spawnlog"
+      [ -s "$tdir/pair/runlog" ] && rl="$tdir/pair/runlog"
+      awk -F'\t' -v s="$tslug" -v sl="$sl" -v rl="$rl" '
+        FILENAME==sl { hs=1; if ($3=="verifier") vcls=1; sp[$2 SUBSEP $3]=1; next }
+        FILENAME==rl { if ($3=="start" && $4=="verifier") rv[$5]=1; next }
+        /^<!-- profile:/ { if (match($0, /profile: *[a-z-]+/)) { prof=substr($0, RSTART, RLENGTH); sub(/profile: */, "", prof) }
+                           if (match($0, /size: *[SML]/)) size=substr($0, RSTART+RLENGTH-1, 1) }
+        /^## / { flush(); ms=""; r=""
+                 if ($0 ~ /\[done\]/) { ms=$0; sub(/^## /, "", ms); sub(/:.*/, "", ms) }
+                 next }
+        ms!="" && /^- risk:/ { r=$0; sub(/^- risk: */, "", r); sub(/[^a-z].*/, "", r) }
+        function flush(   pr, ok) {
+          if (ms=="" || (r!="med" && r!="high")) return
+          nd++; ok=1; pr=(prof ~ /^pair-/)
+          if (hs && (!pr || r=="high") && !((ms SUBSEP (vcls ? "verifier" : "other")) in sp)) ok=0
+          if (pr && !(ms in rv)) ok=0
+          if (!ok) { ng++; gl=gl " " ms }
+        }
+        END { flush(); if (ng && (size=="M" || size=="L")) printf "DG|%s|%d|%d|%s\n", s, ng, nd, substr(gl, 2) }
+      ' "$sl" "$rl" "$pl"
     done
   fi
   if [ -f "$FR" ]; then
@@ -151,6 +188,8 @@ $1=="SB" {
 }
 $1=="GL" { gl_fail[$2]=$3; gl_integ[$2]=$4; gl_unarm[$2]=$5; gl_stuck[$2]=$6 }
 $1=="CUR" { cur=$2 }
+$1=="DG" { dgm[++ndg]="tasks/" $2 "/ — " $3 " of " $4 " [done] risk:med/high milestones had no verifier spawn while in progress (" $5 ")" }
+$1=="VC" { vcm[++nvc]="tasks/" $2 "/ " $3 " — FAIL ran `" $4 "`, PASS ran `" $5 "`" }
 $1=="TD" { td_done[$2]=$3; td_cov[$2]=$4; ntd++ }
 $1=="FR" {
   fr++; fh=$3; fa=$4; fs=$5
@@ -244,6 +283,8 @@ END {
     }
   }
   for (i=1; i<=neb; i++) { print "  enum violation: " enum_bad[i]; nix++ }
+  for (i=1; i<=ndg; i++) { print "  verification depth gap: " dgm[i]; nix++ }
+  for (i=1; i<=nvc; i++) { print "  verify changed after FAIL: " vcm[i] " — the reason belongs in lessons.md"; nix++ }
   if (nix==0) print "clean — scoreboard, gatelogs and task dirs agree"
 
   print "== friction"

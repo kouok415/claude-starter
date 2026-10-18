@@ -261,6 +261,12 @@ fi
 if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'spawnlog' "$TARGET/.claude/settings.json"; then
   suggest+=("settings.json does not deny Edit/Write on tasks/*/spawnlog (v3.9) — merge the deny entries from the template's .claude/settings.json")
 fi
+# Verifier spawns got their own spawnlog class (harness-report's verification
+# depth check); a customized settings.json still logs them as "other".
+if [ -f "$TARGET/.claude/settings.json" ] && grep -q 'spawn-log\.sh' "$TARGET/.claude/settings.json" \
+   && ! grep -q 'spawn-log\.sh\\" verifier' "$TARGET/.claude/settings.json"; then
+  suggest+=("settings.json logs verifier spawns as \"other\" — merge the \"verifier\" SubagentStart matcher from the template's .claude/settings.json and drop verifier from the crew matcher")
+fi
 
 if [ -f "$TARGET/.claude/hooks/session-start.sh" ] && ! grep -q 'tasks/CURRENT' "$TARGET/.claude/hooks/session-start.sh"; then
   suggest+=("session-start.sh predates the /task harness — diff against the template to add active-task plan injection")

@@ -34,6 +34,11 @@ lens; same verdict format:
   spec's history: `git log -p -- .ai_context/tasks/<slug>/spec.md` — an
   unexplained mid-run weakening of acceptance criteria is a FAIL (rung-4
   reframer patches are legitimate only with a matching lessons.md entry).
+  Same audit for verify commands: in `gatelog` (TAB: ts, milestone,
+  verdict, command), a milestone whose PASS ran a command none of its
+  FAILs ran had its gate moved — narrowed scope, a dropped check, or a
+  looser threshold with no lessons.md line explaining it is a FAIL;
+  repairing a broken command is fine.
 
 Orientation: read `brief.md` for where things live instead of
 re-surveying — but the brief is navigation, not evidence. Verdicts cite

@@ -1,8 +1,9 @@
 # Migration guide
 
-Sixteen migrations live here (docs are bilingual elsewhere; this file and the
+Seventeen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[Unreleased — checker audits](#unreleased--checker-audits)** — `harness-report.sh` flags verify commands changed after a FAIL and `risk: med/high` milestones that finished without their verifier; verifier spawns get their own spawnlog class; README box trees are tested against the shipped files.
 - **[Unreleased — /number-check](#unreleased--number-check)** — a stock skill that vets a measured number (backtest, benchmark, metric) before it is reported; the analysis DoD points at it, sync suggests the same line to existing projects.
 - **[Unreleased — pair-codex transport](#unreleased--pair-codex-transport)** — `/task --profile=pair-codex`: a Codex judge over herdr takes the checker seats; `scripts/task-pair.sh` + `pair.md` + fake-herdr tests (transport only).
 - **[Unreleased — completion and profile fixes](#unreleased--completion-and-profile-fixes)** — current final verification, terminal human checkpoints, and consistent profile-switch warnings.
@@ -66,6 +67,42 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## Unreleased — checker audits
+
+Two things the harness recorded but nobody read, now surfaced by
+`harness-report.sh` under `== integrity` (report layer — nothing blocks):
+
+- **Verify changed after a FAIL.** A milestone whose PASS ran a command
+  none of its FAILs ran had its gate moved mid-run (fleet: 15 of 517
+  milestones, e.g. a full-range calendar check narrowed to one year after
+  it failed). The row prints both commands. Repairing a broken command
+  is legitimate; the task skill now asks for a `lessons.md` line saying
+  why, and the final panel's test-integrity lens audits the gatelog the
+  way it already audits `spec.md` history — a narrowed scope or dropped
+  check with no reason is a FAIL.
+- **Verification depth gap.** For M/L tasks, `[done]` milestones with
+  `risk: med/high` that had no verifier spawn while in progress
+  (`pair-*`: no Codex verifier `start` row in `pair/runlog` for med, both
+  seats for high). Fleet: 138 milestones across 32 task dirs. To make the check precise, `settings.json` routes
+  `verifier` spawns to their own spawnlog class (plain-name matcher —
+  exact, so it never catches `final-verifier`); spawnlogs written before
+  this count `other` rows instead, so old task dirs are judged by the
+  looser rule, not flagged wholesale.
+- **Box-tree parity (template repo only).** A new L1-18b test fails when
+  an agent, skill file or hook is missing from either README's "What's in
+  the box" tree. The trees were missing `final-verifier`, `task/pair.md`
+  and `wrap/reference.md`; fixed.
+
+### Migrating
+
+`sync-project.sh --update-stock <project>` updates `harness-report.sh`,
+`spawn-log.sh`, `final-verifier.md`, the task skill and — if untouched —
+`settings.json`. A customized `settings.json` gets a suggestion: add a
+`"verifier"` SubagentStart matcher calling `spawn-log.sh verifier`, and
+drop `verifier` from the crew matcher (`final-verifier` stays there).
 
 ---
 

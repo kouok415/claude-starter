@@ -43,7 +43,16 @@
         ]
       },
       {
-        "matcher": "scout|planner|plan-critic|verifier|final-verifier|reframer",
+        "matcher": "verifier",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/spawn-log.sh\" verifier"
+          }
+        ]
+      },
+      {
+        "matcher": "scout|planner|plan-critic|final-verifier|reframer",
         "hooks": [
           {
             "type": "command",

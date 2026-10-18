@@ -82,7 +82,8 @@ v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才
 | 「驗證過才算完成」 | **Stop gate**:`/task` 進行中時,當前里程碑的 verify 指令不通過,回合就結束不了(樹沒變動則命中 PASS-cache,不重跑);外加 CLAUDE.md 的 **Verify** + **Definition of done** 契約、可選的 `lint.sh` 即時回饋。閘門只在 `/task` 進行中武裝 —— 大到需要閘門的工作,本身就該是一個 `/task`。連續兩次紅燈會擋;第三次交棒給人類(見下一列) |
 | 「紅燈閘門必須抵達人類,不能死在 transcript 裡」 | 計數式讓行(v3.9):同一(session, 里程碑)連續第三次紅燈停止時 exit 0,寫入一行 `STUCK` gatelog 並發出 UI 可見的 `{"systemMessage"}` —— 三次失敗就是三振規則,交棒是可見的,不是無聲放行。`PASS` 重置計數;`/wrap --sweep` 永不讓行;模型可修的擋下狀態(狀態錯字、被禁 verify)照樣每次都擋。每個(session, 里程碑)只寫一行 `STUCK` —— 之後的停止重複 `systemMessage` 但不再寫列,記分板把一次交棒算成一次(v3.10) |
 | 「擋下必須在宿主 CLI 手上活下來;綠燈邊界是明確決定,不是無聲停車」(v3.14) | 每條 exit-2 路徑先印一行固定 stdout marker(CLI 的 missing-hook heuristic 否則會把紅燈擋下誤判成「hook 不存在」而放行);武裝中的里程碑有新鮮 executor spawn 列時,verify 延後一次(`WAITING` 列,完成通知就是喚醒保證);里程碑 PASS 但還有 `[pending]` 時,每 (session, 里程碑) 一次續跑提示 —— 繼續,或明說暫停(未回答的人類問題必須重述、不得跨過),下一次停止放行並寫 `PAUSED` 列;`- checkpoint: human` 里程碑則機械等待人類 `touch tasks/<slug>/ack-<id>` 簽核,包含沒有後續里程碑的最後一關；全 done 收尾也檢查簽核。Stop 可以顯示等待訊息後暫停，但 `--sweep` 每次都拒絕缺少簽核的收尾 |
-| 「`[in_progress]` 必須能證明 executor 真的啟動過」 | `spawn-log.sh` 在 `SubagentStart` 事件把 hook 寫入的列追加到 `tasks/<slug>/spawnlog`(Edit/Write 被 deny;matcher 區分 `executor` 與 scout/planner/…,不解析 payload);M/L 任務紅燈且 spawnlog 有 intake 列卻沒有該里程碑的 executor 列時,閘門把指引改為第 1 階「先 spawn executor」而非升級梯 —— 「從未開始」和「試過但失敗」在壓縮後不再無法區分(v3.9) |
+| 「`[in_progress]` 必須能證明 executor 真的啟動過」 | `spawn-log.sh` 在 `SubagentStart` 事件把 hook 寫入的列追加到 `tasks/<slug>/spawnlog`(Edit/Write 被 deny;matcher 把 `executor`、`verifier` 各自分類,其餘班底記為 `other`,不解析 payload);M/L 任務紅燈且 spawnlog 有 intake 列卻沒有該里程碑的 executor 列時,閘門把指引改為第 1 階「先 spawn executor」而非升級梯 —— 「從未開始」和「試過但失敗」在壓縮後不再無法區分(v3.9) |
+| 「`risk: med/high` 的里程碑要有 verifier」 | 報表層,不擋停:`harness-report.sh` 的 `== integrity` 逐一列出 M/L 任務裡,進行中時 spawnlog 沒有 `verifier` 列的 `[done]` med/high 里程碑(`pair-*`:med 查 `pair/runlog` 有沒有 Codex verifier 的 `start` 列;high 兩席都查)。verifier 分類出現之前的 spawnlog 以 `other` 列計 |
 | 「重新錨定只付當前里程碑的成本,不付整份計畫」 | session-start 注入過濾後的 plan.md 視圖 —— 頭部 + 所有標題 + verify/risk 行 + 完整的 `[in_progress]` 段;視圖自我聲明為過濾版,超過 8 KB 警告。前向約束(SKILL 規則)寫進*目標*里程碑的註解塊,武裝那一刻才浮現,不必每個 session 租用 context(v3.9)。executor 直接從 spawn prompt 拿到武裝里程碑的完整段落、永不重讀原始 plan.md;原始檔超過 16 KB 警告;全 `[done]` 但 `CURRENT` 未清的任務會被提示跑 `/wrap`,不再無聲續付任務附件(v3.11) |
 | 「長任務會衰變:漂移、無聲錯誤、狀態流失」 | `/task` harness —— 帶可執行閘門的里程碑計畫、每個里程碑全新 executor context、對抗式 verifier、升級梯、過關即 commit |
 | 「人類隨時看得到進度在哪、在建什麼」(v3.12) | `tasks/<slug>/STATUS.md` 即時視圖:機械區(位置、mermaid 里程碑圖、demo 承諾、變更足跡、最後一次 verify 輸出、`[ASSUMED]` 帳本)由 `scripts/task-status.sh` 重生成 —— stop-gate 在每次真實 verify 後、session-start 在每次 resume 時重繪 —— 模型只擁有 §Architecture(還是 stub 時每 session 一次 `systemMessage` 提醒)。比照 `.gate-cache` 列入 gitignore,重繪永不打掉 PASS-cache。可選 statusline 一行位置指示:`scripts/task-statusline.sh` |
@@ -93,7 +94,7 @@ v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才
 | 「一個狀態錯字不能無聲解除閘門」 | session-start 偵測「任務有 `[pending]` 里程碑卻沒有 `[in_progress]`」時警告;Stop gate 對做到一半斷鏈(`[done]`+`[pending]` 卻無 in_progress)的狀態每 session 擋一次 |
 | 「里程碑閘門絕不無聲熄滅」 | 其餘暗閘狀態 —— CURRENT 空白/損毀、plan.md 不存在或無里程碑標題、`[in_progress]` 里程碑缺 verify 指令、任務工作不在 `task/*` 分支上(main/master 或其他分支:verify 會對著錯的樹跑)—— 每 session 打斷一次,且**每次**偵測都在 gatelog 追加一行 `INTEGRITY`(v3.10 起 log-always:同 session 的第二個暗閘狀態一樣進稽核軌跡):安靜的 gatelog 可證明等於乾淨的一輪 |
 | 「單一 turn 跑完的任務不能留下空白稽核軌跡」 | 零停頓掃描:在全 `[done]` 狀態(以及 `/wrap` 刪除 `CURRENT` 前呼叫的 `stop-gate.sh --sweep`)——明確執行 `--sweep` 時一定重跑目前最後一個里程碑的 verify，即使已有舊 PASS；一般全 done 的 Stop 僅在里程碑、命令和檔案指紋都相同時使用快取。更早的無列閘門補記 `UNARMED`，不重跑已過去的時間點驗收 |
-| 「verify 指令要被稽核,不只是被執行」 | gatelog 每行記錄實際強制執行的指令(中途弱化留下痕跡);final panel 以 `git log -p -- spec.md` 稽核驗收準則是否被悄悄改弱 |
+| 「verify 指令要被稽核,不只是被執行」 | gatelog 每行記錄實際強制執行的指令(中途弱化留下痕跡);final panel 以 `git log -p -- spec.md` 稽核驗收準則是否被悄悄改弱,也稽核 gatelog 裡 FAIL 之後換掉、卻沒在 lessons.md 留理由的 verify 指令 —— `harness-report.sh` 在 `== integrity` 列出這些里程碑 |
 | 「verify 指令不能無人看管地做災難性操作」 | Stop gate denylist:含 `sudo`、`git push`、絕對路徑遞迴強制刪除的 verify 永不執行 —— 一律擋下、一律記錄。matcher 對拼寫寬容(`-fr`、拆開的旗標、多空格一視同仁拒絕),且單一來源住在 `guard-patterns.sh`、與 `bash-guard.sh` 共用,兩層永不漂移(v3.10) |
 | 「災難性 bash 絕不無人看管地執行」(永不 force-push、不 sudo) | `bash-guard.sh` PreToolUse 絆索:任何拼寫的 force-push(旗標或 `+refspec`)/ `sudo` / 根目錄刪除(含 `--no-preserve-root`,v3.10)一律拒絕並記錄到 `private/bash-guard.log`;跳出專案樹的 `rm -rf`(絕對路徑、`~/`、`$HOME/`、`..` —— v3.14.3)與 `.env` 存取降級為確認提示 —— session 自己的 `/tmp/claude-*/…/scratchpad` 樹除外(v3.14.1:harness 本來就會丟掉它,每次清理都問只會訓練出無腦點過)。hook 是唯一的 `rm` 層:v3.14.2 把 `settings.json` 的 `Bash(rm -rf:*)` ask 規則拿掉了 —— CLI 對宣告式 `ask` 規則在所有模式(含 bypass)都會問、逐子指令比對、不管 hook 說什麼,所以那條規則在 hook 之外每次清理 scratchpad 都跳確認,任何 hook 端的豁免都碰不到它(CLI 內建的關鍵路徑保護仍會在所有模式下對根目錄 / 頂層目錄 / home / cwd 的刪除發問)。宣告式 `ask`(push、reset --hard、clean、sudo)與 `deny` 規則留在 `settings.json`,給的是連 bypass 下都該問的事 —— v3.14.3 再加三條給 `rm -rf ~/*`、`$HOME/*`、`../*`:bypass 會丟掉 hook 的 ask,而這三種寫法永遠碰不到 `/tmp` 的 scratchpad,所以能在 bypass 下發問又不會連環確認;hook 端也鏡射它們(任何旗標拼寫),給其他模式與 stop-gate 黑名單用。v3.14.4:ask 層改讀剝掉 heredoc 內文的指令 —— 寫進記憶檔的文字不是指令(fleet 的 48 次 subagent `.env` 卡關有 17 次就是這樣,每次中位數等 10 分鐘),而且專案自己的樹對 `rm -rf` 比照 scratchpad 豁免;deny 層仍讀全文。v3.14.5:`/tmp/<名字>/…` 也放行 —— 開發機上 `/tmp` 本來就是可拋棄的,fleet 的 subagent 刪過的 `/tmp/<名字>` 全是自己建的 —— 但 `/tmp`、`/tmp/`、`/tmp/*` 照問(整棵 `/tmp/claude-<uid>` 會放行:已知邊界)。contains 匹配強過前綴規則 —— 但它是絆索,不是沙箱 |
 | 「`--local` 生成永不帶走本機狀態」 | 複製改用 `git archive HEAD` —— 只帶被追蹤的內容:gitignore 的憑證(`.secrets/`)、本機設定、未追蹤的草稿全部留在原地;未提交的模板修改也不會跟著走(先 commit)。非 git 來源退回 `cp -R` + 清除已知洩漏點(v3.10) |
@@ -101,7 +102,7 @@ v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才
 | 「每筆記分板列都標明產生它的 harness 版本」 | `/wrap` 從 `.claude/.starter-version` 最後一行的 `claude-starter@<ref>` 戳記填入 `harness` 欄;release 都打 git tag,ref→版本的對映是機械的。戳記說真話(v3.10):**任何**改動了機制的 sync 都追加 `synced-to:` 戳記(不再只限 `--update-stock`);GitHub 模式生成蓋的是實際 clone 到的 template head,不是可能過期的 spawner checkout |
 | 「harness 的摩擦是資料,不是體感」 | `/wrap` 只在機制真的出問題時把枚舉列(`area` × `severity`)寫進 `.ai_context/friction.csv`;`harness-report.sh` 把它跟 gatelog 的 `INTEGRITY` 列 join 起來 |
 | 「評分是算出來的,不是回憶出來的」 | `scripts/harness-report.sh`(CI 有測)按 harness 版本計算 outcome/gate/escalation/成本聚合;N<5 不印百分比;刻意不存在綜合分數 |
-| 「評分資料要交叉核對,不是照單全收」 | `harness-report.sh` 的 `== integrity` 節:記分板↔gatelog 的 `gate_failures` 不一致、孤兒任務目錄(從未進記分板的 run)、缺 PASS/UNARMED 證據、枚舉違規 —— 一律列出,永不自動修復 |
+| 「評分資料要交叉核對,不是照單全收」 | `harness-report.sh` 的 `== integrity` 節:記分板↔gatelog 的 `gate_failures` 不一致、孤兒任務目錄(從未進記分板的 run)、缺 PASS/UNARMED 證據、枚舉違規、FAIL 之後換了 verify 才 PASS 的里程碑 —— 一律列出,永不自動修復 |
 | 「常駐注入的檔案必須保持小」 | `brief.md`/`lessons.md` 超過 4 KB 警告、`state.md` 5 KB pre-commit 上限 + 警告(S7)、`INDEX.md` 自身有大小守衛測試 + 專案內超過 4 KB 時 session-start 警告 |
 | 「大塊資料外部化」(S2) | `check-context-bulk.sh` pre-commit:任何 staged 的 `.ai_context` 檔案超過 100 KB 即擋下 —— dump 用引用,不用貼上 |
 | 「記分板數字必須是真的」 | Stop gate 每次真實執行寫入 `gatelog`;`/wrap` 彙總成 `scoreboard.csv` |
@@ -247,17 +248,20 @@ claude-starter/
 │   │   ├── stop-gate.sh        /task 里程碑閘門 —— verify 紅燈不准停
 │   │   └── lint.sh.example     語言 init 之後填入你的 linter
 │   ├── agents/                 /task 班底:scout、planner、plan-critic、
-│   │                           executor、verifier、reframer
+│   │                           executor、verifier、final-verifier、reframer
 │   └── skills/
 │       ├── wrap/SKILL.md       /wrap —— session 收尾記憶寫回
+│       ├── wrap/reference.md   任務收尾 + friction 列(按需載入)
 │       ├── task/SKILL.md       /task —— 長程里程碑 harness
 │       ├── task/reference.md   worktree 協定 + profile 旋鈕(按需載入)
+│       ├── task/pair.md        pair-codex judge 協定(只在 pair-* profile 載入)
 │       ├── setup/SKILL.md      /setup —— 第一次 session 的出生協定
 │       └── number-check/SKILL.md  /number-check —— 回報量測數字前先檢查它
 ├── .ai_context/                第 3 層(schema v3)
 ├── .secrets/                   Runtime-only 憑證(Read 拒讀 · git 不追蹤)
 ├── .pre-commit-config.yaml     H1 密鑰掃描 + S7 大小上限
-├── scripts/                    pre-commit 輔助腳本(專案保留)
+├── scripts/                    pre-commit 守門 + /task 輔助(pair、profile、
+│                               status、statusline)+ harness-report(專案保留)
 ├── tests/run.sh                L1+L2 回歸套件(CI 內建執行)
 ├── .mcp.json.example           MCP 樣板(--kind analysis 保留)
 ├── .github/workflows/lint.yml  模板 repo 自身的 CI(生成時移除)

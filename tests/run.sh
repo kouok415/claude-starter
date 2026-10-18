@@ -255,6 +255,14 @@ echo "$err" | grep -q 'no executor' && no "S-size task accused of not spawning" 
 # wiring: settings.json routes SubagentStart and denies hand edits
 grep -q '"SubagentStart"' "$REPO/.claude/settings.json" && ok "settings routes SubagentStart" || no "SubagentStart missing from settings"
 grep -q 'spawn-log.sh\\" executor' "$REPO/.claude/settings.json" && ok "executor matcher wired" || no "executor matcher missing"
+grep -q 'spawn-log.sh\\" verifier' "$REPO/.claude/settings.json" && ok "verifier matcher wired (own class)" || no "verifier matcher missing"
+python3 - "$REPO/.claude/settings.json" <<'PY' && ok "verifier matcher is a plain name and the crew regex no longer lists it" || no "verifier routing ambiguous (would double-log or catch final-verifier)"
+import json, sys
+ms = [h["matcher"] for h in json.load(open(sys.argv[1]))["hooks"]["SubagentStart"]]
+sys.exit(0 if "verifier" in ms and not any("verifier" in m.split("|") for m in ms if m != "verifier") else 1)
+PY
+printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" verifier
+grep -q "	M2	verifier$" "$D/.ai_context/tasks/demo/spawnlog" && ok "verifier class lands in the spawnlog" || no "verifier row wrong"
 grep -q 'Edit(./.ai_context/tasks/\*\*/spawnlog)' "$REPO/.claude/settings.json" && ok "spawnlog Edit-denied" || no "spawnlog not Edit-denied"
 
 echo "=== L1-3 · session-start: injection + warnings"
@@ -441,6 +449,10 @@ if [ -f "$REPO/sync-project.sh" ]; then
   printf '# p\n\n## Definition of done\n\n- Every reported number passed `/number-check`.\n' > "$D8/CLAUDE.md"
   out3=$("$REPO/sync-project.sh" "$D8" 2>&1)
   echo "$out3" | grep -q 'new skill /number-check installed' && no "number-check suggested to a CLAUDE.md that already names it" || ok "no number-check suggestion when CLAUDE.md already names it"
+  echo "$out3" | grep -q 'logs verifier spawns as' && no "verifier-class suggestion on a stock settings.json" || ok "stock settings.json carries the verifier class (no suggestion)"
+  sed -i.bak -e 's/"matcher": "verifier"/"matcher": "verifier-old"/' -e 's/spawn-log.sh\\" verifier/spawn-log.sh\\" other/' "$D8/.claude/settings.json" && rm -f "$D8/.claude/settings.json.bak"
+  out4=$("$REPO/sync-project.sh" "$D8" 2>&1)
+  echo "$out4" | grep -q 'logs verifier spawns as "other"' && ok "customized pre-class settings.json gets the verifier-matcher suggestion" || no "verifier-matcher suggestion missing for a customized settings.json"
 else
   skp "sync pairing + adopt tests (spawned project — template-repo only)"
 fi
@@ -1110,6 +1122,41 @@ out3=$(bash "$REPO/scripts/harness-report.sh" "$D2"); rc=$?
 D3="$WORK/l117c"; mkdir -p "$D3/.ai_context"
 out4=$(bash "$REPO/scripts/harness-report.sh" "$D3")
 echo "$out4" | grep -q 'no harness data yet' && ok "truly-empty project still gets the no-data line" || no "no-data early exit regressed"
+D4="$WORK/l117d"; mkdir -p "$D4/.ai_context/tasks/mv"
+printf '# Plan: mv\n\n## M1: a [done]\n- verify: `x`\n\n## M2: b [done]\n- verify: `x`\n\n## M3: c [done]\n- verify: `x`\n\n## M4: d [done]\n- verify: `x`\n' > "$D4/.ai_context/tasks/mv/plan.md"
+{ printf '2026-07-10T10:00:00\tM1\tFAIL\tcheck --all\n2026-07-10T10:05:00\tM1\tPASS\tcheck --year 2014\n'
+  printf '2026-07-10T11:00:00\tM2\tFAIL\tpytest\n2026-07-10T11:05:00\tM2\tPASS\tpytest\n'
+  printf '2026-07-10T12:00:00\tM3\tPASS\ta\n2026-07-10T12:05:00\tM3\tPASS\tb\n'
+  printf '2026-07-10T13:00:00\tM4\tFAIL\tgen | wc -l\n2026-07-10T13:05:00\tM4\tPASS\tgen | head\n'; } > "$D4/.ai_context/tasks/mv/gatelog"
+out5=$(bash "$REPO/scripts/harness-report.sh" "$D4")
+echo "$out5" | grep -q 'verify changed after FAIL: tasks/mv/ M1 — FAIL ran `check --all`, PASS ran `check --year 2014`' && ok "verify narrowed after a FAIL surfaced with both commands" || no "verify change after FAIL not surfaced"
+echo "$out5" | grep -q 'verify changed after FAIL: tasks/mv/ M2' && no "same-command repair misflagged as a moved gate" || ok "fix-the-code repair (same command) not flagged"
+echo "$out5" | grep -q 'verify changed after FAIL: tasks/mv/ M3' && no "change without a prior FAIL misflagged" || ok "command change with no FAIL before it not flagged"
+echo "$out5" | grep -q 'verify changed after FAIL: tasks/mv/ M4 — FAIL ran `gen / wc -l`, PASS ran `gen / head`' && ok "pipes inside commands survive the report stream" || no "piped verify command broke the VC row"
+D5="$WORK/l117e"; T5="$D5/.ai_context/tasks"; mkdir -p "$T5/dv" "$T5/legacy" "$T5/small" "$T5/nosl" "$T5/pr/pair"
+mkplan() { # $1 file, $2 profile, $3 size, then "id status risk" triples
+  local f="$1" p="$2" z="$3"; shift 3
+  printf '# Plan: x\n<!-- profile: %s ; size: %s -->\n' "$p" "$z" > "$f"
+  while [ $# -gt 0 ]; do printf '\n## %s: t [%s]\n- verify: `true`\n- risk: %s\n' "$1" "$2" "$3" >> "$f"; shift 3; done
+}
+mkplan "$T5/dv/plan.md" opus-tier M M1 "done" med M2 "done" high M3 "done" low M4 pending med
+printf 'x\t-\tother\nx\tM1\texecutor\nx\tM1\tverifier\nx\tM2\texecutor\nx\tM2\tother\nx\tM3\texecutor\n' > "$T5/dv/spawnlog"
+mkplan "$T5/legacy/plan.md" opus-tier L M1 "done" med M2 "done" med
+printf 'x\t-\tother\nx\tM1\texecutor\nx\tM1\tother\nx\tM2\texecutor\n' > "$T5/legacy/spawnlog"
+mkplan "$T5/small/plan.md" opus-tier S M1 "done" high
+printf 'x\t-\tother\n' > "$T5/small/spawnlog"
+mkplan "$T5/nosl/plan.md" opus-tier M M1 "done" high
+mkplan "$T5/pr/plan.md" pair-codex M M1 "done" med M2 "done" high M3 "done" med
+printf 'x\t-\tother\nx\tM1\texecutor\nx\tM2\texecutor\nx\tM3\texecutor\nx\t-\tverifier\n' > "$T5/pr/spawnlog"
+printf 'x\t1\treset\tverifier\tM1\nx\t1\tstart\tverifier\tM1\nx\t2\tstart\tverifier\tM2\n' > "$T5/pr/pair/runlog"
+out6=$(bash "$REPO/scripts/harness-report.sh" "$D5")
+echo "$out6" | grep -q 'verification depth gap: tasks/dv/ — 1 of 2 \[done\] risk:med/high milestones had no verifier spawn while in progress (M2)$' && ok "depth gap: high milestone with only a non-verifier spawn flagged; low and pending ignored" || no "depth gap (verifier class) wrong"
+echo "$out6" | grep -q 'verification depth gap: tasks/legacy/ — 1 of 2 .*(M2)$' && ok "depth gap: pre-class spawnlogs count 'other' as the verifier seat" || no "depth gap (legacy spawnlog) wrong"
+echo "$out6" | grep -q 'depth gap: tasks/small/' && no "S task flagged (S has no verifier step)" || ok "depth gap: S tasks exempt"
+echo "$out6" | grep -q 'depth gap: tasks/nosl/' && no "task without a spawnlog flagged (SubagentStart may never fire)" || ok "depth gap: no spawnlog = Claude seat unjudged"
+echo "$out6" | grep -q 'verification depth gap: tasks/pr/ — 2 of 3 .*(M2 M3)$' && ok "depth gap: pair-* reads the runlog for med, both seats for high" || no "depth gap (pair) wrong"
+csv=$(bash "$REPO/scripts/harness-report.sh" --csv "$D5")
+echo "$csv" | grep -q 'depth gap' && no "--csv polluted by the depth-gap line" || ok "--csv untouched by the depth-gap line"
 
 echo "=== L1-18 · doc freshness floor (F24)"
 if [ -f "$REPO/MIGRATION.md" ] && [ -f "$REPO/README.zh-TW.md" ]; then
@@ -1124,6 +1171,28 @@ if [ -f "$REPO/MIGRATION.md" ] && [ -f "$REPO/README.zh-TW.md" ]; then
   done
 else
   skp "doc freshness smoke (spawned project — template-repo only)"
+fi
+
+echo "=== L1-18b · box trees name every shipped agent, skill file and hook"
+if [ -f "$REPO/MIGRATION.md" ] && [ -f "$REPO/README.zh-TW.md" ]; then
+  for pair in "README.md|## What's in the box" "README.zh-TW.md|## 盒子裡有什麼"; do
+    f="${pair%%|*}"; h="${pair#*|}"
+    tree="$(awk -v h="$h" '$0==h {f=1; next} f && /^```/ {if (++n==2) exit; next} f && n==1' "$REPO/$f")"
+    [ -n "$tree" ] || { no "$f: no box tree under '$h'"; continue; }
+    miss=""
+    for a in "$REPO"/.claude/agents/*.md; do
+      n="$(basename "$a" .md)"; echo "$tree" | grep -qE "(^|[^a-z-])$n([^a-z-]|\$)" || miss="$miss $n"
+    done
+    for k in "$REPO"/.claude/skills/*/*.md; do
+      n="$(basename "$(dirname "$k")")/$(basename "$k")"; echo "$tree" | grep -qF "$n" || miss="$miss $n"
+    done
+    for k in "$REPO"/.claude/hooks/*; do
+      n="$(basename "$k")"; echo "$tree" | grep -qF "$n" || miss="$miss $n"
+    done
+    [ -z "$miss" ] && ok "$f box tree names every agent, skill file and hook" || no "$f box tree is missing:$miss"
+  done
+else
+  skp "box-tree parity (spawned project — template-repo only)"
 fi
 
 echo "=== L1-19 · task legibility: STATUS.md view + statusline (v3.12)"
