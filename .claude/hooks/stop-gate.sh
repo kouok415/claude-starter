@@ -70,11 +70,11 @@
 #     happens to match /no such file|can't open/i — which a just-armed
 #     milestone's verify output does. Non-empty stdout breaks the
 #     conjunction, so blocks are honored regardless of verify text.
-#   - In-flight deferral: a fresh executor spawn row for the armed
-#     milestone means the completion notification WILL re-wake the session
-#     — a guaranteed-red verify at that stop buys nothing. One WAITING row
-#     per spawn row, then the gate re-arms (a hung executor cannot keep it
-#     off past the freshness window).
+#   - In-flight deferral: a background executor that Claude Code reports as
+#     running (Stop payload `background_tasks`) WILL re-wake the session
+#     when it finishes — a likely-red verify at that stop buys nothing.
+#     Every stop while one runs defers with a WAITING row. (It first read
+#     spawnlog freshness; the deferral block says why that failed.)
 #   - Green boundary: a PASS with [pending] milestones left used to allow a
 #     silent park. Now: one continuation prompt per (session, milestone) —
 #     continue or explicitly pause; the second stop passes with a PAUSED
@@ -505,30 +505,28 @@ if guard_forbidden_verify "$cmd"; then
   exit 2
 fi
 
-# --- In-flight executor deferral (v3.14) -------------------------------------
+# --- In-flight executor deferral (v3.14; reads the Stop payload) -------------
 # A red block's only value is stopping a turn nothing would ever re-wake.
-# A fresh executor spawn row for THIS milestone means the completion
-# notification will re-wake the session — running the (just-armed,
-# guaranteed-red) verify here burns runtime, a red-counter strike, and is
-# the exact output the CLI heuristic misreads. One deferral per spawn row:
-# the wake-up turn re-arms the gate, and past the freshness window a hung
-# executor stops shielding the milestone.
-INFLIGHT_S=2700  # 45 min — above observed executor runtimes, below "hung"
-sp_ts="$(awk -F'\t' -v m="${ms:-?}" '$2==m && $3=="executor" {t=$1} END {if (t) print t}' "$spawnlog" 2>/dev/null)"
-if [ -n "$sp_ts" ] && \
-   ! grep -qF "${TAB}${ms:-?}${TAB}WAITING${TAB}executor in flight since ${sp_ts}" "$gatelog" 2>/dev/null; then
-  sp_e="$(date -d "$sp_ts" +%s 2>/dev/null || date -j -f '%Y-%m-%dT%H:%M:%S' "$sp_ts" +%s 2>/dev/null || true)"
-  now_e="$(date +%s)"
-  if [ -n "$sp_e" ] && [ "$((now_e - sp_e))" -ge 0 ] && [ "$((now_e - sp_e))" -lt "$INFLIGHT_S" ]; then
-    printf '%s\t%s\tWAITING\texecutor in flight since %s\n' \
-      "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$sp_ts" >> "$gatelog" 2>/dev/null || true
-    slug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
-    ms_j="$(printf '%s' "${ms:-?}" | tr -cd 'A-Za-z0-9._-')"
-    printf '{"systemMessage":"claude-starter gate: %s / %s - executor in flight (spawned %s); verify deferred until the session wakes."}\n' \
-      "$slug_j" "$ms_j" "$sp_ts"
-    status_refresh
-    exit 0
-  fi
+# Claude Code lists its running/pending background tasks in the Stop payload
+# (`background_tasks`; subagents carry `agent_type`). A background executor
+# there WILL re-wake the session when it finishes, so running the (likely
+# red) verify now burns runtime and a red-counter strike. Every stop while
+# one runs defers. No executor listed — or no field at all (older CC, format
+# drift) — runs the verify: the failure direction is a visible red block,
+# never a dark stop. Spawnlog freshness (the first version) is not in-flight
+# evidence: every re-wake of a background executor logs another
+# SubagentStart row, so an executor that had already reported still left a
+# fresh row, the gate deferred, and nothing was left to wake the session
+# (codex_desktop 2026-10-19 and 10-21).
+if printf '%s' "${payload:-}" | grep -q '"agent_type"[[:space:]]*:[[:space:]]*"executor"'; then
+  printf '%s\t%s\tWAITING\texecutor in flight (background_tasks)\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" >> "$gatelog" 2>/dev/null || true
+  slug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
+  ms_j="$(printf '%s' "${ms:-?}" | tr -cd 'A-Za-z0-9._-')"
+  printf '{"systemMessage":"claude-starter gate: %s / %s - executor in flight; verify deferred until it reports."}\n' \
+    "$slug_j" "$ms_j"
+  status_refresh
+  exit 0
 fi
 
 # --- Green-boundary continuation (v3.14) -------------------------------------

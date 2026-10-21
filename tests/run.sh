@@ -208,24 +208,34 @@ grep -q "	-	other$" "$D/.ai_context/tasks/demo/spawnlog" && ok "intake spawn row
 sed -i.bak 's/## M2: current \[pending\]/## M2: current [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
 printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" executor
 grep -q "	M2	executor$" "$D/.ai_context/tasks/demo/spawnlog" && ok "executor row attributed to the armed milestone" || no "executor row wrong"
-# fresh executor row => in-flight deferral (v3.14): quiet stop, WAITING row,
-# the completion notification is the wake signal — no guaranteed-red verify.
-out=$(printf '{"session_id": "tsuite-sl1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "fresh executor row defers the verify (in-flight, v3.14)"
+# in-flight deferral reads the Stop payload: an executor Claude Code lists
+# as a running background task defers every stop (quiet, WAITING row) — its
+# completion notification is the wake signal. Payload shape as CC builds it.
+BT_EXEC='"background_tasks":[{"id":"a1","type":"subagent","status":"running","description":"Execute milestone M2","agent_type":"executor"}]'
+out=$(printf '{"session_id":"tsuite-sl1",%s}' "$BT_EXEC" | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
+ck 0 $rc "running background executor defers the verify (in-flight)"
 grep -q "	M2	WAITING	executor in flight" "$D/.ai_context/tasks/demo/gatelog" && ok "WAITING row records the deferral" || no "WAITING row missing"
 echo "$out" | grep -q 'executor in flight' && ok "deferral surfaces a systemMessage" || no "deferral systemMessage missing"
-# second stop, same spawn row => deferral spent, gate red with ladder message
-err=$(printf '{"session_id": "tsuite-sl1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "one deferral per spawn row — second stop re-arms the gate"
+printf '{"session_id":"tsuite-sl1",%s}' "$BT_EXEC" | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 0 $? "still running at the next stop => deferred again (no per-spawn cap)"
 n_wait=$(grep -c "	M2	WAITING	" "$D/.ai_context/tasks/demo/gatelog")
-[ "$n_wait" = 1 ] && ok "exactly one WAITING row per spawn row" || no "WAITING rows: want 1 got $n_wait"
+[ "$n_wait" = 2 ] && ok "one WAITING row per deferred stop" || no "WAITING rows: want 2 got $n_wait"
+# codex_desktop 2026-10-21 replay: a fresh executor row no stop has deferred
+# on, but the executor already reported (nothing listed) => the verify runs.
+# Spawnlog freshness never defers — background executors log a row per re-wake.
+printf '%s\tM2\texecutor\n' "$(date '+%Y-%m-%dT%H:%M:%S')" >> "$D/.ai_context/tasks/demo/spawnlog"
+grep -v "	M2	WAITING	" "$D/.ai_context/tasks/demo/gatelog" > "$D/.ai_context/tasks/demo/gatelog.new" && mv "$D/.ai_context/tasks/demo/gatelog.new" "$D/.ai_context/tasks/demo/gatelog"
+err=$(printf '%s' '{"session_id":"tsuite-sl1b","background_tasks":[]}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
+ck 2 $rc "finished executor + fresh spawn row => verify runs (no dark deferral)"
 echo "$err" | grep -q 'no executor spawn' && no "false no-spawn accusation despite executor row" || ok "executor row suppresses the hint"
 echo "$err" | grep -q 'escalate per the /task ladder' && ok "ladder guidance kept when spawn evidence exists" || no "ladder guidance missing"
-# stale executor row (past the freshness window) => no deferral, red at once
-printf '2026-01-01T00:00:00\t-\tother\n2026-01-01T00:00:01\tM2\texecutor\n' > "$D/.ai_context/tasks/demo/spawnlog"
-grep -v "	M2	WAITING	" "$D/.ai_context/tasks/demo/gatelog" > "$D/.ai_context/tasks/demo/gatelog.new" && mv "$D/.ai_context/tasks/demo/gatelog.new" "$D/.ai_context/tasks/demo/gatelog"
-printf '{"session_id": "tsuite-sl1b"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "stale executor row does not shield the milestone (hung-executor bound)"
+# only a verifier and a shell running (the shell's description quotes the
+# key, JSON-escaped) => not in flight
+printf '%s' '{"session_id":"tsuite-sl1c","background_tasks":[{"id":"a2","type":"subagent","status":"running","description":"Light-verify M2","agent_type":"verifier"},{"id":"b1","type":"shell","status":"running","description":"grep \"agent_type\":\"executor\" log","command":"sleep 60"}]}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "running verifier/shell does not defer"
+# no background_tasks field (older CC, format drift) => verify runs: loud, never dark
+printf '{"session_id": "tsuite-sl1d"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
+ck 2 $? "payload without background_tasks runs the verify (fails loud)"
 # arm M1 instead (no executor row for it) => diagnosis fires
 sed -i.bak -e 's/## M2: current \[in_progress\]/## M2: current [pending]/' -e 's/## M1: groundwork \[pending\]/## M1: groundwork [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
 err=$(printf '{"session_id": "tsuite-sl2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)

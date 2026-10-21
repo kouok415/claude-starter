@@ -177,7 +177,7 @@ prefix; the ones you will meet:
 | `… is RED — blocked n stops in a row … yielding now` (`STUCK` row) | three red stops: the gate handed the milestone to you | read `gatelog` + `lessons.md`; fix the cause, change the verify (with a reason), or abandon |
 | `GATE INTEGRITY — the milestone gate cannot arm` | task state is broken (empty `CURRENT`, missing plan.md, zero or several `[in_progress]`, wrong branch); logged as `INTEGRITY` | fix the named state; a mid-intake pause is legitimate — say so |
 | `GATE REFUSED — … forbidden operation` | the verify contains a privileged command, git push or `rm -rf` on an absolute path; it was not run | rewrite that verify in plan.md |
-| `… executor in flight … verify deferred` (`WAITING` row) | an executor is still running; one deferral per spawn | wait — its completion wakes the session |
+| `… executor in flight … verify deferred` (`WAITING` row) | an executor is still running (Claude Code lists it); every stop defers until it reports | wait — its completion wakes the session |
 | `MILESTONE COMPLETE …` | a green boundary; the model must say continue or pause | answer it if it asked you something |
 | `… is green; the run is paused at a milestone boundary` (`PAUSED` row) | the run stopped on green and is waiting | say continue, or redirect |
 | `… is a human checkpoint - run held; sign off with: touch …` | a `checkpoint: human` milestone passed | review its demo, then run the `touch` it names |

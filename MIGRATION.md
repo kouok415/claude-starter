@@ -3,6 +3,7 @@
 Twenty migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
+- **[Unreleased — in-flight deferral reads the Stop payload](#unreleased--in-flight-deferral-reads-the-stop-payload)** — the gate defers a verify only while Claude Code lists a background `executor` as running; spawnlog freshness no longer counts, because a background executor logs a row per re-wake and an executor that had already reported kept the gate deferred with nothing left to wake the session.
 - **[Unreleased — templates, /setup, TUTORIAL](#unreleased--templates-setup-tutorial)** — the research template asks for a "What we don't know" section and empty-search records; `/setup` drafts a Verify that proves use, not liveness; TUTORIAL §7 gains a message → meaning → action table.
 - **[Unreleased — pair ledger rulings](#unreleased--pair-ledger-rulings)** — `pair/ledger.md` gains a `seats` column and a fixed `source` enum; minors can be ruled `noted`; high-stakes findings can only be fixed or left `open`.
 - **[Unreleased — sharper checker prompts](#unreleased--sharper-checker-prompts)** — the plan-critic runs `risk: low` verifies before work starts; rung 2 starts from rung 1's premise; verifier, final panel and executor get concrete checklists for vacuous tests, symptom masking, unseen readers and hand-synced lists; planner lenses are defined.
@@ -70,6 +71,42 @@ English README are the authority when translations drift):
   spawned from this template before the mechanisms layer existed.
 - **[D. multi-agent-dev-team → claude-starter](#d-from-multi-agent-dev-team-to-claude-starter)**
   — the original migration from the PM/BE/FE/QA + ECC + Discord layout.
+
+---
+
+## Unreleased — in-flight deferral reads the Stop payload
+
+`stop-gate.sh` used to defer a milestone's verify once per executor
+spawnlog row younger than 45 minutes. That proxy broke. An executor
+waiting on its own background work is re-woken by each event, and every
+re-wake fires `SubagentStart`, so one executor left ten rows. After it
+had reported and its verifier had passed, the orchestrator ended its
+turn so the gate would verify. The gate saw a fresh row, deferred, and
+nothing was left to wake the session. Two such dark stops hit one task;
+one lasted 2 h 51 min.
+
+The gate now reads `background_tasks` from the Stop hook input. Claude
+Code lists its running and pending background tasks there, each subagent
+with its `agent_type`; the field is present since at least CC 2.1.292.
+
+- **An `executor` listed** → the verify is deferred at every stop while
+  it runs (no per-spawn cap). `WAITING` rows read
+  `executor in flight (background_tasks)`.
+- **Nothing listed** (the executor reported, or only a verifier or a
+  shell runs) → the verify runs.
+- **No field** (an older CC, or a changed format) → the verify runs: a
+  visible red block, never a dark stop. On such a CC, expect one red
+  right after each executor spawn.
+- `spawnlog` itself is unchanged and still feeds the no-spawn diagnosis
+  and the `harness-report.sh` depth audit. Its `executor` rows now count
+  spawns plus re-wakes.
+
+### Migrating
+
+`sync-project.sh --update-stock <project>` updates `stop-gate.sh` and the
+task skill's `reference.md`. A customized gate needs its in-flight block
+replaced by the payload check by hand. No data migration: old
+`WAITING … since <ts>` rows stay valid history.
 
 ---
 

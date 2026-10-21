@@ -157,7 +157,7 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 | `… is RED — blocked n stops in a row … yielding now`(`STUCK` 列) | 連續三次紅燈:閘門把里程碑交給你 | 讀 `gatelog` + `lessons.md`;修掉原因、改 verify(附理由),或放棄 |
 | `GATE INTEGRITY — the milestone gate cannot arm` | 任務狀態壞了(`CURRENT` 空白、plan.md 不見、零個或多個 `[in_progress]`、分支不對);記成 `INTEGRITY` | 修掉訊息指出的狀態;intake 中途暫停是合法的 —— 說出來 |
 | `GATE REFUSED — … forbidden operation` | verify 含提權命令、git push 或絕對路徑的 `rm -rf`;沒有執行 | 在 plan.md 改寫那條 verify |
-| `… executor in flight … verify deferred`(`WAITING` 列) | executor 還在跑;每次 spawn 延後一次 | 等 —— 它結束時會喚醒 session |
+| `… executor in flight … verify deferred`(`WAITING` 列) | executor 還在跑(Claude Code 有列出);它回報之前每次停止都延後 | 等 —— 它結束時會喚醒 session |
 | `MILESTONE COMPLETE …` | 綠燈邊界;模型必須說明要繼續還是暫停 | 它若問了你問題,就回答 |
 | `… is green; the run is paused at a milestone boundary`(`PAUSED` 列) | run 停在綠燈上等你 | 說繼續,或改方向 |
 | `… is a human checkpoint - run held; sign off with: touch …` | `checkpoint: human` 里程碑通過了 | 看過 demo,再執行它指定的 `touch` |

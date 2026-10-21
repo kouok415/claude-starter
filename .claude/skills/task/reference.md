@@ -150,9 +150,10 @@ Non-checkpoint milestones: a PASS with `[pending]` milestones left gets
 ONE continuation prompt per session — answer it by continuing (flip
 statuses, spawn the executor) or by pausing EXPLICITLY (state why,
 restate any unanswered human question, finish). The second stop passes
-and records a PAUSED row. A fresh executor spawn also buys one quiet
-WAITING stop — the completion notification is the wake signal; do not
-babysit it with wait-loops.
+and records a PAUSED row. While a background executor runs, every stop
+is a quiet WAITING stop — its completion notification is the wake
+signal; do not babysit it with wait-loops. Once it has reported, the
+next stop runs the verify.
 
 ## STATUS.md — the live view
 
