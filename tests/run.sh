@@ -365,6 +365,11 @@ pkt() { # $1 = dir, $2 = name, $3 = stage, $4 = unit, $5 = base [, $6 = since] -
 res() { # $1 = packet, $2 = verdict, $3 = blocker, $4 = major -> result path
   printf 'run: completed\nverdict: %s\nbase: %s\nblocker: %s\nmajor: %s\nminor: 0\n\nfindings\n' "$2" "$(sed -n 's/^base: //p' "$1")" "$3" "$4" > "${1%.md}.result.md"; echo "${1%.md}.result.md"
 }
+cxp() { # $1 = dir, $2 = packet, $3 = result: evidence.sh codex for a completed run whose result the judge wrote with apply_patch (a transcript in the 0.165.0 shape)
+  local ro="$WORK/ro-${2##*/}.jsonl" since; since="$(date -u +%Y-%m-%dT%H:%M:%S).000Z"
+  ( cd "$1" && FAKE_HERDR_STATE="$WORK" bash "$REPO/tests/fake-herdr.sh" fake-rollout "${3#"$1"/}" "$ro" )
+  ( cd "$1" && PAIR_ROLLOUT="$ro" PAIR_SINCE="$since" PAIR_RESULT_PATH="${3#"$1"/}" bash scripts/evidence.sh codex "$2" "$3" completed ok )
+}
 cp "$C" "$WORK/c128"; rc=$(ev "$P" "done" S1); { [ "$rc" = 1 ] && cmp -s "$C" "$WORK/c128"; } && ok "done S1 refuses without a lane run; the card stays byte-identical" || no "done without a lane run (rc=$rc) or the card changed"
 { grep -qF 'NOT DONE — S1:' "$WORK/ev.out" && grep -qF 'lane smoke: never run' "$WORK/ev.out"; } && ok "NOT DONE lists the lane that never ran" || no "NOT DONE text wrong: $(head -c 400 "$WORK/ev.out")"
 ev "$P" run smoke >/dev/null; rc=$(ev "$P" "done" S1); { [ "$rc" = 1 ] && grep -qF 'no checker record for S1' "$WORK/ev.out"; } && ok "done needs a checker record" || no "done without checker (rc=$rc)"
@@ -392,7 +397,7 @@ ev "$Pb" approve >/dev/null; sed -i.bak 's/^Goal: .*/Goal: moved/' "$Pb/.ai_cont
 { [ "$rc" = 1 ] && grep -qF 'card changed since approval' "$WORK/ev.out"; } && ok "done refuses a card edited after approval" || no "edited card accepted (rc=$rc)"
 rc=$(ev "$Pp" "done" S1); { [ "$rc" = 1 ] && grep -qF 'no approving codex-card review' "$WORK/ev.out"; } && ok "pair on: done needs the card's Codex review" || no "codex-card gap missing (rc=$rc)"
 k="$(pkt "$Pp" 001-card card card "card:$(sed -e 's/^- \[[ ~ox]\] /- [ ] /' -e 's/ ✓ .*$//' -e '/^Closed:/d' "$Cp" | sha256sum | cut -c1-64)")"
-out="$(cd "$Pp" && bash scripts/evidence.sh codex "$k" "$(res "$k" pass 0 0)" completed ok 2>/dev/null)"; rc=$(ev "$Pp" "done" S1)
+out="$(cxp "$Pp" "$k" "$(res "$k" pass 0 0)" 2>/dev/null)"; rc=$(ev "$Pp" "done" S1)
 { [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] && [ "$out" = "$(lastid "$Pp" codex.jsonl)" ] && [ "$rc" = 1 ] && grep -qF 'no approving codex-slice review of S1' "$WORK/ev.out"; } \
   && ok "codex prints only the record id; the slice still needs its own review" || no "codex card record or slice gap wrong (out='$out' rc=$rc)"
 k="$(pkt "$Pp" 002-slice-S1 slice S1 "$(git -C "$Pp" rev-parse HEAD)" "$(git -C "$Pp" rev-parse HEAD)")"; ( cd "$Pp" && bash scripts/evidence.sh codex "$k" "$(res "$k" pass 0 1)" completed ok >/dev/null 2>&1 ); rc=$(ev "$Pp" "done" S1)
@@ -411,7 +416,7 @@ sed -i.bak 's/^Goal: .*/Goal: CARD-MARKER fixture goal/' "$Cp"; ev "$Pp" approve
 rc=$(ev "$P" approve --waive S1 --reason x); { [ "$rc" = 1 ] && grep -qF 'pairing is off' "$WORK/ev.err"; } && ok "pair off: nothing to waive" || no "waive with pair off (rc=$rc)"
 rc=$(ev "$Pp" approve --waive S9 --reason x); rc2=$(ev "$Pp" approve --waive S2); { [ "$rc" = 2 ] && [ "$rc2" = 2 ]; } && ok "--waive needs a real unit and a reason" || no "bad --waive accepted ($rc, $rc2)"
 ev "$Pp" start S2 >/dev/null; ev "$Pp" run smoke >/dev/null; rep S2 pass | ev "$Pp" check S2 --agent fx --source human >/dev/null
-k="$(pkt "$Pp" 005-slice-S2 slice S2 "$(git -C "$Pp" rev-parse HEAD)" "$(git -C "$Pp" rev-parse HEAD)")"; ( cd "$Pp" && bash scripts/evidence.sh codex "$k" "$(res "$k" pass 0 0)" completed ok >/dev/null 2>&1 ); rc=$(ev "$Pp" "done" S2)
+k="$(pkt "$Pp" 005-slice-S2 slice S2 "$(git -C "$Pp" rev-parse HEAD)" "$(git -C "$Pp" rev-parse HEAD)")"; cxp "$Pp" "$k" "$(res "$k" pass 0 0)" >/dev/null 2>&1; rc=$(ev "$Pp" "done" S2)
 { [ "$rc" = 0 ] && grep -q "^- \[x\] S2 .* codex@$(lastid "$Pp" codex.jsonl)\$" "$Cp"; } && ok "an approving codex-slice review lands as codex@<id>" || no "codex slice done failed (rc=$rc)"
 ev "$P" show smoke >/dev/null; { grep -qF "record: {\"id\":\"$(lastid "$P" smoke.jsonl)\"" "$WORK/ev.out" && grep -qF '"lane":"smoke"' "$WORK/ev.out"; } && ok "show prints the latest record" || no "show record wrong"
 grep -qF 'Not proven this time' "$WORK/ev.out" && ok "show ends with what is not proven" || no "show footer missing"
@@ -1887,21 +1892,34 @@ echo "=== L1-23 · pair-codex transport: task-pair.sh over a fake herdr (ADR-028
 PD="$WORK/l123"; FK="$WORK/l123-fake"   # fake herdr's log/state live OUTSIDE the fixture repo
 CD="$PD/.ai_context/tasks/pdemo"; PKD="$CD/pair"; RL="$PKD/runlog"
 mkdir -p "$PD/scripts" "$PD/.claude/hooks" "$PKD" "$FK/bin" "$FK/codex-home" "$FK/empty-home" "$FK/state"
-cp "$REPO/scripts/task-pair.sh" "$PD/scripts/"; cp "$REPO/.claude/hooks/guard-patterns.sh" "$REPO/.claude/gitleaks.toml" "$PD/.claude/hooks/"
+cp "$REPO/scripts/task-pair.sh" "$REPO/scripts/precommit-gitleaks.sh" "$PD/scripts/"; cp "$REPO/.claude/hooks/guard-patterns.sh" "$REPO/.claude/gitleaks.toml" "$PD/.claude/hooks/"
 mv "$PD/.claude/hooks/gitleaks.toml" "$PD/.claude/"   # the real evidence.sh (L1-44) hashes it with the lane directives
 cp "$REPO/tests/fake-herdr.sh" "$FK/bin/herdr"; chmod +x "$FK/bin/herdr"
 cat > "$PD/scripts/evidence.sh" <<'EOF'
 #!/usr/bin/env bash
-# L1-23 stub of scripts/evidence.sh: logs each call; codex prints a record id
+# L1-23 stub of scripts/evidence.sh: logs each call; codex appends a record in
+# codex.jsonl's shape (what task-pair.sh counts the quota and the re-ask gate
+# from; its tree is FAKE_EVIDENCE_TREE, else one `status --tree` never prints)
+# and prints its id
 L="${FAKE_EVIDENCE_LOG:-/dev/null}"
 case "$1" in
   codex) printf '%s model=%s rollout=%s secs=%s\n' "$*" "${PAIR_MODEL:-}" "${PAIR_ROLLOUT:-}" "${PAIR_SECS:-}" >> "$L"
-         echo "rec-$(grep -c '^codex ' "$L")"; exit "${FAKE_EVIDENCE_RC:-0}" ;;
+         n="$(grep -c '^codex ' "$L")"; [ "${FAKE_EVIDENCE_RC:-0}" = 0 ] || { echo "rec-$n"; exit "$FAKE_EVIDENCE_RC"; }
+         h="$(head -n 6 "$3" 2>/dev/null | tr -d '\r')"; v=none; b=0; m=0
+         if [ "$4" = completed ]; then v="$(sed -n 's/^verdict: //p' <<<"$h")"; b="$(sed -n 's/^blocker: //p' <<<"$h")"; m="$(sed -n 's/^major: //p' <<<"$h")"; fi
+         mkdir -p .claude/evidence
+         printf '{"id":"rec-%s","lane":"codex-%s","unit":"%s","tree":"%s","task":"pdemo","run_state":"%s","verdict":"%s","critical":%s,"high":%s,"packet_sha":"%s"}\n' \
+           "$n" "$(sed -n 's/^stage: //p' "$2" | head -n 1)" "$(sed -n 's/^unit: //p' "$2" | head -n 1)" "${FAKE_EVIDENCE_TREE:-stub-record}" \
+           "$4" "${v:-none}" "${b:-0}" "${m:-0}" "$(sha256sum < "$2" | cut -c1-64)" >> .claude/evidence/codex.jsonl
+         echo "rec-$n"
+         # L1-47 (L7): a signal to task-pair.sh right after its record is written
+         case "${FAKE_EVIDENCE_KILL:-}" in TERM|9) kill "-$FAKE_EVIDENCE_KILL" "$(cut -f1 .claude/evidence/locks/pair-*.lock | head -n 1)"; sleep 1 ;; esac ;;
   show) echo "$*" >> "$L"; [ "${FAKE_EVIDENCE_NOREC:-0}" = 1 ] && { echo "evidence: no record for $2" >&2; exit 1; }
         echo "record: {\"id\":\"0123abcd\",\"lane\":\"$2\",\"exit\":0,\"executed\":3,\"verdict\":\"pass\"}"
         if [ "${FAKE_EVIDENCE_FLAGGED:-0}" = 1 ]; then echo "log withheld: scan hit fake"
         else echo "--- log tail (60 lines) ---"; tail -n 60 "$FAKE_EVIDENCE_LANELOG"; fi ;;
-  status) echo "$*" >> "$L"; printf 'evidence status — task pdemo (stub)\nlane smoke: stale — stub\n' ;;
+  status) echo "$*" >> "$L"; [ "${2:-}" != --tree ] || { echo "${FAKE_EVIDENCE_TREE:-stub-tree}"; exit 0; }
+          printf 'evidence status — task pdemo (stub)\nlane smoke: %s — stub\n' "${FAKE_EVIDENCE_LANE:-fresh}" ;;
   lint) echo "$*" >> "$L"; exit "${FAKE_EVIDENCE_LINT:-0}" ;;
 esac
 exit 0
@@ -1911,6 +1929,7 @@ printf 'echo ok\n' > "$PD/t.sh"; printf '.pytest_cache/\n.claude/evidence/\n' > 
 ( cd "$PD" && git init -q . && git add -A && git commit -qm init )
 PH="$(git -C "$PD" rev-parse HEAD)"
 H8="$(printf '%s' "$(cd "$PD" && pwd)" | sha256sum | cut -c1-8)"   # task-pair.sh's REPO_ID recipe
+JN="judge-$H8-pdemo"; EVD="$PD/.claude/evidence/pair/pdemo"   # the judge's herdr name; run state (gitignored, Edit-denied)
 pcard() { # $1 = codex|off: S1 done, S2 in progress (codex: yes), S3 open
   printf '# p\n<!-- card v4 ; pair: %s ; base: %s ; estimate: 1h 50L -->\nGoal: g\nDone when: `bash t.sh` prints ok ; outside check: the human runs t.sh\nDecisions: [human] bash only\n## Slices\n- [x] S1 thin path — lanes: smoke ; codex: no ✓ smoke@0123abcd\n- [~] S2 money path — lanes: smoke ; codex: yes ; notes: §Limits\n- [ ] S3 later — lanes: smoke ; codex: no\n' "$1" "$PH" > "$CD/card.md"
 }
@@ -1927,7 +1946,7 @@ pdig() { ( cd "$PD" && bash scripts/task-pair.sh digest 2>/dev/null ); }
 pstart() { pdl START "$1" "$(printf %.12s "$PH")" started; }
 papprove() { pdl APPROVE - "$(pdig | cut -c6-17)" codex_est=3; }
 pstart S2; papprove
-mkpkt() { printf 'stage: %s\nunit: %s\nbase: %s\n\n# packet body\n' "$2" "$3" "$4" > "$PKD/$1-$2.md"; echo "$PKD/$1-$2.md"; }
+mkpkt() { printf 'stage: %s\nunit: %s\nbase: %s\nscratch: /tmp/x/%s\n\n# packet body\n' "$2" "$3" "$4" "$1" > "$PKD/$1-$2.md"; echo "$PKD/$1-$2.md"; }   # one seq, one packet sha (as packet's scratch: line makes it)
 # tp <ENV=val ...> -- <task-pair args>: runs inside the fixture with the fake
 # herdr on PATH; stdout/stderr land in $FK/out and $FK/err, rc is echoed.
 # tp adds --over-estimate to send/check (transport tests send one unit many
@@ -1938,7 +1957,7 @@ tpx() {
   if [ "$flag" = 1 ]; then case "${1:-}" in send|check) set -- "$@" --over-estimate ;; esac; fi
   ( cd "$PD" && env HERDR_ENV=1 PATH="$FK/bin:$PATH" CODEX_HOME="$FK/codex-home" \
       FAKE_HERDR_LOG="$FK/herdr.log" FAKE_HERDR_STATE="$FK/state" \
-      FAKE_EVIDENCE_LOG="$FK/evidence.log" FAKE_EVIDENCE_LANELOG="$FK/lane.log" "${envs[@]}" \
+      FAKE_EVIDENCE_LOG="$FK/evidence.log" FAKE_EVIDENCE_LANELOG="$FK/lane.log" TASK_PAIR_START_GRACE_S=1 TASK_PAIR_NEW_WAIT_S=3 "${envs[@]}" \
       bash scripts/task-pair.sh "$@" ) >"$FK/out${TPSFX:-}" 2>"$FK/err${TPSFX:-}"; echo $?
 }
 tp() { tpx 1 "$@"; }
@@ -1963,9 +1982,9 @@ grep -q 'trust' "$FK/err" && ok "untrusted refusal names the fix" || no "untrust
 # Hooks tripwire: a judge we did not start cannot prove hooks are off.
 mkdir -p "$PD/.codex"; printf '{"hooks":{}}' > "$PD/.codex/hooks.json"
 rc=$(tp FAKE_HERDR_AGENT=idle -- ensure); ck 3 "$rc" "ensure refuses a foreign judge when .codex/hooks.json exists"
-printf 'name=judge-pdemo\nhooks_off=1\ndoc_max_bytes=32768\n' > "$PKD/judge"
+mkdir -p "$EVD"; printf 'name=%s\npane_id=w9:p9\nhooks_off=1\ndoc_max_bytes=32768\n' "$JN" > "$EVD/judge"
 rc=$(tp FAKE_HERDR_AGENT=idle -- ensure); ck 0 "$rc" "ensure accepts a judge whose record says hooks off at the current doc cap"
-rm -rf "$PD/.codex" "$PKD/judge"
+rm -rf "$PD/.codex" "$EVD/judge"
 rc=$(tp FAKE_HERDR_AGENT=idle -- ensure); ck 3 "$rc" "a judge with no record is refused even without .codex/hooks.json (its doc cap is unknown)"
 : > "$FK/herdr.log"
 
@@ -1977,17 +1996,17 @@ printf '%s' "$st_line" | grep -q -- '-s workspace-write' && ok "judge starts in 
 printf '%s' "$st_line" | grep -q 'project_doc_fallback_filenames' && ok "judge reads CLAUDE.md as its project doc" || no "CLAUDE.md fallback missing: $st_line"
 printf '%s' "$st_line" | grep -qE -- '(^| )-m |model_reasoning_effort|-c model=' && no "judge pins a model/effort (must inherit the user's Codex default)" || ok "judge inherits the user's Codex model and effort"
 printf '%s' "$st_line" | grep -q -- '-c project_doc_max_bytes=32768' && ok "X1: a small CLAUDE.md starts the judge with project_doc_max_bytes=32768" || no "doc cap missing from start argv: $st_line"
-grep -qx 'hooks_off=1' "$PKD/judge" && ok "judge record written (hooks_off=1)" || no "judge record missing"
-grep -qx 'doc_max_bytes=32768' "$PKD/judge" && ok "judge record keeps the doc cap it was started with" || no "judge record lacks doc_max_bytes: $(cat "$PKD/judge")"
+grep -qx 'hooks_off=1' "$EVD/judge" && ok "judge record written (hooks_off=1)" || no "judge record missing"
+grep -qx 'doc_max_bytes=32768' "$EVD/judge" && ok "judge record keeps the doc cap it was started with" || no "judge record lacks doc_max_bytes: $(cat "$EVD/judge")"
 grep -q 'GPT-5.6-Sol high' "$FK/out" && ok "ensure reports the observed model from the status line (0.165.0: capitalised model)" || no "model not scraped: $(cat "$FK/out")"
 rc=$(tp -- ensure); ck 0 "$rc" "ensure is idempotent (judge present)"
 [ "$(grep -c '^agent start' "$FK/herdr.log")" -eq 1 ] && ok "second ensure does not start a second judge" || no "ensure restarted a live judge"
 printf '  Trust this folder? Codex can read, edit, and run files\n\n› 1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit\n' > "$FK/trust.txt"
-rm -f "$FK/state/agent" "$PKD/judge"; : > "$FK/herdr.log"
+rm -f "$FK/state/agent" "$EVD/judge"; : > "$FK/herdr.log"
 rc=$(tp FAKE_HERDR_START=not_ready FAKE_HERDR_SCREEN="$FK/trust.txt" -- ensure)
-{ [ "$rc" = 4 ] && grep -qx 'doc_max_bytes=32768' "$PKD/judge" && ! grep -q '^agent send-keys' "$FK/herdr.log"; } \
+{ [ "$rc" = 4 ] && grep -qx 'doc_max_bytes=32768' "$EVD/judge" && ! grep -q '^agent send-keys' "$FK/herdr.log"; } \
   && ok "a judge that starts into a dialog (agent_not_ready): exit 4, no key sent, its record kept for the next ensure" || no "not_ready start (rc=$rc): $(cat "$FK/err")"
-rm -f "$PKD/judge"; tp -- ensure >/dev/null
+rm -f "$EVD/judge"; tp -- ensure >/dev/null
 
 # --- send: the happy path, the record, and the script's silence on verdicts ---
 pk=$(mkpkt 001 slice S2 "$HD")
@@ -2006,7 +2025,7 @@ grep '^agent prompt' "$FK/herdr.log" | grep -B1 'Read and execute' | head -1 | g
 grep -B1 "	001	start	" "$RL" | head -1 | grep -q "	001	reset	" && ok "runlog: reset row (same seq) precedes the start row" || no "runlog start row not preceded by a reset row: $(cat "$RL")"
 { [ "$(grep -c '^codex ' "$FK/evidence.log")" = 1 ] && grep -q '^codex [^ ]*/001-slice\.md [^ ]*/001-slice\.result\.md completed verdict=pass blocker=0 major=0 minor=0 model=' "$FK/evidence.log"; } \
   && ok "send: the settled run is handed to evidence.sh codex once (packet, result, state, reason)" || no "evidence.sh codex call wrong: $(cat "$FK/evidence.log")"
-grep -q '^codex .* model=GPT-5.6-Sol high rollout=[^ ]* secs=[0-9][0-9]*$' "$FK/evidence.log" && ok "...with the observed model, rollout and duration in its environment" || no "PAIR_* env not passed: $(cat "$FK/evidence.log")"
+grep -q "^codex .* model=GPT-5.6-Sol high rollout=$FK/codex-home/sessions/[0-9/]*/rollout-[^ ]*-fake-001-slice\.jsonl secs=[0-9][0-9]*$" "$FK/evidence.log" && ok "...with the observed model, this run's Codex transcript and duration in its environment" || no "PAIR_* env not passed: $(cat "$FK/evidence.log")"
 grep -q 'record=rec-1$' "$FK/out" && ok "send: summary names the record id evidence.sh printed" || no "record id missing: $(cat "$FK/out")"
 { grep 'Read and execute' "$FK/herdr.log" | head -1 | grep -q -- '--wait --timeout 7200000$' && ! grep -q 540000 "$FK/herdr.log"; } \
   && ok "send: herdr's wait is 2 hours (background run), the v3 540 s cap is gone" || no "prompt timeout wrong: $(grep 'Read and execute' "$FK/herdr.log" | head -1 | grep -o -- '--timeout.*')"
@@ -2032,28 +2051,35 @@ git -C "$PD" checkout -q CLAUDE.md
 pk=$(mkpkt 006 slice S2 "$HD")
 rc=$(tp FAKE_HERDR_PROMPT=timeout -- send "$pk"); ck 5 "$rc" "herdr timeout leaves the run in flight (exit 5, wait in the background)"
 grep -q "	006	waiting	" "$RL" && ok "runlog: waiting row on timeout" || no "runlog waiting row missing"
-[ -f "$PKD/.fp-006" ] && ok "in-flight fingerprint kept for wait" || no "in-flight fingerprint missing"
+{ [ -f "$EVD/fp-006" ] && [ ! -e "$PKD/.fp-006" ]; } && ok "in-flight state kept for wait — in .claude/evidence/pair/<slug>/, not in pair/" || no "in-flight state missing or in pair/"
 grep -q 'task-pair.sh wait 006' "$FK/out" && ok "timeout output names the wait command" || no "timeout output lacks the wait hint"
 r6="$(recs 006)"
 rc=$(tp FAKE_HERDR_WAIT=ok -- wait 006); ck 0 "$rc" "wait: settles the in-flight run"
 grep -q "	006	end:completed	" "$RL" && ok "runlog: wait completed the run" || no "runlog after wait wrong"
-[ ! -f "$PKD/.fp-006" ] && ok "in-flight fingerprint cleared after settle" || no "stale .fp file left"
+[ ! -f "$EVD/fp-006" ] && ok "in-flight state cleared after settle" || no "stale fp file left"
 rc=$(tp -- wait 006); ck 2 "$rc" "wait refuses a seq with no run in flight"
 pk=$(mkpkt 007 slice S2 "$HD"); p0=$(prompts)
-rc=$(tp FAKE_HERDR_PROMPT=stalled -- send "$pk"); ck 6 "$rc" "agent_prompt_stalled is failed:stalled, not resent"
+rc=$(tp FAKE_HERDR_PROMPT=stalled -- send "$pk"); ck 6 "$rc" "agent_prompt_stalled with no sign of a turn is not_started (6), not resent"
 [ "$(prompts)" -eq $((p0 + 1)) ] && ok "stalled prompt was not resubmitted" || no "prompt count after stall: $(prompts) (before $p0)"
+grep -q "	007	end:failed	.*	not_started$" "$RL" && ok "runlog: a stall that never became a turn is not_started" || no "stall row: $(grep '	007	' "$RL")"
+pk9=$(mkpkt 009 slice S2 "$HD")   # written before 008 runs: a new file in pair/ would void it
 pk=$(mkpkt 008 slice S2 "$HD")
 rc=$(tp FAKE_HERDR_PROMPT=blocked -- send "$pk"); ck 4 "$rc" "judge blocked mid-run exits 4 (human)"
-grep -q "	008	end:blocked	" "$RL" && ok "runlog: blocked recorded" || no "runlog blocked row missing"
-pk=$(mkpkt 009 slice S2 "$HD"); p0=$(prompts)
-rc=$(tp -- send "$pk"); ck 4 "$rc" "send refuses while the judge is still blocked"
+{ grep -q "	008	blocked	" "$RL" && ! grep -q "	008	end:" "$RL" && [ -f "$EVD/fp-008" ] && [ -f "$EVD/parked-008" ]; } \
+  && ok "blocked mid-run: a blocked row, nothing settled, the run stays in flight (fp-008, parked-008)" || no "blocked mid-run: $(grep '	008	' "$RL")"
+p0=$(prompts)
+rc=$(tp -- send "$pk9"); ck 4 "$rc" "send refuses while the judge is still blocked mid-run"
 [ "$(prompts)" -eq "$p0" ] && ok "nothing was typed into a blocked judge" || no "prompt sent to a blocked judge"
-echo idle > "$FK/state/agent"
-miss=""; for w in 002:failed:no_result 003:failed:bad_header:verdict 004:failed:base_mismatch 005:failed:tree_changed 007:failed:stalled 008:blocked:herdr_blocked; do
+grep -q 'task-pair.sh wait 008' "$FK/err" && ok "...and names the wait that re-attaches once the human answered" || no "blocked refusal: $(cat "$FK/err")"
+rc=$(tp -- wait 008); ck 0 "$rc" "wait 008 re-attaches once the human answered and settles the run"
+{ [ "$(recs 008)" = 1 ] && grep -q '^codex [^ ]*/008-slice\.md [^ ]* completed verdict=pass' "$FK/evidence.log" && [ ! -e "$EVD/fp-008" ] && [ ! -e "$EVD/parked-008" ]; } \
+  && ok "...one record, of the finished run" || no "blocked run after wait: $(grep 008 "$FK/evidence.log")"
+miss=""; for w in 002:failed:no_result 003:failed:bad_header:verdict 004:failed:base_mismatch 005:failed:tree_changed; do
   s="${w%%:*}"; r="${w#*:}"
   [ "$(recs "$s")" = 1 ] && grep -q "^codex [^ ]*/$s-slice\.md [^ ]* ${r%%:*} ${r#*:} model=" "$FK/evidence.log" || miss="$miss $s"
 done
 [ -z "$miss" ] && ok "every settled failure became one record with its state and reason" || no "records missing or wrong for:$miss"
+[ "$(recs 007)" = 0 ] && ok "a stall that never became a turn writes no record" || no "the stall was recorded"
 [ "$r6" = 0 ] && ok "a herdr timeout (exit 5) writes no record — the run has not settled" || no "a timed-out run was recorded"
 { [ "$(recs 006)" = 1 ] && grep -q '^codex [^ ]*/006-slice\.md [^ ]* completed verdict=pass' "$FK/evidence.log"; } && ok "wait records the run once it settles" || no "wait did not record: $(grep 006 "$FK/evidence.log")"
 [ "$(recs 009)" = 0 ] && ok "a send refused at a blocked judge writes no record" || no "a refused send was recorded"
@@ -2063,7 +2089,7 @@ done
 # update notice on 0.162.1; one trust case keeps the 0.154 wording. The
 # rate-limit nudge is the 0.154 text: not verified on 0.165.0.
 SCR="$FK/screen.txt"
-nokeys() { ! grep -q '^agent send-keys judge-pdemo' "$FK/herdr.log"; }
+nokeys() { ! grep -q "^agent send-keys $JN" "$FK/herdr.log"; }
 printf '  Folder access\n  /fixture\n\n  Trust this folder? Codex can read, edit, and run files\n  here, subject to your permission settings.\n\n› 1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit\n' > "$SCR"
 pk=$(mkpkt 010 slice S2 "$HD"); p0=$(prompts); : > "$FK/herdr.log"
 rc=$(tp FAKE_HERDR_SCREEN="$SCR" -- send "$pk"); ck 4 "$rc" "trust dialog (0.165.0 'Trust this folder?') on screen: refused, never answered"
@@ -2075,15 +2101,15 @@ rc=$(tp FAKE_HERDR_SCREEN="$SCR" -- ensure); ck 4 "$rc" "the Codex 0.154 trust w
 printf '  Update available · 0.162.1 → 0.165.0\n  Release notes: https://github.com/openai/codex/releases/latest\n\n› 1. Update now (runs `sh -c '"'"'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'"'"'`)\n  2. Skip\n  3. Skip until next version\n\n  enter continue · esc skip\n' > "$SCR"
 cp "$SCR" "$FK/update.txt"; pk=$(mkpkt 011 slice S2 "$HD"); : > "$FK/herdr.log"
 rc=$(tp FAKE_HERDR_SCREEN="$SCR" FAKE_HERDR_ESC_CLEARS=0 -- send "$pk"); ck 4 "$rc" "an update notice that esc does not close: handed to the human"
-{ [ "$(prompts)" = 0 ] && grep -q '^agent send-keys judge-pdemo esc$' "$FK/herdr.log" && ! grep -q '^agent send-keys judge-pdemo enter' "$FK/herdr.log"; } \
+{ [ "$(prompts)" = 0 ] && grep -q "^agent send-keys $JN esc\$" "$FK/herdr.log" && ! grep -q "^agent send-keys $JN enter" "$FK/herdr.log"; } \
   && ok "update notice: esc (skip) is the only key sent — never enter (it runs the installer), never the packet" || no "update notice keys: $(grep '^agent \(send-keys\|prompt\)' "$FK/herdr.log" | tr '\n' '|')"
 cp "$FK/update.txt" "$SCR"; : > "$FK/herdr.log"
 rc=$(tp FAKE_HERDR_SCREEN="$SCR" FAKE_HERDR_ESC_CLEARS=1 -- send "$pk"); ck 0 "$rc" "update notice: skipped with esc, the run proceeds"
-! grep -q '^agent send-keys judge-pdemo enter' "$FK/herdr.log" && ok "...and enter was never sent" || no "enter sent at an update notice"
+! grep -q "^agent send-keys $JN enter" "$FK/herdr.log" && ok "...and enter was never sent" || no "enter sent at an update notice"
 printf '  Approaching rate limits\n  Switch to gpt-5.6-luna for lower credit usage?\n› 1. Switch to gpt-5.6-luna\n  2. Keep current model\n  Press enter to confirm or esc to go back\n' > "$SCR"
 pk=$(mkpkt 012 slice S2 "$HD"); : > "$FK/herdr.log"
 rc=$(tp FAKE_HERDR_SCREEN="$SCR" FAKE_HERDR_ESC_CLEARS=1 -- send "$pk"); ck 0 "$rc" "rate-limit nudge: dismissed with esc, run proceeds"
-grep -q '^agent send-keys judge-pdemo esc$' "$FK/herdr.log" && ok "esc sent for the rate-limit nudge (keeps the current model)" || no "esc not sent"
+grep -q "^agent send-keys $JN esc\$" "$FK/herdr.log" && ok "esc sent for the rate-limit nudge (keeps the current model)" || no "esc not sent"
 printf '  Approaching rate limits\n  Switch to gpt-5.6-luna for lower credit usage?\n  Press enter to confirm or esc to go back\n' > "$SCR"
 pk=$(mkpkt 013 slice S2 "$HD"); : > "$FK/herdr.log"
 rc=$(tp FAKE_HERDR_SCREEN="$SCR" FAKE_HERDR_ESC_CLEARS=0 -- send "$pk"); ck 4 "$rc" "a nudge that survives esc is handed to the human"
@@ -2101,17 +2127,17 @@ rm -f "$SCR"
 # --- /new on Codex 0.165.0: the new-thread picker ----------------------------
 pk=$(mkpkt 016 slice S2 "$HD"); : > "$FK/herdr.log"
 rc=$(tp FAKE_HERDR_NEW=picker -- send "$pk"); ck 0 "$rc" "/new opens the picker: '1. Use current Git worktree' is taken with enter, the run completes"
-{ [ "$(grep -c '^agent send-keys judge-pdemo enter$' "$FK/herdr.log")" = 1 ] && grep -q "	016	reset	.*	/new + current worktree$" "$RL"; } \
+{ [ "$(grep -c "^agent send-keys $JN enter\$" "$FK/herdr.log")" = 1 ] && grep -q "	016	reset	.*	/new + current worktree$" "$RL"; } \
   && ok "...one enter, and the reset row says so" || no "picker answer: $(grep '^agent send-keys' "$FK/herdr.log" | tr '\n' '|') $(grep '	016	reset' "$RL")"
-awk '/^agent send-keys judge-pdemo enter$/ {e = NR} /^agent prompt judge-pdemo Read and execute/ {p = NR} END {exit !(e && p > e)}' "$FK/herdr.log" \
+awk -v n="$JN" '$0 == "agent send-keys " n " enter" {e = NR} index($0, "agent prompt " n " Read and execute") == 1 {p = NR} END {exit !(e && p > e)}' "$FK/herdr.log" \
   && ok "the packet prompt comes only after the picker is answered" || no "packet prompt order wrong"
 pk=$(mkpkt 017 slice S2 "$HD"); : > "$FK/herdr.log"
 rc=$(tp FAKE_HERDR_NEW=picker_other -- send "$pk"); rm -f "$FK/state/screen"
 { [ "$rc" = 4 ] && [ "$(prompts)" = 0 ] && nokeys && grep -q 'another choice highlighted' "$FK/err"; } && ok "picker on 'Create new Git worktree': handed over, no key, no packet" || no "picker_other (rc=$rc): $(cat "$FK/err")"
-[ ! -e "$PKD/.fp-017" ] && ! grep -q "	017	start	" "$RL" && ok "...and no run was started (no start row, nothing in flight)" || no "a start row was written for an unsent packet"
+[ ! -e "$EVD/fp-017" ] && ! grep -q "	017	start	" "$RL" && ok "...and no run was started (no start row, nothing in flight)" || no "a start row was written for an unsent packet"
 pk=$(mkpkt 018 slice S2 "$HD"); : > "$FK/herdr.log"
 rc=$(tp FAKE_HERDR_NEW=picker_stuck -- send "$pk"); rm -f "$FK/state/screen"
-{ [ "$rc" = 4 ] && [ "$(prompts)" = 0 ] && [ "$(grep -c '^agent send-keys judge-pdemo enter$' "$FK/herdr.log")" = 1 ]; } && ok "a picker that one enter does not close: handed over after one enter, packet never typed" || no "picker_stuck (rc=$rc)"
+{ [ "$rc" = 4 ] && [ "$(prompts)" = 0 ] && [ "$(grep -c "^agent send-keys $JN enter\$" "$FK/herdr.log")" = 1 ]; } && ok "a picker that one enter does not close: handed over after one enter, packet never typed" || no "picker_stuck (rc=$rc)"
 
 printf '  ? for shortcuts\n' > "$SCR"; pk=$(mkpkt 019 slice S2 "$HD"); : > "$FK/herdr.log"
 rc=$(tp FAKE_HERDR_SCREEN="$SCR" -- send "$pk"); rm -f "$SCR"
@@ -2120,14 +2146,15 @@ rc=$(tp FAKE_HERDR_SCREEN="$SCR" -- send "$pk"); rm -f "$SCR"
 # --- the record is part of the run ------------------------------------------
 pk=$(mkpkt 019 slice S2 "$HD")
 rc=$(tp FAKE_EVIDENCE_RC=1 -- send "$pk")
-{ [ "$rc" = 6 ] && grep -q "	019	record_failed	.*	rc=1$" "$RL" && grep -q 'NOT recorded' "$FK/err" && [ -f "$PKD/.fp-019" ]; } \
-  && ok "evidence.sh codex failing: exit 6, a record_failed row, the run left unsettled (.fp) for wait" || no "record_failed (rc=$rc): $(grep '	019	' "$RL")"
-n0=$(nfiles); rc=$(tp -- packet card); { [ "$rc" = 5 ] && [ "$(nfiles)" = "$n0" ] && grep -q 'wait 019' "$FK/err"; } && ok "packet refuses while a run is unsettled — a new file in pair/ would void it" || no "packet during an unsettled run (rc=$rc)"
-rc=$(tp -- wait 019); { [ "$rc" = 0 ] && [ "$(recs 019)" = 2 ] && [ ! -f "$PKD/.fp-019" ]; } && ok "wait settles it again and the record is written" || no "wait after record_failed (rc=$rc, records $(recs 019))"
+{ [ "$rc" = 6 ] && grep -q "	019	record_failed	.*	rc=1$" "$RL" && grep -q 'NOT recorded' "$FK/err" && [ -f "$EVD/unrecorded-019" ] && [ ! -e "$EVD/fp-019" ]; } \
+  && ok "evidence.sh codex failing: exit 6, a record_failed row, the settled run kept as unrecorded-019" || no "record_failed (rc=$rc): $(grep '	019	' "$RL")"
+rc=$(tp -- packet card); x="$(cat "$FK/out")"; [ "$rc" = 0 ] && rm -f "$PD/$x"
+[ "$rc" = 0 ] && ok "an unrecorded run blocks no new packet (M8)" || no "packet after record_failed (rc=$rc): $(cat "$FK/err")"
+rc=$(tp -- wait 019); { [ "$rc" = 0 ] && [ "$(recs 019)" = 2 ] && [ ! -e "$EVD/unrecorded-019" ] && [ "$(prompts)" = 1 ]; } && ok "wait 019 retries the record (the judge is not asked again)" || no "wait after record_failed (rc=$rc, records $(recs 019))"
 
 # --- packet hygiene ---------------------------------------------------------
 pk=$(mkpkt 020 slice S2 0123456789abcdef0123456789abcdef01234567); p0=$(prompts)
-rc=$(tp -- send "$pk"); ck 6 "$rc" "commit-shaped base that is not HEAD: stale packet, not sent"
+rc=$(tp -- send "$pk"); ck 3 "$rc" "commit-shaped base that is not HEAD: stale packet refused (3), not sent"
 [ "$(prompts)" -eq "$p0" ] && ok "stale packet never reached the judge" || no "stale packet was sent"
 pk=$(mkpkt 021 card card "$(pdig)")
 rc=$(tp -- send "$pk"); ck 0 "$rc" "a card:<digest> base equal to the current card digest is sent and matched"
@@ -2137,7 +2164,7 @@ printf 'unit: S2\nbase: %s\n' "$HD" > "$PKD/023-slice.md"
 rc=$(tp -- send "$PKD/023-slice.md"); ck 2 "$rc" "packet without a stage: line is refused"
 pk=$(mkpkt 024 card card "$(pdig)"); pcedit 's/^Goal: g$/Goal: g2/'
 rc=$(tp -- send "$pk"); pcard codex
-{ [ "$rc" = 6 ] && grep -q 'stale packet' "$FK/err"; } && ok "a card packet from before a content edit is stale (6), never sent" || no "stale card packet (rc=$rc): $(cat "$FK/err")"
+{ [ "$rc" = 3 ] && grep -q 'stale packet' "$FK/err"; } && ok "a card packet from before a content edit is stale (3), never sent" || no "stale card packet (rc=$rc): $(cat "$FK/err")"
 pk=$(mkpkt 025 card card "$(pdig)")
 pcedit -e 's/^- \[ \] S3 \(.*\)$/- [x] S3 \1 ✓ smoke@0123abce check@0123abcf/'
 echo 'Closed: tree:0123456789ab head:0123456789ab ✓ smoke@0123abce check@0123abcf — 2026-10-28T00:00:00Z' >> "$CD/card.md"
@@ -2158,26 +2185,32 @@ grep -qF '    record: {"id":"0123abcd","lane":"smoke"' "$PD/$pk" && ok "packet: 
 { grep -q 'Re-run each lane yourself' "$PD/$pk" && grep -q 'Check of a check' "$PD/$pk" && grep -qF 'VERIFIED|NOT VERIFIED|INCONCLUSIVE' "$PD/$pk" && grep -q 'do not run scripts/evidence.sh' "$PD/$pk"; } \
   && ok "packet: slice checklist (re-run lanes, check of a check, claim grades, hands off the ledger)" || no "slice checklist incomplete"
 grep -q 'no summary from the implementer' "$PD/$pk" && ok "packet: the judge gets no implementer summary, on purpose" || no "no-summary line missing"
-grep -q "^Write \.ai_context/tasks/pdemo/pair/026-slice-S2\.result\.md (relative to the repository root" "$PD/$pk" && ok "packet: result path derived from the packet name, repo-relative (the prompt carries the absolute one)" || no "packet result path wrong: $(grep '^Write' "$PD/$pk")"
+grep -q "^Write \.ai_context/tasks/pdemo/pair/026-slice-S2\.result\.md (relative to the repository root" "$PD/$pk" && ok "packet: result path derived from the packet name, repo-relative (so is the prompt's)" || no "packet result path wrong: $(grep '^Write' "$PD/$pk")"
+grep -q 'once, with your$' "$PD/$pk" && grep -q '^file-edit tool (apply_patch, `\*\*\* Add File:`) — never through a shell command' "$PD/$pk" && ok "packet: the result is written once, with apply_patch — the write the record binds to" || no "packet: apply_patch instruction missing"
 [ "$(grep -cx "base: $HD" "$PD/$pk")" = 2 ] && ok "packet: result contract pins the same base" || no "packet result-contract base wrong"
-# rollout linkage: the judge's transcript is the newest Codex rollout whose
-# session_meta names this repo and started after the judge did. Shape recorded
-# on Codex 0.165.0 (first line session_meta; sessions/YYYY/MM/DD/).
-RO="$FK/codex-home/sessions/2026/10/28"; mkdir -p "$RO"
-rmeta() { # $1 id, $2 ts, $3 cwd
+# rollout linkage (pair review L1): the judge's transcript is a Codex rollout
+# written since the run began, in a day dir from the day before on, whose
+# session_meta names this repo and which holds this packet's path (the
+# prompt). Shape recorded on Codex 0.165.0 (first line session_meta;
+# sessions/YYYY/MM/DD/). The decoys carry a future mtime: only their content
+# or their day dir can rule them out.
+RO="$FK/codex-home/sessions/$(date +%Y/%m/%d)"; RO0="$FK/codex-home/sessions/2000/01/01"; mkdir -p "$RO" "$RO0"
+rmeta() { # $1 id, $2 ts, $3 cwd [, $4 the session's first prompt]
   printf '{"timestamp":"%s","ordinal":0,"type":"session_meta","payload":{"session_id":"%s","id":"%s","timestamp":"%s","cwd":"%s","runtime_workspace_roots":["%s"],"originator":"codex-tui","cli_version":"0.165.0"}}\n' "$2" "$1" "$1" "$2" "$3" "$3"
+  [ -z "${4:-}" ] || printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"user_message","message":"%s"}}\n' "$2" "$4"
 }
-rmeta a 2099-01-01T00:00:00.000Z "$PD" > "$RO/rollout-a.jsonl"
-rmeta b 2098-01-01T00:00:00.000Z "$PD" > "$RO/rollout-b.jsonl"
-rmeta c 2099-06-01T00:00:00.000Z /elsewhere > "$RO/rollout-c.jsonl"
-rmeta d 2000-01-01T00:00:00.000Z "$PD" > "$RO/rollout-d.jsonl"
+rmeta b 2099-01-01T00:00:00.000Z "$PD" 'an unrelated session' > "$RO/rollout-b.jsonl"
+rmeta c 2099-06-01T00:00:00.000Z /elsewhere "Read and execute the packet at $pk; x" > "$RO/rollout-c.jsonl"
+rmeta e 2099-06-01T00:00:00.000Z "$PD" "Read and execute the packet at $pk; x" > "$RO0/rollout-e.jsonl"
+rmeta d 2000-01-01T00:00:00.000Z "$PD" "Read and execute the packet at $pk; x" > "$RO/rollout-d.jsonl"   # right content, written before the run
+python3 -I -c 'import os, sys, time; t = time.time() + 3600; [os.utime(f, (t, t)) for f in sys.argv[1:]]' "$RO/rollout-b.jsonl" "$RO/rollout-c.jsonl" "$RO0/rollout-e.jsonl"
 rc=$(tp -- send "$pk"); ck 0 "$rc" "packet → send round-trips over the fake judge"
-grep -q "	026	end:completed	.*	$FK/codex-home/sessions/2026/10/28/rollout-a.jsonl	" "$RL" && ok "runlog: rollout column names the newest matching Codex transcript (not the other repo's, not the pre-start one)" || no "rollout linkage wrong: $(grep '	026	end' "$RL")"
+grep -q "	026	end:completed	.*	$FK/codex-home/sessions/[0-9/]*/rollout-[^	]*-fake-026-slice-S2\.jsonl	" "$RL" && ok "runlog: rollout column names this run's transcript (not another repo's or session's, not one from before the run or an old day dir)" || no "rollout linkage wrong: $(grep '	026	end' "$RL")"
 # pair/ is tracked: a path under $HOME names the user, so it is written ~/…
 rc=$(tp HOME="$WORK" -- packet slice S2); pk="$(cat "$FK/out")"; sq="${pk##*/}"; sq="${sq%%-*}"
 { [ "$rc" = 0 ] && grep -q '^You are the Codex judge for the active task in ~/l123\. ' "$PD/$pk" && ! grep -qF "$WORK/" "$PD/$pk"; } && ok "packet: paths under \$HOME are written ~/…" || no "home path in the packet (rc=$rc): $(grep -nF "$WORK/" "$PD/$pk" | head -3)"
 rc=$(tp HOME="$WORK" -- send "$pk")
-{ [ "$rc" = 0 ] && grep -q "	$sq	end:completed	.*	~/l123-fake/codex-home/sessions/2026/10/28/rollout-a.jsonl	" "$RL" && ! grep "	$sq	" "$RL" | grep -qF "$WORK/"; } \
+{ [ "$rc" = 0 ] && grep -q "	$sq	end:completed	.*	~/l123-fake/codex-home/sessions/[0-9/]*/rollout-[^	]*-fake-$sq-slice-S2\.jsonl	" "$RL" && ! grep "	$sq	" "$RL" | grep -qF "$WORK/"; } \
   && ok "runlog: the rollout column under \$HOME is ~/.codex/…-style, no home path in any row" || no "home path in the runlog (rc=$rc): $(grep "	$sq	end" "$RL")"
 rc=$(tp FAKE_EVIDENCE_FLAGGED=1 -- packet slice S2); pk="$(cat "$FK/out")"
 { [ "$rc" = 0 ] && grep -q 'log withheld' "$PD/$pk" && ! grep -qE '^    line [0-9]+$' "$PD/$pk"; } && ok "packet: a log the secret scan flagged is withheld, not one line of it inlined" || no "flagged log leaked (rc=$rc)"
@@ -2192,6 +2225,7 @@ rc=$(tp -- packet slice S9); ck 2 "$rc" "packet: a slice not on the card is refu
 grep -v '	START	S2	' "$CD/donelog" > "$FK/dl.tmp"; mv "$FK/dl.tmp" "$CD/donelog"; n0=$(nfiles)
 rc=$(tp -- packet slice S2); pstart S2
 { [ "$rc" = 3 ] && grep -q 'no open START row' "$FK/err" && [ "$(nfiles)" = "$n0" ]; } && ok "packet: no START row for the slice → refused (3), no file left" || no "START-less slice packet (rc=$rc)"
+pcedit -e 's/^- \[[ ~]\] \(S[23] .*\)$/- [x] \1/'   # the final judges the finished task: every slice [x] (marks keep the approval)
 rc=$(tp -- packet final); pk="$(cat "$FK/out")"; ck 0 "$rc" "packet: final generates"
 printf '%s' "$pk" | grep -qE '^\.ai_context/tasks/pdemo/pair/[0-9]{3}-final\.md$' && ok "packet: final is NNN-final.md" || no "final file name wrong: $pk"
 grep -qx "since: $PH" "$PD/$pk" && ok "packet: final since = the card's base:, full sha" || no "final since wrong: $(grep '^since' "$PD/$pk")"
@@ -2201,13 +2235,18 @@ grep -qx '    evidence status — task pdemo (stub)' "$PD/$pk" && ok "packet: fi
 echo x > "$PD/stray.txt"; rc=$(tp -- packet final); rm -f "$PD/stray.txt"
 { [ "$rc" = 3 ] && grep -q 'judges committed work' "$FK/err"; } && ok "packet: final with uncommitted work outside .ai_context/ is refused" || no "dirty final accepted (rc=$rc)"
 printf 'checker findings\n- major: suite skips t.sh — `grep skip t.sh`\n' > "$FK/rebut.md"
-rc=$(tp -- packet final --rebuttal "$FK/rebut.md"); pk="$(cat "$FK/out")"
+rc=$(tp FAKE_EVIDENCE_TREE=tf -- packet final --rebuttal "$FK/rebut.md")
+{ [ "$rc" = 3 ] && grep -q 'there is none — run check final first' "$FK/err"; } && ok "packet: a rebuttal answers a completed final review of this content — none yet, refused" || no "rebuttal before any final review (rc=$rc): $(cat "$FK/err")"
+rc=$(tp FAKE_EVIDENCE_TREE=tf -- send "$pk"); ck 0 "$rc" "packet final → send round-trips"
+rc=$(tp FAKE_EVIDENCE_TREE=tf -- packet final --rebuttal "$FK/rebut.md"); pk="$(cat "$FK/out")"
 { [ "$rc" = 0 ] && printf '%s' "$pk" | grep -qE '/[0-9]{3}-final-rebuttal\.md$'; } && ok "packet: rebuttal round generates NNN-final-rebuttal.md" || no "rebuttal (rc=$rc): $pk"
 { grep -q '^# Rebuttal round' "$PD/$pk" && grep -qx '> checker findings' "$PD/$pk" && grep -q '^> - major: suite skips t.sh' "$PD/$pk" && grep -q 'reproduce it (command + output) or refute it' "$PD/$pk"; } \
   && ok "packet: rebuttal quotes the whole file and demands commands" || no "packet rebuttal incomplete"
-rc=$(tp -- packet final --rebuttal "$FK/rebut.md"); ck 3 "$rc" "packet: a second rebuttal on the same base is refused"
+rc=$(tp FAKE_EVIDENCE_TREE=tf -- send "$pk"); ck 0 "$rc" "the rebuttal round runs"
+rc=$(tp FAKE_EVIDENCE_TREE=tf -- packet final --rebuttal "$FK/rebut.md"); ck 3 "$rc" "packet: a second rebuttal at the same content is refused"
 n0=$(nfiles); rc=$(tp -- packet final --rebuttal "$FK/nope.md")
 { [ "$rc" = 2 ] && [ "$(nfiles)" = "$n0" ]; } && ok "packet: a refused packet leaves no file behind" || no "refused packet wrote a file (rc=$rc)"
+pcard codex
 rc=$(tp -- packet scout); ck 2 "$rc" "packet: unknown stage refused"
 grep -q 'card | slice | final' "$FK/err" && ok "packet: the refusal names the three stages" || no "unknown-stage message: $(cat "$FK/err")"
 
@@ -2245,10 +2284,10 @@ rc=$(tp -- ensure); mv "$FK/claude.saved" "$PD/CLAUDE.md"; ck 3 "$rc" "no CLAUDE
 { cat "$PD/CLAUDE.md"; yes 'filler that grows CLAUDE.md past the 32 KiB doc cap' | head -c $((40000 - $(wc -c < "$PD/CLAUDE.md"))); } > "$FK/claude.big"
 cp "$FK/claude.big" "$PD/CLAUDE.md"
 rc=$(tp -- ensure); { [ "$rc" = 3 ] && grep -q 'close pane' "$FK/err"; } && ok "a judge started for a smaller CLAUDE.md is refused once it grows (close its pane)" || no "grown CLAUDE.md accepted by the old judge (rc=$rc)"
-rm -f "$FK/state/agent" "$PKD/judge"; : > "$FK/herdr.log"
-rc=$(tp -- ensure); { [ "$rc" = 0 ] && grep '^agent start' "$FK/herdr.log" | grep -q -- '-c project_doc_max_bytes=40960' && grep -qx 'doc_max_bytes=40960' "$PKD/judge"; } \
+rm -f "$FK/state/agent" "$EVD/judge"; : > "$FK/herdr.log"
+rc=$(tp -- ensure); { [ "$rc" = 0 ] && grep '^agent start' "$FK/herdr.log" | grep -q -- '-c project_doc_max_bytes=40960' && grep -qx 'doc_max_bytes=40960' "$EVD/judge"; } \
   && ok "a 40,000 B CLAUDE.md starts the judge with project_doc_max_bytes=40960" || no "doc cap for a big CLAUDE.md (rc=$rc): $(grep '^agent start' "$FK/herdr.log")"
-git -C "$PD" checkout -q CLAUDE.md; rm -f "$FK/state/agent" "$PKD/judge"; tp -- ensure >/dev/null
+git -C "$PD" checkout -q CLAUDE.md; rm -f "$FK/state/agent" "$EVD/judge"; tp -- ensure >/dev/null
 
 echo "=== L1-40 · the six-line result contract (v4)"
 vr() { local pk; pk=$(mkpkt "$1" slice S2 "$HD"); tp FAKE_HERDR_PROMPT="$2" -- send "$pk"; }   # $1 seq, $2 fake variant -> rc
@@ -2297,11 +2336,11 @@ dp="$(bash -c 'echo $$')"; printf '%s\tpair\tslice\tS2\t2026-01-01T00:00:00Z\n' 
 pk=$(mkpkt 133 slice S2 "$HD"); rc=$(tp -- send "$pk")
 { [ "$rc" = 0 ] && [ ! -e "$LK/pair-090.lock" ] && grep -q 'stale lock pair-090.lock' "$FK/err"; } && ok "a dead pid's lock is removed (stale lock), the send runs" || no "stale lock handling (rc=$rc): $(cat "$FK/err")"
 pk=$(mkpkt 134 slice S2 "$HD"); rc=$(tp FAKE_HERDR_PROMPT=blocked -- send "$pk")
-{ [ "$rc" = 4 ] && ! ls "$LK"/pair-*.lock >/dev/null 2>&1; } && ok "a run that ends blocked (4) releases its lock too" || no "lock after a blocked run (rc=$rc)"
-echo idle > "$FK/state/agent"
+{ [ "$rc" = 4 ] && ! ls "$LK"/pair-*.lock >/dev/null 2>&1; } && ok "a run parked blocked (4) releases its lock too" || no "lock after a blocked run (rc=$rc)"
+rc=$(tp -- wait 134); ck 0 "$rc" "...and wait 134 settles it once the human answered"
 
 echo "=== L1-43 · Codex quota: what the human consented to (v4, U1)"
-mv "$RL" "$FK/runlog.saved"; pcard codex; papprove; n0="$(grep -c '^codex ' "$FK/evidence.log")"
+mv "$RL" "$FK/runlog.saved"; mv "$PD/.claude/evidence/codex.jsonl" "$FK/codex.saved"; pcard codex; papprove; n0="$(grep -c '^codex ' "$FK/evidence.log")"
 # A prompt that never became a turn (live attempt 1, 2026-10-28: typed into
 # the /new picker): idle at once, no result, counters still 0/0, no transcript.
 rc=$(tpn TASK_PAIR_START_GRACE_S=1 FAKE_HERDR_PROMPT=not_started -- check card); ck 6 "$rc" "a packet that never reached the model exits 6"
@@ -2317,20 +2356,21 @@ rc=$(tpn -- check card --over-estimate)
 pdl APPROVE - 000000000000 codex_est=3; rc=$(tpn -- check slice S2); papprove
 { [ "$rc" = 3 ] && grep -q 'not approved' "$FK/err"; } && ok "a slice run before the card is approved at its current digest is refused" || no "unapproved slice run (rc=$rc)"
 rc=$(tpn -- check slice S3); { [ "$rc" = 3 ] && grep -q 'not tagged codex: yes' "$FK/err"; } && ok "a slice without codex: yes is outside the consent" || no "untagged slice run (rc=$rc)"
+pcedit -e 's/^- \[[ ~]\] \(S[23] .*\)$/- [x] \1/'
 r1=$(tpn -- check final); r2=$(tpn -- check final); r3=$(tpn -- check final); r4=$(tpn -- check final)
 [ "$r1 $r2 $r3 $r4" = "0 0 0 3" ] && ok "final: three runs (one, a retry, the rebuttal), the fourth refused" || no "final quota: $r1 $r2 $r3 $r4"
-rm -f "$RL"; mv "$FK/runlog.saved" "$RL"
+pcard codex; rm -f "$RL"; mv "$FK/runlog.saved" "$RL"; mv "$FK/codex.saved" "$PD/.claude/evidence/codex.jsonl"
 
 echo "=== L1-44 · task-pair.sh → the real evidence.sh: records, binding, digest parity (v4)"
-cp "$EV" "$PD/scripts/evidence.sh"; pcard codex; plane on; papprove
+cp "$PD/scripts/evidence.sh" "$FK/evidence-stub.sh"; cp "$EV" "$PD/scripts/evidence.sh"; pcard codex; plane on; papprove
 lrec() { python3 -I -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); print(*[r.get(k) for k in sys.argv[2:]])' "$PD/.claude/evidence/codex.jsonl" "$@" 2>/dev/null; }
 rc=$(tp HOME="$WORK" -- check card)
 { [ "$rc" = 0 ] && [ "$(lrec lane unit tree)" = "codex-card card $(pdig)" ]; } && ok "check card: evidence.sh records lane codex-card, unit card, tree = task-pair.sh digest" || no "codex-card record (rc=$rc): $(lrec lane unit tree) $(head -c 300 "$FK/err")"
-[ "$(lrec run_state verdict critical high)" = "completed pass 0 0" ] && ok "a clean pass is recorded as approving (completed, pass, 0 critical, 0 high)" || no "approving record: $(lrec run_state verdict critical high reason)"
+[ "$(lrec run_state verdict critical high prov)" = "completed pass 0 0 ok" ] && ok "a clean pass is recorded as approving (completed, pass, 0 critical, 0 high, prov ok: the judge's own apply_patch write)" || no "approving record: $(lrec run_state verdict critical high prov reason)"
 { lrec rollout | grep -q '^~/l123-fake/codex-home/sessions/' && ! tail -n 1 "$PD/.claude/evidence/codex.jsonl" | grep -qF "$WORK/" && ! tail -n 3 "$RL" | grep -qF "$WORK/"; } \
   && ok "the record and the run's runlog rows hold the rollout as ~/…, never the home path" || no "home path in record/runlog: $(lrec rollout) / $(tail -n 3 "$RL" | cut -f10)"
-rc=$(tp FAKE_HERDR_PROMPT=pass_major -- check card); [ "$(lrec run_state verdict high)" = "completed pass 1" ] && ok "a pass carrying a major is recorded high=1 — not approving" || no "pass_major record (rc=$rc): $(lrec run_state verdict high)"
 rc=$(tp FAKE_HERDR_PROMPT=no_result -- check card); [ "$(lrec run_state verdict)" = "failed none" ] && ok "no_result is recorded failed with no verdict" || no "no_result record (rc=$rc): $(lrec run_state verdict)"
+rc=$(tp FAKE_HERDR_PROMPT=pass_major -- check card); [ "$(lrec run_state verdict high)" = "completed pass 1" ] && ok "a pass carrying a major is recorded high=1 — not approving" || no "pass_major record (rc=$rc): $(lrec run_state verdict high)"
 # Digest parity (02 review #1/#11): task-pair.sh card_digest must equal evidence.sh card_norm
 # on cards built to trip the normalisation; evidence.sh's digest is a codex-card record's tree.
 sed -e 's/^- \[[x~]\] /- [ ] /' -e 's/ ✓ .*$//' "$CD/card.md" > "$FK/v1"                                  # bare: [ ] marks, no suffix
@@ -2352,6 +2392,221 @@ done
 [ -z "$dm" ] && ok "digest parity: task-pair.sh digest = evidence.sh's on 9 tricky cards (marks, tokens, Closed: last or not)" || no "digest drift between task-pair.sh and evidence.sh on:$dm"
 { [ "${DG[0]}" = "${DG[1]}" ] && [ "${DG[2]}" = "${DG[1]}" ] && [ "${DG[3]}" = "${DG[1]}" ] && for v in 4 5 6 7 8; do [ "${DG[v]}" != "${DG[1]}" ] || exit 1; done; } 2>/dev/null \
   && ok "digest: marks, token suffixes and close's last Closed: line are status; other ✓ text, a 7-hex token and a stray Closed: are content" || no "normalisation: $(for v in 0 1 2 3 4 5 6 7 8; do printf 'v%s=%s ' "$v" "${DG[v]:5:8}"; done)"
+pcard codex; rm -rf "/tmp/pair-$H8-pdemo"
+
+echo "=== L1-47 · pair review regressions (independent review of task-pair.sh at d033182)"
+# One assertion group per finding; the finding id leads each message. The real
+# evidence.sh where the record decides (C1, M6), the committed stub elsewhere.
+usereal() { cp "$EV" "$PD/scripts/evidence.sh"; }; usestub() { cp "$FK/evidence-stub.sh" "$PD/scripts/evidence.sh"; }
+goal() { pcedit "s/^Goal: .*/Goal: $1/"; }   # new card content: a card check binds to the digest
+lastseq() { awk -F'\t' '$3 == "start" {s = $2} END {print s}' "$RL"; }
+dlr() { awk -F'\t' '$2 == "CODEX" {r = $7} END {print r}' "$CD/donelog"; }   # the last CODEX donelog row's result
+usestub; pcard codex; papprove; echo idle > "$FK/state/agent"; rm -f "$FK/state/screen" "$FK/state/run-screen"; : > "$FK/herdr.log"
+
+# C1 — a FAIL turned into an approving record: (a) no write path, (b) no state in pair/, (c) provenance
+D47="$WORK/l147g"; mkproj "$D47"; mkcard "$D47" demo codex '- [~] S1 first — lanes: smoke ; codex: yes'
+grep -qF '"Edit(./.ai_context/tasks/**/pair/**)"' "$REPO/.claude/settings.json" && ok "C1 settings.json denies Edit/Write into a pair mailbox" || no "C1 pair/ Edit deny missing"
+miss=""
+for c in 'sed -i s/fail/pass/ .ai_context/tasks/demo/pair/001-card.result.md' 'printf x > .ai_context/tasks/demo/pair/001-card.result.md' \
+         'cp /tmp/r.md .ai_context/tasks/demo/pair/001-card.result.md' 'rm -f .ai_context/tasks/demo/pair/runlog' \
+         'cd .ai_context/tasks/demo/pair && sed -i s/a/b/ 001-card.result.md' 'echo x >> ~/.codex/sessions/2026/10/28/rollout-x.jsonl' \
+         'tee \"$CODEX_HOME/sessions/x.jsonl\" < /dev/null'; do   # bgp writes the command into JSON as is
+  ask_is "$D47" "$c" || miss="$miss [$c]"
+done
+[ -z "$miss" ] && ok "C1 bash-guard asks on Bash writes into pair/ and into Codex's session transcripts" || no "C1 not asked:$miss"
+miss=""
+for c in 'bash scripts/task-pair.sh wait 001' 'bash scripts/task-pair.sh check final --rebuttal .ai_context/tasks/demo/rebuttal.md' \
+         'cat .ai_context/tasks/demo/pair/001-card.result.md' 'cp .ai_context/tasks/demo/pair/001-card.result.md /tmp/r.md' 'grep -c major .ai_context/tasks/demo/pair/001-card.md'; do
+  silent "$D47" "$c" || miss="$miss [$c]"
+done
+[ -z "$miss" ] && ok "C1 ...task-pair.sh itself and reads stay silent" || no "C1 asked on:$miss"
+{ [ -f "$EVD/judge" ] && [ ! -e "$PKD/judge" ] && ! compgen -G "$PKD/.fp-*" >/dev/null && git -C "$PD" check-ignore -q "$EVD/judge" && [ -s "$EVD/not_started" ]; } \
+  && ok "C1 run state (judge record, fp-<seq>, not_started) lives in gitignored .claude/evidence/pair/<slug>/, none in pair/" || no "C1 state files: $(ls -a "$PKD" | tr '\n' ' ')"
+usereal; goal c1
+rc=$(tp FAKE_HERDR_PROMPT=timeout_done FAKE_HERDR_RESULT=fail_major -- check card); s=$(lastseq); r="$PKD/$s-card.result.md"
+sed -e 's/^verdict: fail/verdict: pass/' -e 's/^major: 1/major: 0/' -e '/^1\. major /d' "$r" > "$FK/forged"; cat "$FK/forged" > "$r"
+rc2=$(tp -- wait "$s")
+{ [ "$rc" = 5 ] && [ "$rc2" = 0 ] && [ "$(lrec verdict high prov)" = "pass 0 mismatch" ] && [ "$(dlr)" = unbound ] && grep -q 'provenance mismatch' "$FK/err"; } \
+  && ok "C1 a result edited after the judge wrote it (fail → pass) is recorded prov=mismatch and approves nothing" || no "C1 forged result (rc=$rc/$rc2): $(lrec verdict high prov) $(dlr) $(cat "$FK/err")"
+goal c1b; rc=$(tp FAKE_HERDR_PROV=shell -- check card)
+{ [ "$rc" = 0 ] && [ "$(lrec run_state verdict high prov)" = "completed pass 0 unbound" ] && [ "$(dlr)" = unbound ]; } \
+  && ok "C1 a result its transcript shows written by a shell command, not apply_patch, approves nothing (prov=unbound)" || no "C1 shell-written result (rc=$rc): $(lrec run_state verdict high prov) $(dlr)"
+usestub
+P47="$WORK/l147p"; mkproj "$P47"; mklanes "$P47" '@pair codex' "$LANE_SMOKE"; ev "$P47" trust smoke >/dev/null
+mkcard "$P47" demo codex '- [~] S1 first — lanes: smoke ; codex: yes'
+LF="$REPO/tests/fixtures/codex-0.165.0"; LR=.ai_context/tasks/livecard/pair/001-card.result.md; mkdir -p "$P47/${LR%/*}"
+sed "s#/work/livecard#$P47#g" "$LF/rollout-card.jsonl" > "$WORK/live.jsonl"; cp "$LF/rollout-card.result.md" "$P47/$LR"
+lk="$P47/.ai_context/tasks/demo/pair/001-card.md"; mkdir -p "${lk%/*}"; printf 'stage: card\nunit: card\nbase: %s\n\n# Task\n' "$(sed -n 's/^base: //p' "$LF/rollout-card.result.md")" > "$lk"
+lpv() { # $1 = PAIR_SINCE -> the prov evidence.sh codex records for the live transcript and the result on disk
+  ( cd "$P47" && PAIR_ROLLOUT="$WORK/live.jsonl" PAIR_SINCE="$1" PAIR_RESULT_PATH="$LR" bash scripts/evidence.sh codex "$lk" "$LR" completed ok >/dev/null 2>"$WORK/lpv.err" )
+  python3 -I -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["prov"])' "$P47/.claude/evidence/codex.jsonl"
+}
+v1="$(lpv 2026-10-28T18:27:30.000Z)"; v3="$(lpv 2026-10-28T18:30:00.000Z)"
+sed -i.bak 's/^verdict: fail/verdict: pass/' "$P47/$LR"; v2="$(lpv 2026-10-28T18:27:30.000Z)"
+{ [ "$v1" = ok ] && [ "$v2" = mismatch ] && [ "$v3" = unbound ]; } \
+  && ok "C1 on the live 0.165.0 transcript: the judge's apply_patch write binds (ok); an edited verdict is mismatch; a write before the run began is unbound" || no "C1 live transcript prov: $v1 / $v2 / $v3 ($(cat "$WORK/lpv.err"))"
+
+# R10 (evidence.sh) — a checker pass needs its first claim seen running
+ev "$P47" approve >/dev/null; ev "$P47" start S1 >/dev/null
+rep S1 pass 'INCONCLUSIVE (L3) a — b' 'VERIFIED (L4) c — d' | ev "$P47" check S1 --agent r10 --source human >/dev/null
+{ grep -q '^check S1 fail ' "$WORK/ev.out" && grep -qF 'R10: the first claim must be VERIFIED at L4 or L5' "$WORK/ev.err" \
+  && [ "$(python3 -I -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["reason"])' "$P47/.claude/evidence/checker.jsonl")" = 'R10: the first claim must be VERIFIED at L4 or L5' ]; } \
+  && ok "R10 a checker pass whose first claim is not VERIFIED at L4/L5 is recorded fail, with the reason" || no "R10: $(cat "$WORK/ev.out" "$WORK/ev.err")"
+rep S1 pass 'VERIFIED (L2) a — b' | ev "$P47" check S1 --agent r10 --source human >/dev/null; a1="$(cat "$WORK/ev.out")"
+rep S1 pass 'VERIFIED (L5) a — b' 'INCONCLUSIVE (L2) c — d' | ev "$P47" check S1 --agent r10 --source human >/dev/null; a2="$(cat "$WORK/ev.out")"
+rep card pass 'VERIFIED (L2) a — b' | ev "$P47" check card --agent r10 --source human >/dev/null; a3="$(cat "$WORK/ev.out")"
+{ grep -q '^check S1 fail ' <<<"$a1" && grep -q '^check S1 pass ' <<<"$a2" && grep -q '^check card pass ' <<<"$a3"; } \
+  && ok "R10 ...VERIFIED (L2) first fails, VERIFIED (L5) first passes; a card-mode check needs no L4" || no "R10 levels: $a1 / $a2 / $a3"
+
+# H1 — herdr's "never started" signals are no Codex run; a late start is re-attached
+goal h1; : > "$FK/herdr.log"
+rc=$(tp FAKE_HERDR_PROMPT=refused_blocked -- check card); s=$(lastseq)
+{ [ "$rc" = 4 ] && [ "$(recs "$s")" = 0 ] && [ ! -e "$EVD/fp-$s" ] && grep -q "	$s	card	card	herdr_blocked$" "$EVD/not_started"; } \
+  && ok "H1 herdr refusing the prompt (agent_blocked: nothing typed) exits 4 — no record, nothing in flight, the attempt in the not_started ledger" || no "H1 agent_blocked (rc=$rc): $(cat "$FK/err")"
+rc=$(tp FAKE_HERDR_PROMPT=stalled -- check card); s=$(lastseq)
+{ [ "$rc" = 6 ] && [ "$(recs "$s")" = 0 ] && grep -q "	$s	end:failed	.*	not_started$" "$RL"; } \
+  && ok "H1 agent_prompt_stalled with no turn is not_started — no record, no quota, no no-verdict count" || no "H1 stall (rc=$rc): $(grep "	$s	" "$RL")"
+rc=$(tp FAKE_HERDR_PROMPT=stalled_late -- check card); s=$(lastseq)
+{ [ "$rc" = 0 ] && [ "$(recs "$s")" = 1 ] && grep -q "	$s	end:completed	" "$RL" && grep -q '^agent wait' "$FK/herdr.log"; } \
+  && ok "H1 a stall whose turn starts late is re-attached (agent wait) and completes — one record" || no "H1 late start (rc=$rc): $(grep "	$s	" "$RL")"
+
+# H2 — blocked mid-turn is not settled; the exit-5 message never says `seq ?`
+goal h2; rc=$(tp FAKE_HERDR_PROMPT=blocked -- check card); s=$(lastseq); n1=$(nfiles); rc2=$(tp -- check card)
+{ [ "$rc" = 4 ] && [ "$rc2" = 4 ] && [ "$(nfiles)" = "$n1" ] && [ "$(recs "$s")" = 0 ] && grep -q "task-pair.sh wait $s" "$FK/err"; } \
+  && ok "H2 blocked mid-run settles nothing: no record, and the next check is refused (4) before a packet, naming wait <seq>" || no "H2 blocked (rc=$rc/$rc2): $(cat "$FK/err")"
+rc=$(tp -- wait "$s"); { [ "$rc" = 0 ] && [ "$(recs "$s")" = 1 ]; } && ok "H2 ...wait <seq> re-attaches once answered: one record, of the finished turn" || no "H2 wait (rc=$rc)"
+printf '%s\t950\tstart\tcard\tcard\t-\t-\t-\t-\t-\tx\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$RL"; echo working > "$FK/state/agent"
+pk=$(mkpkt 951 card card "$(pdig)"); rc=$(tp -- send "$pk"); echo idle > "$FK/state/agent"; rm -f "$pk"; sed '$d' "$RL" > "$FK/rl.tmp"; mv "$FK/rl.tmp" "$RL"
+{ [ "$rc" = 5 ] && grep -q 'the last one started: seq 950' "$FK/err" && ! grep -q 'seq ?' "$FK/err" "$FK/out"; } \
+  && ok "H2 a working judge with no run of ours in flight: exit 5 names the last started seq (runlog), never 'seq ?'" || no "H2 exit 5 (rc=$rc): $(cat "$FK/err")"
+
+# H3 — dialogs only at the bottom of the screen, keys only to an idle judge
+goal h3; : > "$FK/herdr.log"
+{ printf '  >_ OpenAI Codex (v0.165.0)\n\n• Ran sed -n 1,40p scripts/task-pair.sh\n    Trust this folder? Codex can read, edit, and run files\n'
+  printf '    Update available · esc skip\n    Approaching rate limits · Switch to gpt-5.6-luna\n    enter continue · esc quit\n'
+  printf '• Those dialog texts are quoted, not shown.\n\n› Ask Codex to do anything\n\n  GPT-5.6-Sol high · /fixture · 1.2k in · 340 out\n  ? for shortcuts\n'; } > "$FK/h3.cur"
+rc=$(tp FAKE_HERDR_SCREEN="$FK/h3.cur" FAKE_HERDR_NEW_CLEARS=1 -- check card)
+{ [ "$rc" = 0 ] && ! grep -q '^agent send-keys' "$FK/herdr.log"; } \
+  && ok "H3 dialog texts in the transcript above an empty composer are no dialog: no key, the run completes" || no "H3 transcript (rc=$rc): $(grep '^agent send-keys' "$FK/herdr.log" | tr '\n' '|') $(cat "$FK/err")"
+printf '  Update available · 0.162.1 → 0.165.0\n\n› 1. Update now\n  2. Skip\n\n  enter continue · esc skip\n' > "$FK/h3.cur"; echo working > "$FK/state/agent"; : > "$FK/herdr.log"
+pk=$(mkpkt 952 card card "$(pdig)"); rc=$(tp FAKE_HERDR_SCREEN="$FK/h3.cur" FAKE_HERDR_ESC_CLEARS=1 -- send "$pk"); echo idle > "$FK/state/agent"; rm -f "$pk" "$FK/h3.cur"
+{ [ "$rc" = 5 ] && ! grep -q '^agent send-keys' "$FK/herdr.log"; } && ok "H3 a dialog over a working judge gets no key (esc there interrupts it): exit 5" || no "H3 working (rc=$rc): $(grep '^agent send-keys' "$FK/herdr.log")"
+
+# M1 — a slow /new: the packet waits until the fresh thread shows
+goal m1; echo 5 > "$FK/state/turns"
+rc=$(tp FAKE_HERDR_NEW_DELAY=2 TASK_PAIR_NEW_WAIT_S=8 -- check card); s=$(lastseq)
+{ [ "$rc" = 0 ] && grep -q "	$s	end:completed	" "$RL" && grep -q "	$s	start	.*	0/0	" "$RL"; } \
+  && ok "M1 a /new that shows 2 s late: the packet waits for the fresh thread (start row at 0/0) and the run completes" || no "M1 slow /new (rc=$rc): $(grep "	$s	" "$RL")"
+
+# M2 — a failed review is not asked again at the same content; the rebuttal is per final tree, not per HEAD
+n0=$(nfiles); rc=$(tp FAKE_EVIDENCE_TREE=m2 FAKE_HERDR_PROMPT=fail_major -- check slice S2); n1=$(nfiles); rc2=$(tp FAKE_EVIDENCE_TREE=m2 -- check slice S2)
+{ [ "$rc" = 0 ] && [ "$rc2" = 3 ] && [ "$(nfiles)" = "$n1" ] && grep -qF 'the latest completed S2 review at this content failed — change the content or ask the human to waive' "$FK/err"; } \
+  && ok "M2 a failed slice review is not asked again at the same content: refused (3) before a packet" || no "M2 re-ask (rc=$rc/$rc2): $(cat "$FK/err")"
+rc=$(tp FAKE_EVIDENCE_TREE=m2b -- check slice S2); ck 0 "$rc" "M2 ...new content (another tree) is reviewed"
+pcedit -e 's/^- \[[ ~]\] \(S[23] .*\)$/- [x] \1/'
+r1=$(tp FAKE_EVIDENCE_TREE=m2f -- check final); r2=$(tp FAKE_EVIDENCE_TREE=m2f -- check final --rebuttal "$FK/rebut.md")
+echo 'memory only' >> "$CD/notes.md"; git -C "$PD" add -A .ai_context; git -C "$PD" commit -qm 'memory only'   # HEAD moves, the final tree does not
+r3=$(tp FAKE_EVIDENCE_TREE=m2f -- check final --rebuttal "$FK/rebut.md")
+{ [ "$r1 $r2 $r3" = "0 0 3" ] && grep -q 'one rebuttal round per content' "$FK/err"; } \
+  && ok "M2 the rebuttal round is per final content, not per HEAD: a memory-only commit does not reopen it" || no "M2 rebuttal per content: $r1 $r2 $r3 $(cat "$FK/err")"
+
+# M3 — a rebuttal that never reached the model does not spend the round
+r1=$(tp FAKE_EVIDENCE_TREE=m3 FAKE_HERDR_PROMPT=fail_major -- check final)
+r2=$(tp FAKE_EVIDENCE_TREE=m3 FAKE_HERDR_PROMPT=not_started -- check final --rebuttal "$FK/rebut.md")
+r3=$(tp FAKE_EVIDENCE_TREE=m3 -- check final --rebuttal "$FK/rebut.md")
+[ "$r1 $r2 $r3" = "0 6 0" ] && ok "M3 a not_started rebuttal leaves the round open; the next one runs" || no "M3 rebuttal round: $r1 $r2 $r3 $(cat "$FK/err")"
+pcard codex; papprove
+
+# M4 — the judge is this checkout's: name keyed by repo, cwd and pane checked
+rc1=$(tp FAKE_HERDR_CWD=/elsewhere -- ensure); e1="$(cat "$FK/err")"; rc2=$(tp FAKE_HERDR_PANE=w9:p7 -- ensure); e2="$(cat "$FK/err")"
+rc3=$(tp FAKE_HERDR_CWD="$(cd "$PD" && pwd -P)" -- ensure)
+{ [ "$rc1" = 3 ] && grep -q 'not in this checkout' <<<"$e1" && [ "$rc2" = 3 ] && grep -q 'its record says w9:p9' <<<"$e2" && [ "$rc3" = 0 ]; } \
+  && ok "M4 a judge herdr shows in another checkout or another pane than its record is refused (3); the physical path is the same checkout" || no "M4 identity: $rc1 $rc2 $rc3 $e1 $e2"
+PB="$WORK/l123b"; git clone -q "$PD" "$PB"; printf '[projects."%s"]\ntrust_level = "trusted"\n' "$PB" >> "$FK/codex-home/config.toml"
+H8B="$(printf '%s' "$PB" | sha256sum | cut -c1-8)"; : > "$FK/herdr.log"
+rc=$( (cd "$PB" && env HERDR_ENV=1 PATH="$FK/bin:$PATH" CODEX_HOME="$FK/codex-home" FAKE_HERDR_LOG="$FK/herdr.log" FAKE_HERDR_STATE="$FK/state" bash scripts/task-pair.sh ensure) >/dev/null 2>&1; echo $?)
+{ [ "$rc" = 0 ] && grep -q "^agent start judge-$H8B-pdemo " "$FK/herdr.log" && [ "$H8B" != "$H8" ] && [ "${#JN}" -le 32 ]; } \
+  && ok "M4 a second checkout of the same task starts its own judge (judge-<repo hash>-<slug>), never drives the first one's" || no "M4 clone (rc=$rc): $(cut -c1-80 "$FK/herdr.log" | tr '\n' '|')"
+printf '%s\n' "$JN" > "$FK/state/agent-name"; printf '%s\n' "$PD" > "$FK/state/agent-cwd"; rm -rf "/tmp/pair-$H8B-pdemo"
+
+# M5 — secrets and home paths stay out of tracked pair/
+goal m5; IP="10.$((19 + 1)).30.40"
+rc=$(tp FAKE_HERDR_PROMPT=leaky -- check card); s=$(lastseq); r="$PKD/$s-card.result.md"; w="$PD/.claude/evidence/logs/pair-pdemo-$s-card.result.md"
+{ [ "$rc" = 0 ] && grep -qF "$IP" "$w" && ! grep -qF "$IP" "$r" && grep -q 'withheld (secret scan hit: .*internal-ipv4' "$r" && [ "$(recs "$s")" = 1 ]; } \
+  && ok "M5 a result the secret scan flags moves to .claude/evidence/logs/, a stub naming the rule stays in pair/; the run is still recorded" || no "M5 leaky result (rc=$rc): $(cat "$r" 2>/dev/null | head -n 3)"
+printf '› Read and execute the packet\n• Ran bash t.sh\n  └ connecting to db at %s:5432\n\n› Ask Codex to do anything\n\n  GPT-5.6-Sol high · /fixture · 9 in · 9 out\n' "$IP" > "$FK/m5.run"
+rc=$(tp FAKE_HERDR_PROMPT=no_result FAKE_HERDR_RUN_SCREEN="$FK/m5.run" -- check card); s=$(lastseq); d="$PKD/$s-card.screen.txt"
+{ [ "$rc" = 6 ] && ! grep -qF "$IP" "$d" && grep -q 'withheld' "$d" && grep -qF "$IP" "$PD/.claude/evidence/logs/pair-pdemo-$s-card.screen.txt"; } \
+  && ok "M5 a screen dump the secret scan flags is withheld the same way" || no "M5 leaky screen (rc=$rc): $(head -n 3 "$d" 2>/dev/null)"
+printf '› Read and execute the packet at %s/\n    %s/l123/.ai_context/tasks/pdemo/pair/x.md; its paths\n\n› Ask Codex to do anything\n\n  GPT-5.6-Sol high · /fixture · 9 in · 9 out\n' "${WORK%/*}" "${WORK##*/}" > "$FK/m5.run"
+rc=$(tp HOME="$WORK" FAKE_HERDR_PROMPT=no_result FAKE_HERDR_RUN_SCREEN="$FK/m5.run" -- check card); s=$(lastseq); d="$PKD/$s-card.screen.txt"
+{ [ "$rc" = 6 ] && grep -q '[~]/l123/\.ai_context/tasks/pdemo/pair/x\.md' "$d" && ! tr -d '\n ' < "$d" | grep -qF "$WORK/"; } \
+  && ok "M5 a home path Codex wrapped across lines is joined, then written ~/…" || no "M5 wrapped home path: $(cat "$d")"
+! grep 'Read and execute' "$FK/herdr.log" | grep -qF "$PD/" && ok "M5 the prompt names repo-relative paths only" || no "M5 absolute repo path in the prompt"
+rm -f "$FK/m5.run"
+
+# M6 — counts must match the findings; the turn must have ended normally
+goal m6; rc=$(tp FAKE_HERDR_PROMPT=counts_mismatch -- check card); s=$(lastseq)
+{ [ "$rc" = 6 ] && grep -q "	$s	end:failed	.*	bad_header:counts$" "$RL"; } && ok "M6 header counts that differ from the finding lines are bad_header:counts (6)" || no "M6 counts (rc=$rc): $(grep "	$s	end" "$RL")"
+usereal; rc=$(tp FAKE_HERDR_PROV=aborted -- check card); usestub
+{ [ "$(lrec run_state verdict prov)" = "completed pass unbound" ] && [ "$(dlr)" = unbound ] && grep -q 'did not end normally' "$FK/err"; } \
+  && ok "M6 a turn aborted after the judge wrote its result is recorded prov=unbound — it approves nothing" || no "M6 aborted turn (rc=$rc): $(lrec run_state verdict prov) $(dlr)"
+
+# M7 — only a unit on the card runs; the quota counts records, not the runlog
+p0=$(prompts); pk=$(mkpkt 960 slice S9 "$(git -C "$PD" rev-parse HEAD)"); rc=$(tp -- send "$pk"); e1="$(cat "$FK/err")"
+printf 'stage: card\nunit: anything\nbase: %s\n' "$(pdig)" > "$PKD/961-card.md"; rc2=$(tp -- send "$PKD/961-card.md"); rm -f "$pk" "$PKD/961-card.md"
+{ [ "$rc" = 3 ] && [ "$rc2" = 3 ] && grep -q 'names nothing on this card' <<<"$e1" && [ "$(prompts)" = "$p0" ]; } \
+  && ok "M7 a hand-written packet for a unit not on the card (slice S9, card/anything) is refused (3) — no quota of its own" || no "M7 foreign unit ($rc/$rc2): $e1"
+mv "$RL" "$FK/rl47.saved"; mv "$PD/.claude/evidence/codex.jsonl" "$FK/cx47.saved"; goal m7
+r1=$(tpn -- check card); r2=$(tpn -- check card)
+for s in $(awk -F'\t' '$3 == "start" {print $2}' "$RL"); do printf '%s\t%s\tend:failed\tcard\tcard\t-\t-\t?\t-\t?\tnot_started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$s" >> "$RL"; done
+r3=$(tpn -- check card)
+{ [ "$r1 $r2 $r3" = "0 0 3" ] && grep -q 'beyond the consented estimate' "$FK/err"; } \
+  && ok "M7 the quota counts the Codex records: not_started rows appended to the runlog by hand free no run" || no "M7 quota source: $r1 $r2 $r3"
+rm -f "$RL"; mv "$FK/rl47.saved" "$RL"; mv "$FK/cx47.saved" "$PD/.claude/evidence/codex.jsonl"
+
+# M8 — a failed record blocks nothing; wait retries it
+goal m8; rc=$(tp FAKE_EVIDENCE_RC=1 -- check card); s=$(lastseq); rc2=$(tp -- check card); s2=$(lastseq); rc3=$(tp -- wait "$s")
+{ [ "$rc" = 6 ] && [ "$rc2" = 0 ] && [ "$s2" != "$s" ] && [ "$rc3" = 0 ] && [ ! -e "$EVD/unrecorded-$s" ] && [ "$(recs "$s")" = 2 ]; } \
+  && ok "M8 a run whose record failed blocks no new check; wait <seq> writes its record later" || no "M8 record_failed ($rc/$rc2/$rc3)"
+
+# L1 — the transcript is looked up once, after the prompt
+awk -F'\t' '$3 == "start" && $10 != "-"' "$RL" | grep -q . && no "L1 a start row carries a rollout lookup: $(awk -F'\t' '$3 == "start" && $10 != "-"' "$RL" | head -n 1)" \
+  || ok "L1 start rows carry rollout '-': no scan of Codex transcripts before the packet is typed (end rows carry it)"
+
+# L2 — AGENTS.override.md is read before CLAUDE.md too
+printf '# other\n' > "$PD/AGENTS.override.md"; rc=$(tp -- ensure); e="$(cat "$FK/err")"
+cp "$PD/CLAUDE.md" "$PD/AGENTS.override.md"; rc2=$(tp -- ensure); rm -f "$PD/AGENTS.override.md"
+{ [ "$rc" = 3 ] && grep -q 'AGENTS.override.md differs from CLAUDE.md' <<<"$e" && [ "$rc2" = 0 ]; } \
+  && ok "L2 an AGENTS.override.md that differs from CLAUDE.md is refused (Codex reads it first); a copy is fine" || no "L2 override ($rc/$rc2): $e"
+
+# L3 — packets only into an empty composer
+printf '  >_ OpenAI Codex (v0.165.0)\n\n› please also fix the README\n\n  GPT-5.6-Sol high · /fixture · 0 in · 0 out\n  ? for shortcuts\n' > "$FK/l3.cur"; : > "$FK/herdr.log"
+pk=$(mkpkt 962 card card "$(pdig)"); rc=$(tp FAKE_HERDR_SCREEN="$FK/l3.cur" -- send "$pk"); rm -f "$pk" "$FK/l3.cur"
+{ [ "$rc" = 4 ] && ! grep -q '^agent prompt' "$FK/herdr.log" && grep -q 'not at an empty prompt' "$FK/err"; } \
+  && ok "L3 a draft in the composer is no empty prompt: nothing typed, not even /new (exit 4)" || no "L3 draft (rc=$rc): $(grep '^agent prompt' "$FK/herdr.log")"
+
+# L4 — what close/done would refuse is not spent on Codex first
+goal l4; n0=$(nfiles); rc=$(tp -- check final); e1="$(cat "$FK/err")"; rc2=$(tp FAKE_EVIDENCE_LANE=stale -- check slice S2); e2="$(cat "$FK/err")"
+{ [ "$rc" = 3 ] && grep -qF 'not done yet: S2 [~] S3 [ ]' <<<"$e1" && [ "$rc2" = 3 ] && grep -q 'lane smoke is stale' <<<"$e2" && [ "$(nfiles)" = "$n0" ]; } \
+  && ok "L4 check final with slices not [x], and check slice with a stale lane, are refused (3) before a packet" || no "L4 ($rc/$rc2): $e1 $e2"
+
+# L5 — exit codes as pair.md states them
+pk=$(mkpkt 963 card card "card:$(printf '%064d' 0)"); rc=$(tp -- send "$pk"); rm -f "$pk"
+pk=$(mkpkt 964 card card "$(pdig)"); : > "$FK/herdr.log"; rc2=$(tp FAKE_HERDR_NEW_FAIL=1 -- send "$pk"); rm -f "$pk"
+{ [ "$rc" = 3 ] && [ "$rc2" = 4 ] && grep -q 'sending /new to the judge failed' "$FK/err" && [ "$(prompts)" = 0 ]; } \
+  && ok "L5 a stale packet exits 3; a refused /new exits 4 (the judge needs a look) and sends nothing" || no "L5 exit codes ($rc/$rc2): $(cat "$FK/err")"
+
+# L6 — one blank read is a repaint, not a missing prompt
+goal l6; rc=$(tp FAKE_HERDR_BLANK_EVERY=2 -- check card); ck 0 "$rc" "L6 every other screen read blank (repaints): three reads a second apart, the run completes"
+
+# L7 — the record and the cleanup after it are one step
+goal l7; rc=$(tp FAKE_EVIDENCE_KILL=TERM -- check card); s=$(lastseq)
+{ [ "$rc" = 0 ] && [ "$(recs "$s")" = 1 ] && [ ! -e "$EVD/fp-$s" ] && [ ! -e "$EVD/settle-$s" ]; } \
+  && ok "L7 a TERM while the record is written is held off: one record, the run cleaned up" || no "L7 TERM (rc=$rc, records $(recs "$s"))"
+goal l7b; rc=$(tp FAKE_EVIDENCE_KILL=9 -- check card); s=$(lastseq); sleep 2; rc2=$(tp -- wait "$s")
+{ [ "$rc" = 137 ] && [ "$rc2" = 0 ] && [ "$(recs "$s")" = 1 ] && [ ! -e "$EVD/fp-$s" ] && [ ! -e "$EVD/settle-$s" ]; } \
+  && ok "L7 killed right after its record: wait <seq> settles it again without a second record" || no "L7 KILL (rc=$rc/$rc2, records $(recs "$s"))"
 pcard codex; rm -rf "/tmp/pair-$H8-pdemo"
 
 echo "=== L1-8 · S7 pre-commit measures STAGED content"

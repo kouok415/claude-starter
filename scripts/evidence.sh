@@ -259,7 +259,7 @@ lastrec() { # $1 = ledger(s), $2 [$3] = fixed strings the line must hold -> the 
   A="${2:-\"id\"}" B="${3:-\"id\"}" awk 'index($0, ENVIRON["A"]) && index($0, ENVIRON["B"]) {r = $0} END {if (r != "") print r}' "$EV"/$1 2>/dev/null
 }
 byid() { [[ "$1" =~ ^[0-9a-f]{8}$ ]] && lastrec "*.jsonl" "{\"id\":\"$1\""; }
-approving() { [ "$(jget "$1" run_state) $(jget "$1" verdict) $(jget "$1" critical) $(jget "$1" high)" = "completed pass 0 0" ]; }
+approving() { [ "$(jget "$1" run_state) $(jget "$1" verdict) $(jget "$1" critical) $(jget "$1" high) $(jget "$1" prov)" = "completed pass 0 0 ok" ]; }
 
 def_sha() { # $1 = a cmd or canary field -> sha256[:12] of it plus "LF<path> <sha256>" for each repo file it names (review #8)
   local w x="$1"
@@ -1060,7 +1060,7 @@ cmd_show() { # show <lane|checker|codex-card|codex-slice|codex-final|@id>: a rec
 # --- reviews: checker and Codex records -----------------------------------------------
 
 cmd_check() { # check <S<n>|final|card|-> --agent <id|-> --source <src>: a checker report on stdin -> record (I-3)
-  local u="${1:-}" ag="${3:-}" src="${5:-}" rep vi nv ni vl vu v tree sp
+  local u="${1:-}" ag="${3:-}" src="${5:-}" rep vi nv ni vl vu v tree sp why=-
   [[ "$u" =~ ^(S[0-9]+|final|card|-)$ ]] && [ "${2:-}" = --agent ] && [ -n "$ag" ] && [ "${4:-}" = --source ] &&
     [[ "$src" =~ ^(handback|last_message|transcript|human|none)$ ]] ||
     die 2 "usage: evidence.sh check <S<n>|final|card|-> --agent <id|-> --source <handback|last_message|transcript|human|none>"
@@ -1079,6 +1079,12 @@ cmd_check() { # check <S<n>|final|card|-> --agent <id|-> --source <src>: a check
   elif [ "$(cut -d' ' -f3 <<<"$vl" | tr -d '[:space:]')" = pass ] && [ "$nv" = 0 ] && [ "$vi" -ge 1 ]; then v=pass
   else v=fail
   fi
+  # R10 (checker.md): a slice or the task passes only when its first claim was seen running (L4/L5); card mode needs no L4
+  if [ $v = pass ] && [ "$u" != card ] &&
+     ! grep -E -m 1 '^(- )?(VERIFIED|NOT VERIFIED|INCONCLUSIVE) \(L[1-5]\) ' <<<"$rep" | grep -qE '^(- )?VERIFIED \(L[45]\) '; then
+    v=fail why="R10: the first claim must be VERIFIED at L4 or L5"
+    echo "evidence: checker $u pass recorded as fail — $why" >&2
+  fi
   case "$u" in
     S*) tree="$(slice_tree "$u")" ;;
     final) tree="$(tree_of .)" ;;
@@ -1090,7 +1096,7 @@ cmd_check() { # check <S<n>|final|card|-> --agent <id|-> --source <src>: a check
   [ "$ag" != - ] && [[ "$sp" =~ ^(S[0-9]+|-)\ ([0-9a-f]{12})$ ]] && [ "${BASH_REMATCH[2]}" != "${tree:0:12}" ] &&
     { [ "${BASH_REMATCH[1]}" = "$u" ] || [ "${BASH_REMATCH[1]} $u" = "- final" ]; } && v=void
   record checker.jsonl lane=checker unit="$u" tree="$tree" task="$SLUG" card="$D12" head="$(git rev-parse -q --verify HEAD || echo -)" \
-    agent_id="$ag" source="$src" verified:$vi not_verified:$nv inconclusive:$ni verdict=$v \
+    agent_id="$ag" source="$src" verified:$vi not_verified:$nv inconclusive:$ni verdict=$v reason="$why" \
     report_sha="$(printf '%s\n' "$rep" | sha)" ts="$(now)"
   (umask 077; printf '%s\n' "$rep" > "$EV/logs/checker-$RID.txt")
   rev_tail CHECK "$u" checker "$tree" "$v"
@@ -1100,8 +1106,124 @@ cmd_check() { # check <S<n>|final|card|-> --agent <id|-> --source <src>: a check
   echo "check $u $v $RID"
 }
 
+# Provenance (pair review C1, M6): a Codex result counts as the judge's only when this run's transcript
+# (PAIR_ROLLOUT, read from PAIR_SINCE on) holds the judge's own apply_patch write of the result path
+# (PAIR_RESULT_PATH, default the result) — an exec/apply_patch custom_tool_call patch "*** Add|Update File:
+# <path>", or an item_completed FileChange keyed by it (Codex 0.165.0 writes both) — its turn then ended
+# with task_complete, and the file now says what the judge wrote: each header key's last written value and
+# every finding line. Prints "ok", or "unbound <why>" / "mismatch <why>".
+codex_prov() { # $1 = result file to read
+  [ -n "${PAIR_ROLLOUT:-}" ] && [ -f "$PAIR_ROLLOUT" ] || { echo "unbound no Codex transcript of this run was found"; return; }
+  [ -n "${PAIR_SINCE:-}" ] || { echo "unbound no run start time (PAIR_SINCE) to read the transcript from"; return; }
+  command -v python3 >/dev/null 2>&1 || { echo "unbound python3 is not installed, so the transcript cannot be read"; return; }
+  python3 -I - "$PAIR_ROLLOUT" "$PAIR_SINCE" "$1" "${PAIR_RESULT_PATH:-$1}" "$PWD" "$(pwd -P)" 2>/dev/null <<'PY' || echo "unbound the transcript could not be read"
+import json, re, sys
+ro, since, res, rp, root, rootp = sys.argv[1:7]
+def norm(p):
+    p = p.strip()
+    for r in (root, rootp):
+        if p.startswith(r + '/'):
+            p = p[len(r) + 1:]
+            break
+    while p.startswith('./'):
+        p = p[2:]
+    return p
+want = norm(rp)
+ESC = {'n': '\n', 'r': '\r', 't': '\t', 'b': '\b', 'f': '\f', 'v': '\v', '0': '\0'}
+def js_patch(src):  # the patch string literal an exec call hands to tools.apply_patch
+    b = src.find('*** Begin Patch')
+    if b < 1 or src[b - 1] not in '"\'`':
+        return src[b:] if b >= 0 else ''
+    q, i, out = src[b - 1], b, []
+    while i < len(src) and src[i] != q:
+        c = src[i]
+        if c == '\\' and i + 1 < len(src):
+            n, i = src[i + 1], i + 2
+            if n in ESC:
+                out.append(ESC[n])
+            elif n == 'x':
+                out.append(chr(int(src[i:i + 2], 16))); i += 2
+            elif n == 'u' and src[i:i + 1] == '{':
+                j = src.index('}', i); out.append(chr(int(src[i + 1:j], 16))); i = j + 1
+            elif n == 'u':
+                out.append(chr(int(src[i:i + 4], 16))); i += 4
+            elif n != '\n':
+                out.append(n)
+            continue
+        out.append(c); i += 1
+    return ''.join(out).encode('utf-16', 'surrogatepass').decode('utf-16')
+def patch_writes(p):  # the lines a patch adds to the result path
+    got, cur = [], None
+    for ln in p.split('\n'):
+        m = re.match(r'\*\*\* (Add|Update) File: (.*)$', ln)
+        if m:
+            cur = [norm(m.group(2)), []]; got.append(cur)
+        elif ln.startswith('*** Move to: ') and cur:
+            cur[0] = norm(ln[13:])
+        elif ln.startswith('*** '):
+            cur = None
+        elif cur is not None and ln.startswith('+'):
+            cur[1].append(ln[1:])
+    return [w for path, w in got if path == want]
+ev = []
+for raw in open(ro, encoding='utf-8', errors='replace'):
+    try:
+        o = json.loads(raw)
+    except ValueError:
+        continue
+    if not isinstance(o, dict) or not isinstance(o.get('timestamp'), str) or o['timestamp'] < since:
+        continue
+    pl = o.get('payload')
+    t = pl.get('type') if isinstance(pl, dict) else None
+    if t == 'custom_tool_call' and pl.get('name') in ('exec', 'apply_patch') and isinstance(pl.get('input'), str):
+        try:
+            ev += [('w', w) for w in patch_writes(pl['input'] if pl['name'] == 'apply_patch' else js_patch(pl['input']))]
+        except (ValueError, IndexError):
+            pass
+    elif t == 'item_completed' and isinstance(pl.get('item'), dict) and pl['item'].get('type') == 'FileChange' \
+            and pl['item'].get('status', 'completed') == 'completed' and isinstance(pl['item'].get('changes'), dict):
+        for path, c in pl['item']['changes'].items():
+            for k in ('add', 'update'):   # older Codex nests the change under its kind
+                if isinstance(c, dict) and isinstance(c.get(k), dict):
+                    c = c[k]
+            if norm(path) != want or not isinstance(c, dict):
+                continue
+            if isinstance(c.get('content'), str):
+                ev.append(('w', c['content'].split('\n')))
+            elif isinstance(c.get('unified_diff'), str):
+                ev.append(('w', [l[1:] for l in c['unified_diff'].split('\n') if l.startswith('+') and not l.startswith('+++')]))
+    elif t in ('task_complete', 'turn_aborted'):
+        ev.append((t, None))
+ws = [[l.replace('\r', '') for l in w] for k, w in ev if k == 'w']
+if not ws:
+    print('unbound the transcript holds no apply_patch write of %s by the judge since the run began' % want); sys.exit()
+last = max(i for i, e in enumerate(ev) if e[0] == 'w')
+end = [k for k, w in ev[last + 1:] if k != 'w']
+if not end or end[0] != 'task_complete':
+    print('unbound the judge\'s turn did not end normally after it wrote the result (%s)' % (end[0] if end else 'no task_complete')); sys.exit()
+try:
+    disk = open(res, encoding='utf-8', errors='replace').read().replace('\r', '').split('\n')
+except OSError:
+    print('unbound the result file cannot be read'); sys.exit()
+for line in disk[:6]:
+    k, val = line.split(':', 1)[0] + ': ', None
+    for w in ws:
+        for l in w:
+            if l.startswith(k):
+                val = l
+    if val != line:
+        print('mismatch the result says "%s", the judge wrote "%s"' % (line, val)); sys.exit()
+seen = set(l for w in ws for l in w)
+for line in disk[6:]:
+    if re.match(r'[0-9]+\. (blocker|major|minor) ', line) and line not in seen:
+        print('mismatch the result holds a finding the judge never wrote: %s' % line[:80]); sys.exit()
+print('ok')
+PY
+}
+
 cmd_codex() { # codex <packet> <result> <state> <reason>: one settled Codex run -> record (task-pair.sh finish)
-  local pk="${1:-}" res="${2:-}" st="${3:-}" hd stage u base since p v=none b=0 ma=0 mi=0 tree ro prov=missing prev x why=""
+  # env from task-pair.sh: PAIR_MODEL, PAIR_ROLLOUT, PAIR_SINCE, PAIR_SECS, PAIR_RESULT_PATH (codex_prov)
+  local pk="${1:-}" res="${2:-}" st="${3:-}" hd stage u base since p v=none b=0 ma=0 mi=0 tree ro prov pw prev x why=""
   [ $# = 4 ] && [[ "$st" =~ ^(completed|failed|blocked)$ ]] ||
     die 2 "usage: evidence.sh codex <packet> <result> <completed|failed|blocked> <reason>"
   hd="$(head -n 20 "$pk" 2>/dev/null)"
@@ -1152,10 +1274,10 @@ cmd_codex() { # codex <packet> <result> <state> <reason>: one settled Codex run 
   ro="${PAIR_ROLLOUT:-?}"
   ro="${ro/#"$HOME"/\~}"
   [[ "${PAIR_SECS:-}" =~ ^[0-9]+$ ]] || PAIR_SECS=0
-  if [ -f "${PAIR_ROLLOUT:-}" ]; then
-    prov=mismatch
-    grep -qF -- "$pk" "$PAIR_ROLLOUT" && prov=ok
-  fi
+  x="$(codex_prov "$res")"
+  prov="${x%% *}" pw="${x#* }"
+  case "$prov" in ok) pw="" ;; mismatch) ;; *) prov=unbound ;; esac
+  [ -z "$pw" ] || [ "$v" = none ] || echo "evidence: codex result provenance $prov ($pw) — recorded, but this record cannot approve" >&2
   prev="$(lastrec codex.jsonl "\"lane\":\"codex-$stage\",\"unit\":\"$u\"," "\"task\":\"$SLUG\",")"
   record codex.jsonl lane="codex-$stage" unit="$u" tree="$tree" task="$SLUG" card="$D12" head="$(git rev-parse -q --verify HEAD || echo -)" \
     base="$base" since="${since:--}" run_state="$st" reason="$4${why:+ / unbound: $why}" verdict="$v" critical:$b high:$ma minor:$mi \
@@ -1164,6 +1286,7 @@ cmd_codex() { # codex <packet> <result> <state> <reason>: one settled Codex run 
 
   x=reject
   [ "$st $v $b $ma" = "completed pass 0 0" ] && x=approve
+  [ $x = approve ] && [ "$prov" != ok ] && x=unbound
   [ "$v" = none ] && x=none
   rev_tail CODEX "$u" "codex-$stage" "$tree" "$x"
   if [ "$v" != none ] && [ "$stage" != card ]; then

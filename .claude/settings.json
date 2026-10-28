@@ -52,9 +52,11 @@
       "Edit(./.ai_context/tasks/**/gatelog)",
       "Edit(./.ai_context/tasks/**/spawnlog)",
       "Edit(./.ai_context/tasks/**/donelog)",
+      "Edit(./.ai_context/tasks/**/pair/**)",
       "Edit(./.claude/evidence/**)",
       "Edit(./.claude/done-lanes.trust)",
-      "Edit(./.claude/gitleaks.toml)"
+      "Edit(./.claude/gitleaks.toml)",
+      "Edit(~/.codex/sessions/**)"
     ]
   },
   "hooks": {

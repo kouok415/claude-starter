@@ -26,9 +26,10 @@
 #       lane, a card, a checker verdict, a Codex result (v4); `run
 #       --escalated` past an ESCALATE; task-pair.sh --over-estimate
 #     - writes to the evidence ledger (.claude/evidence/, the trust file) by
-#       anything but an allowed evidence.sh call; writes to a task donelog;
-#       writes to the scripts and settings the evidence chain trusts (the
-#       Bash-side twin of settings.json's Edit asks)
+#       anything but an allowed evidence.sh call; writes to a task donelog,
+#       into a pair mailbox (tasks/<slug>/pair/) or Codex's session
+#       transcripts; writes to the scripts and settings the evidence chain
+#       trusts (the Bash-side twin of settings.json's Edit asks)
 #     - while a /task is active: git add -A / --all / . , git checkout --
 #       <path>, git checkout . / -f, git switch --discard-changes, git
 #       restore, git stash — the checker and the lanes read the main tree
@@ -183,7 +184,8 @@ fi
 # unset, and an empty ERE would match every command — default to one that never does.
 for v in GUARD_GIT_CHECKOUT GUARD_GIT_RESTORE_STAGED GUARD_GIT_RESTORE_WT GUARD_GIT_READ GUARD_LEDGER_DIR \
          GUARD_TRUST_FILE GUARD_TRUST_REDIRECT GUARD_RM_CLAUDE GUARD_RM_RECURSIVE GUARD_DONELOG_WRITE \
-         GUARD_DONELOG_WRITE_REL GUARD_CD_AICTX GUARD_CHAIN_WRITE; do
+         GUARD_DONELOG_WRITE_REL GUARD_CD_AICTX GUARD_CHAIN_WRITE GUARD_PAIR_WRITE GUARD_PAIR_WRITE_REL \
+         GUARD_PAIR_WRITE_ANY GUARD_CD_PAIR GUARD_CODEX_SESSIONS_WRITE; do
   [ -n "${!v:-}" ] || printf -v "$v" '%s' 'x^'
 done
 
@@ -248,6 +250,24 @@ case "$pcwd" in */.ai_context|*/.ai_context/*) dlw="$GUARD_DONELOG_WRITE_REL" ;;
 has "$GUARD_CD_AICTX" && dlw="$GUARD_DONELOG_WRITE_REL"
 if seg_any "$dlw" && ! evidence_ok; then
   ask 'writes a task donelog, which only scripts/evidence.sh and the hooks append to — confirm only if you, the human, intend this'
+fi
+# C1 (pair review): a pair mailbox (packets, the judge's results; settings.json
+# Edit-denies it) and Codex's session transcripts, which evidence.sh codex binds a
+# result to. scripts/task-pair.sh and the judge write there without this hook;
+# only writes ask, as in A6. Inside .ai_context a bare pair/… counts; inside a
+# pair/ dir, any relative operand. A custom $CODEX_HOME counts by its literal path.
+pw="$GUARD_PAIR_WRITE|$GUARD_CODEX_SESSIONS_WRITE"
+case "$pcwd" in */.ai_context|*/.ai_context/*) pw="$pw|$GUARD_PAIR_WRITE_REL" ;; esac
+has "$GUARD_CD_AICTX" && pw="$pw|$GUARD_PAIR_WRITE_REL"
+case "$pcwd" in */.ai_context/tasks/*/pair|*/.ai_context/tasks/*/pair/*) pw="$pw|$GUARD_PAIR_WRITE_ANY" ;; esac
+has "$GUARD_CD_PAIR" && pw="$pw|$GUARD_PAIR_WRITE_ANY"
+cxw=""
+if [ -n "${CODEX_HOME:-}" ] && declare -F _g_write >/dev/null; then
+  _g_write cxw "$(printf '%s' "${CODEX_HOME%/}" | sed 's/[][\\.*^$+?(){}|#]/\\&/g')/sessions(/[^[:space:];&|<>\"']*)?([\"'[:space:])]|\$)"
+  pw="$pw|$cxw"
+fi
+if seg_any "$pw"; then
+  ask "writes into a /task pair mailbox (.ai_context/tasks/<slug>/pair/: packets and the judge's results, written only by scripts/task-pair.sh and the judge) or into Codex's session transcripts that evidence.sh codex binds those results to — confirm only if you, the human, intend this"
 fi
 # The Bash-side twin of settings.json's Edit asks on the evidence chain.
 if seg_any "$GUARD_CHAIN_WRITE"; then

@@ -134,6 +134,17 @@ _g_write() { # $1 = variable name, $2 = target ERE (anchored at a word start by 
 _g_write GUARD_DONELOG_WRITE '[^[:space:];&|<>]*\.ai_context/tasks/[^[:space:]/;&|<>"'"'"']+/donelog(["'"'"'[:space:])]|$)'
 _g_write GUARD_DONELOG_WRITE_REL '([^[:space:];&|<>]*/|["'"'"'])?donelog(["'"'"'[:space:])]|$)'
 GUARD_CD_AICTX='(^|[[:space:];&|(])(cd|pushd)[[:space:]]+([^;&|]*[[:space:]])?["'"'"']?[^[:space:];&|]*\.ai_context([/"'"'"'[:space:];&|)]|$)'
+# A /task pair mailbox, tasks/<slug>/pair/: script-written packets and the judge's results
+# (settings.json Edit-denies it; pair review C1). _REL: a bare pair/… once the command cd's
+# into .ai_context or runs there; _ANY: any relative operand once it cd's into, or runs in,
+# a pair/ dir itself.
+_g_write GUARD_PAIR_WRITE '[^[:space:];&|<>]*\.ai_context/tasks/[^[:space:]/;&|<>"'"'"']+/pair(/[^[:space:];&|<>"'"'"']*)?(["'"'"'[:space:])]|$)'
+_g_write GUARD_PAIR_WRITE_REL '([^[:space:];&|<>]*/|["'"'"'])?pair/[^[:space:];&|<>"'"'"']*(["'"'"'[:space:])]|$)'
+_g_write GUARD_PAIR_WRITE_ANY '["'"'"']?[^-/~$&[:space:];|<>"'"'"'][^[:space:];&|<>]*'
+GUARD_CD_PAIR='(^|[[:space:];&|(])(cd|pushd)[[:space:]]+([^;&|]*[[:space:]])?["'"'"']?([^[:space:];&|]*/)?pair/?["'"'"']?([[:space:];&|)]|$)'
+# Codex's session transcripts (~/.codex/sessions, $CODEX_HOME/sessions): evidence.sh codex binds
+# a Codex result to the judge's own write recorded there (C1).
+_g_write GUARD_CODEX_SESSIONS_WRITE '[^[:space:];&|<>]*(\.codex|CODEX_HOME\}?)/sessions(/[^[:space:];&|<>"'"'"']*)?(["'"'"'[:space:])]|$)'
 # The scripts and settings the evidence chain trusts — the files settings.json Edit-asks.
 _g_write GUARD_CHAIN_WRITE '[^[:space:];&|<>]*(scripts/(evidence|precommit-gitleaks|harness-report)\.sh|\.claude/hooks/(guard-patterns|stop-gate|spawn-log|bash-guard|session-start)\.sh|\.claude/agents/checker\.md|\.claude/settings(\.local)?\.json)(["'"'"'[:space:])]|$)'
 # The whole command is ONE allowed evidence.sh call: a literal "$CLAUDE_PROJECT_DIR"/
