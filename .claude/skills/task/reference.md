@@ -1,167 +1,119 @@
-# /task reference — protocols and tables
+# /task reference — formats and recipes
 
-Loaded on demand: the skill points here from the rungs/knobs that need it.
-Nothing in this file is injected by default — that's the point.
+Loaded on demand from SKILL.md pointers; never injected.
 
-## Rung-3 worktree protocol
+## Resume
 
-Subagents share your working directory, so isolation must be explicit:
+Last donelog row for the `[~]` slice → where to re-enter:
 
-1. From the task branch: `git worktree add ../<repo>-r3-<n> -b
-   task/<slug>-r3-<n>` for n = 1..3.
-2. Each executor declares its strategy in ONE sentence before running —
-   reject non-distinct strategies before they spend tokens.
-3. Spawn each executor WITH its worktree path; all of its file operations
-   and its verify run happen inside that path only. Never let rung-3
-   executors loose in the shared tree.
-4. `verifier` runs the milestone verify in each worktree and picks the
-   winner (tie-break: smallest diff).
-5. Merge the winning branch into `task/<slug>` (squash is fine), then
-   `git worktree remove` all three and delete the `-r3-*` branches.
+| Last row | Re-enter |
+|---|---|
+| START, no SPAWN executor | §4.2 spawn the executor |
+| SPAWN executor, no RETURN | still listed in background tasks → wait; else §4.2 |
+| RETURN executor | slow lanes not yet RUN → run them; then §4.3 |
+| SPAWN checker, no CHECK | still listed in background tasks → wait; else §4.3 |
+| RUN fail / CHECK fail | §5 Stuck, then §4.2 |
+| CHECK pass (`codex: yes`, pair on, no CODEX pass) | §4.5 |
+| CHECK pass / CODEX pass or WAIVE | §4.7 `evidence.sh done` |
+| ESCALATE | report (§Escalation) and wait for the human |
 
-## Planner lenses
+## Notes
 
-A lens is a strategy the candidate commits to. L fans out all three; M's
-single planner gets the one the spec's main risk calls for. Any other lens
-(the Codex planner's under `pair-*` on L) is defined in one line in its
-spawn prompt. Each milestone still lands green whatever the lens.
+`notes.md`, one line per entry, dated; H1 applies (no secrets, no hosts):
 
-- **minimal-change** — design for the actual use, not the possible one:
-  the smallest diff that meets every AC, no guards or options the spec
-  does not ask for; delete before adding.
-- **risk-first** — the biggest unknown goes first: probes, measurement
-  tools and baselines before features; a scaffold that proves the path
-  end to end before it is filled in.
-- **redesign-first** — treat the new requirement as if it had existed on
-  day one: converge on the target structure with no transitional
-  compatibility layer; migrate every caller in the same wave and delete
-  the old API.
+    ## Rulings   — the human's words verbatim; never paraphrased
+    ## Measured  — fact — `command` that showed it
+    ## Tried     — S<n>: approach — why it failed — premise it rested on
+    ## Calls     — S<n> [own|ASSUMED] call — why — risk if wrong
+    ## S<n>      — constraint found later that slice S<n> must honor
+    ## <topic>   — constraints, interfaces, edge cases (`notes: §<topic>`)
 
-## Profiles — knob table
+Executor and checker read only the sections the slice names plus `## S<n>`.
+Over 16 KB: move narratives to `journal/`, keep the facts.
 
-| Knob | `opus-tier` | `fable-tier` |
-|---|---|---|
-| Milestone size (per fresh executor context) | ≤15 tool calls | 30–50 tool calls |
-| Planner fan-out (M / L) | 1 + critic / 3 lenses + critic | 1 + critic / 1 + critic |
-| Executor spawn prompt | milestone + a suggested approach | milestone + goal + constraints only — no prescribed steps |
-| Drift-check cadence (L tasks) | every 3rd milestone | every 5th, or after `risk: high` only |
-| Escalation ladder | 1 → 2 → 3 → 4 | 1 → 2 → 4 |
+## Lanes
 
-`mixed` — where both tiers are available: `bash scripts/task-profile.sh
-mixed` pins `model: opus` on the executor; run the session on a
-fable-class model. Judgment-dense, low-token stages (plan synthesis,
-critique, reframing, final panel) get the strong model; token-heavy
-execution runs cheaper. Use `opus-tier` milestone sizing (the executor
-does the work); planner fan-out may drop to 1 + critic.
+    # name | paths | min_secs | expect (; separated, all must match) | canary | cmd
+    @pair codex
+    @verify-paths tests/ probes/
+    smoke | scripts/ src/ | 4 | ^verify: [1-9][0-9]* passed, 0 failed$ | <cmd that must fail> | bash scripts/verify.sh
 
-`mixed-judge` — the fully pinned split: `bash scripts/task-profile.sh
-mixed-judge` writes every agent's model explicitly — scout, planner,
-plan-critic, reframer, final-verifier → `fable`; executor, verifier →
-`opus` — so the agent layer no longer depends on the session model (run
-the session on either tier; that changes only the orchestration price).
-Knobs: `opus-tier` milestone sizing, 1 + critic fan-out, `fable-tier`
-drift cadence, opus escalation ladder (1 → 2 → 3 → 4).
+1. A lane runs the product the way its user does. `trust` refuses static
+   commands (`bash -n`, `--help`, `--list-*`, shellcheck, py_compile,
+   grep/test/ls only), `min_secs` 0 and an empty `expect`. No `|` in a
+   cmd or canary: pipes and multi-step commands go in a wrapper script.
+2. `expect` matches the run's own verdict line, including a nonzero work
+   count (rows, trades, files, requests) — never a bare exit 0.
+3. `canary` runs the check against a known-bad input or a reverted line
+   and must fail; `skip:<reason>` needs a separate human yes.
+4. Idempotent: two runs, same verdict; leftovers (files, rows, caches)
+   read as stale to the next run. No push, deploy, paid call or order.
+5. The fast lane (minutes) is also the `verify` skill, which Claude Code
+   runs before each commit; slow lanes (VM, full backtest) stay separate.
+6. `@ext <lane> <cmd>` prints the external commit a lane ran against (a fork
+   elsewhere); close compares it. A changed lane line, file its cmd/canary
+   names, `@` line or `.claude/gitleaks.toml` → the human re-runs `trust`.
 
-`pair-codex` — every Claude agent stays `inherit`; the checker seats
-(critique, `risk: med` verification, drift, a second `risk: high`
-verifier, the final panel's second set of lenses) run in a Codex judge
-pane over herdr, driven by `scripts/task-pair.sh`. Claude executes, Codex
-checks — fixed roles, one orchestrator, file packets in and results out.
-Protocol, packet contract and operator notes: `pair.md` (loaded only under
-this profile). Does not combine with `mixed`/`mixed-judge` pins.
+Recipes (cmd prints a verdict line with a count; expect matches it):
+- report/analysis: a wrapper that re-derives each cited number and source,
+  printing `checked=<n> mismatched=0`; canary: feed it one broken number.
+- data pipeline: fixed fixture window; print rows/errors/NaN counts.
+- desktop: drive it under Xvfb (Playwright for Electron); a blank frame fails.
+- VM / package: revert snapshot, install in the guest, smoke inside,
+  `dpkg -s` reports installed, purge, check leftovers.
+- backtest: pinned data hash + seed, golden metrics, a look-ahead canary
+  (shifted future data must change nothing) — see `/backtest-check`.
 
-Selection is per task, applied at intake by `task-profile.sh apply`:
-`/task --profile=mixed-judge ...` pins; a flagless `/task` resets to
-inherit — **except on resume**, where the active task's plan.md header
-wins (`apply` resolves: explicit flag > active header > inherit, and
-warns when a flag contradicts the header — that is a mid-task switch,
-protocol below). Direct `mixed`, `mixed-judge` and `inherit` calls perform
-the same mismatch check; none rewrites the plan header. Inspect anytime with `task-profile.sh status`; reset
-with `task-profile.sh inherit` (restores frontmatter byte-identical to
-stock, so `--update-stock` syncs work again). While pinned, agent files
-count as customized — sync lists template updates to them as hand-merge
-suggestions; quick path: `inherit` → sync → re-apply. Pins require
-`CLAUDE_CODE_SUBAGENT_MODEL` to be unset — it overrides every
-frontmatter pin (the script warns if it is set).
+## Approval
 
-**Mid-task model switches are never silent.** The plan's granularity was
-cut for the recorded profile. If the session model changes mid-task: keep
-completed milestones, spawn `planner` to re-cut only the remaining ones
-under the new profile, update the `plan.md` header, note the switch in
-`lessons.md`.
-
-## Non-code verify patterns
-
-Research / analysis milestones gate on the artifact, not a test suite —
-same executability bar, different target:
-
-    - verify: `test -s reports/h2-outlook.md`
-    - verify: `test "$(grep -c '^## ' reports/x.md)" -ge 6`
-    - verify: `python scripts/check_csv.py data/out.csv`
-    - verify: `test "$(wc -l < data/prices.csv)" -ge 250`
-    - verify: `jq -e '.results | length >= 10' out/scan.json`
-
-Only when done-ness truly cannot be expressed as a command, let a
-verifier-agent spot-check stand in as the gate — try the artifact check
-first.
-
-## brief.md format (what the scout writes)
-
-    # Brief: <slug>
-    ## Map            — path → one-line role, task-relevant areas only
-    ## Interfaces     — signatures/contracts the task will touch
-    ## Commands       — build / test / lint / run, verified once
-    ## Conventions    — naming, layout, patterns to match
-    ## Gotchas        — traps a fresh context would step into
-    ## Corrections    — dated one-liners appended by later contexts
-
-Cap: ≤150 lines / 4 KB. Distill, don't dump — every line pays rent in
-every later context. Claims not directly observed are tagged
-`[UNVERIFIED]`.
-
-## Kickoff brief (before M1)
-
-≤30 lines of prose to the human — a translation, never plan.md pasted:
-
+At most 25 lines to the human — a translation, never the card pasted:
 1. What will exist when this is done, in problem language.
-2. One line per milestone — its `- demo:` promise ("after M2: run X,
-   you will see Y"). Approving the plan = approving these promises.
-3. The veto contract, stated: each milestone lands as one commit, so
-   "M\<n\> is wrong, redo via Z" rolls back one milestone, not the task —
-   vetoes stay cheap until merge; the human never has to catch things
-   live.
+2. One line per slice: "after S2: run X, you will see Y". Approving the
+   card approves these promises.
+3. Cost: hours, lines, lanes, run time. Pair on → Codex runs: approval covers
+   2(m+1)+1 for m `codex: yes` slices (each and final once, a retry each,
+   one rebuttal; 2m+5 counting the card check and its retry) — state it.
+   Past it `task-pair.sh` exits 3 → ask; on a yes, `--over-estimate`.
+4. Considered, not built — one line each.
+5. Veto contract: each slice lands as its own commits (`S<n>` in the
+   message), so "S<n> is wrong, redo via Z" reverts one slice, not the task.
 
-Attended runs pause here for a reply; `--auto` posts it and proceeds.
+## Spawn
 
-## Checkpoints & milestone boundaries (v3.14)
+Executor — nothing beyond these lines:
 
-A milestone whose section carries `- checkpoint: human` is a human gate:
-its verify PASS holds the run (PAUSED row + repeating systemMessage)
-until the human signs off with `touch .ai_context/tasks/<slug>/ack-<id>`
-— their own shell, or approving the bash-guard confirmation, IS the
-sign-off. This includes the final milestone with no pending work.
-Advancing past an un-acked checkpoint is an integrity block, including
-when all milestones are done. Stop can yield with a repeating sign-off
-message; explicit `--sweep` refuses missing acks on every call.
-Mark checkpoints at plan approval (deploys, spend, outward-facing
-steps); they are the mechanical form of "wait for me here".
+    Slice: <slice line verbatim>
+    Card: .ai_context/tasks/<slug>/card.md ; notes: §<a>, §S<n>
+    Start: <sha> ; lanes you run: <fast> ; lanes I run: <slow>
+    Retry: <failing output verbatim> ; premise: <one line> — test it first
 
-Non-checkpoint milestones: a PASS with `[pending]` milestones left gets
-ONE continuation prompt per session — answer it by continuing (flip
-statuses, spawn the executor) or by pausing EXPLICITLY (state why,
-restate any unanswered human question, finish). The second stop passes
-and records a PAUSED row. While a background executor runs, every stop
-is a quiet WAITING stop — its completion notification is the wake
-signal; do not babysit it with wait-loops. Once it has reported, the
-next stop runs the verify.
+Checker — never the executor's report or your opinion:
 
-## STATUS.md — the live view
+    Check S<n>. Card: <path>. Start: <sha>. Lanes: <names>. Notes: §<a>, §S<n>.
+    Check card. Card: <path>.                        (pair off, before approval)
+    Check final. Card: <path>. Base: <card base>.    (pair off, at close)
 
-`tasks/<slug>/STATUS.md` answers "where are we and what is happening" at
-a glance, any time. Machine region (position, mermaid map, demo promises,
-change footprint, last verify output, the `[ASSUMED]` ledger) is
-regenerated by `scripts/task-status.sh` — the stop-gate re-renders it
-after every real verify run, session-start on every resume. The model
-owns only §Architecture below the end marker: written at kickoff, kept
-current as milestones land. A VIEW, not memory — gitignored, rebuildable,
-never read back as truth (plan/spec/gatelog stay the sources).
+## Escalation
+
+    S<n> stopped after <k> attempts.
+    Tried: <k>) <approach> — <why it failed, quoted output> — premise: <...>
+    Shared premise: <premise> → tested by <command> → <result>
+    Diagnosis: <slice cut | missing constraint | environment>, one evidence line each
+    Why every attempt was doomed under the old framing: <...>
+    Next: <re-cut slices (card change → re-approval) | access or facts needed>
+
+Never "try harder" or a variant of an approach already in §Tried.
+
+## Unattended
+
+`/goal` judges the transcript, never the product: quote printed output, cap it.
+- good: "`evidence.sh status --line` shows S4 `[x]`, or stop after 30 turns"
+- bad: "the app works", "pick the best design" — direction stays human.
+
+## Close report
+
+1. Outside check: the owner's verdict quoted, or "pending: <who runs what>".
+2. Each `[own]`/`[ASSUMED]` call: call / why / risk if wrong / what
+   changes if vetoed — the reply alone must be enough to rule on it.
+3. Not proven: the "what this does not prove" block `close` printed.
+4. The `Closed:` line.

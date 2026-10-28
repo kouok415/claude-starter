@@ -253,14 +253,14 @@ claude-starter/
 │   │   ├── spawn-log.sh        SubagentStart 證據列 → tasks/*/spawnlog
 │   │   ├── stop-gate.sh        /task 里程碑閘門 —— verify 紅燈不准停
 │   │   └── lint.sh.example     語言 init 之後填入你的 linter
-│   ├── agents/                 /task 班底:scout、planner、plan-critic、
-│   │                           executor、verifier、final-verifier、reframer
+│   ├── agents/                 /task 班底:executor(一個 slice、全新 context)、
+│   │                           checker(每個 slice 一次獨立檢查)
 │   └── skills/
 │       ├── wrap/SKILL.md       /wrap —— session 收尾記憶寫回
 │       ├── wrap/reference.md   任務收尾 + friction 列(按需載入)
-│       ├── task/SKILL.md       /task —— 長程里程碑 harness
-│       ├── task/reference.md   worktree 協定 + profile 旋鈕(按需載入)
-│       ├── task/pair.md        pair-codex judge 協定(只在 pair-* profile 載入)
+│       ├── task/SKILL.md       /task —— card、lane、slice 迴圈、結案
+│       ├── task/reference.md   card 格式、lane 範例、無人值守(按需載入)
+│       ├── task/pair.md        pair-codex:card / slice / final 檢查(按需載入)
 │       ├── setup/SKILL.md      /setup —— 第一次 session 的出生協定
 │       ├── setup/verify-template.md  專案 verify skill 的範本
 │       ├── prove/SKILL.md      /prove —— 任何 done/fixed 宣稱之前先拿出證據
@@ -270,8 +270,8 @@ claude-starter/
 ├── .ai_context/                第 3 層(schema v3)
 ├── .secrets/                   Runtime-only 憑證(Read 拒讀 · git 不追蹤)
 ├── .pre-commit-config.yaml     H1 密鑰掃描 + S7 大小上限
-├── scripts/                    pre-commit 守門 + /task 輔助(pair、profile、
-│                               status、statusline)+ harness-report(專案保留)
+├── scripts/                    pre-commit 守門 + evidence.sh(lane、紀錄、
+│                               done/close)+ task-pair.sh + harness-report
 ├── tests/run.sh                L1+L2 回歸套件(CI 內建執行)
 ├── .mcp.json.example           MCP 樣板(--kind analysis 保留)
 ├── .github/workflows/lint.yml  模板 repo 自身的 CI(生成時移除)

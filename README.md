@@ -285,14 +285,14 @@ claude-starter/
 │   │   ├── spawn-log.sh        SubagentStart evidence rows → tasks/*/spawnlog
 │   │   ├── stop-gate.sh        /task milestone gate — no stop on red verify
 │   │   └── lint.sh.example     Fill in your linter after language init
-│   ├── agents/                 /task crew: scout, planner, plan-critic,
-│   │                           executor, verifier, final-verifier, reframer
+│   ├── agents/                 /task crew: executor (one slice, fresh context),
+│   │                           checker (independent check per slice)
 │   └── skills/
 │       ├── wrap/SKILL.md       /wrap — end-of-session memory write-back
 │       ├── wrap/reference.md   task close-out + friction rows (on demand)
-│       ├── task/SKILL.md       /task — long-horizon milestone harness
-│       ├── task/reference.md   worktree protocol + profile knobs (on demand)
-│       ├── task/pair.md        pair-codex judge protocol (pair-* profiles only)
+│       ├── task/SKILL.md       /task — card, lanes, slice loop, close
+│       ├── task/reference.md   card format, lane examples, unattended runs (on demand)
+│       ├── task/pair.md        pair-codex: card / slice / final checks (on demand)
 │       ├── setup/SKILL.md      /setup — first-session birth protocol
 │       ├── setup/verify-template.md  template for the project's verify skill
 │       ├── prove/SKILL.md      /prove — evidence before any done/fixed claim
@@ -302,8 +302,8 @@ claude-starter/
 ├── .ai_context/                Layer 3 (schema v3) — INDEX, state, decisions…
 ├── .secrets/                   Runtime-only credentials (Read-denied · gitignored)
 ├── .pre-commit-config.yaml     H1 secret scan + S7 size cap
-├── scripts/                    pre-commit guards + /task helpers (pair, profile,
-│                               status, statusline) + harness-report (kept)
+├── scripts/                    pre-commit guards + evidence.sh (lanes, records,
+│                               done/close) + task-pair.sh + harness-report
 ├── tests/run.sh                L1+L2 regression suite (runs in CI)
 ├── .mcp.json.example           MCP stub (kept for --kind analysis)
 ├── .github/workflows/lint.yml  CI for this template repo (removed on spawn)

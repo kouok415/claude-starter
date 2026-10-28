@@ -1,245 +1,149 @@
 ---
 name: task
-description: Long-horizon execution harness — verifiable milestone plan, size-scaled ceremony (S/M/L), risk-scaled adversarial verification, mechanical Stop gate on verify commands, divergent-retry escalation. Use for any task expected to exceed ~30 minutes of autonomous work, or when the user says /task, "long task", or "長任務". Supports --auto for unattended runs (intent calls recorded as [ASSUMED] instead of asked).
+description: Long tasks, multi-hour features, unattended runs — a one-page task card the human approves, thin end-to-end slices, lane evidence written by scripts/evidence.sh, a fresh checker per slice, Codex on the card, risky slices and close. Use for work expected to exceed ~30 minutes, or when the user says /task, "long task", or "長任務". --auto records intent calls as [ASSUMED] instead of asking.
 ---
 
-# /task — long-horizon execution harness
+# /task — card, lanes, evidence, checker
 
-You are the **orchestrator**. Keep your context for decisions; delegate
-reading-heavy and writing-heavy work to subagents. Contexts are fresh for
-**judgment independence** (a verifier must not inherit the executor's
-rationalizations) — but **facts are inherited, never re-derived**: the scout
-maps the repo once into `brief.md`, and no later context re-surveys what the
-map already covers. Task state lives in `.ai_context/tasks/<slug>/`; the
-Stop gate (`.claude/hooks/stop-gate.sh`) independently re-runs the current
-milestone's verify command at end-of-turn (unchanged tree = cached PASS).
+You orchestrate. `.ai_context/tasks/<slug>/card.md` is the contract,
+`notes.md` the detail, `.claude/done-lanes` how the product runs. Only
+`scripts/evidence.sh` writes `[x]` and `Closed:`; the Stop gate checks them
+and runs nothing. The checker never sees the executor's report.
 
-Token discipline, both directions: spawn prompts carry deltas (paths, the
-milestone, changed files), not restated documents; subagents return
-deltas, not summaries.
+## 0 · Resume
 
-## 0 · Intake
+1. `tasks/CURRENT` names a task → resume; never re-interview or re-plan.
+   Card + `evidence.sh status --line` are injected; run
+   `bash scripts/evidence.sh status` for the full view.
+2. No APPROVE row for the current card → §3.4 first.
+3. Re-enter the `[~]` slice after its last donelog row (`reference.md`
+   §Resume). A `[~]` mark alone never proves the executor ran.
+4. Another task asked for → finish, abandon (`/wrap`) or defer? One at a time.
 
-0. **Resume, not restart.** If `.ai_context/tasks/CURRENT` names a task,
-   this is a resume — `spec.md`, `brief.md`, `plan.md` (filtered: full text
-   for the current milestone only), `lessons.md` are ALREADY in your context
-   (SessionStart injects them; don't re-read unless they changed during this
-   session). Find the `[in_progress]` milestone — but `[in_progress]` alone
-   never proves §3.2 ran: on M/L check `spawnlog` (hook-written) for an
-   `executor` row for it. None ⇒ re-enter §3 at step 2 (spawn); else at
-   step 3. Never re-interview or re-plan. If the user is clearly
-   asking for a *different* task, ask whether to finish, abandon (run
-   `/wrap` — abandoned tasks still get their scoreboard row — then delete
-   `CURRENT`), or defer the new one. One active task at a time.
-1. Derive a short kebab-case `<slug>`.
-2. If scope, constraints, or "what does done mean" are genuinely
-   ambiguous, ask now — never mid-run. Always ask the direction question:
-   "what would make you reject this even with every AC green?" — answers
-   land in Constraints / Out of scope. **Autonomous mode** (`--auto`, or
-   the user says to proceed without confirmation): resolve derivable
-   ambiguities by reading the code; make a documented call on
-   preference/intent ambiguities, each recorded as `[ASSUMED: ...]` in
-   spec.md. Destructive or outward-facing actions still require
-   confirmation regardless of mode.
-3. **Start from a clean tree** — commit or stash unrelated changes first
-   (ask if it's unclear whose they are). Create `.ai_context/tasks/<slug>/`,
-   write the slug into `.ai_context/tasks/CURRENT`, branch `task/<slug>`
-   (never run a task on main).
-4. **Pick the profile** (`opus-tier`/`fable-tier`/`mixed`/`mixed-judge`/
-   `pair-codex`): `--profile=X` wins; else CLAUDE.md's `Task profile:`;
-   else your model tier. Run `bash scripts/task-profile.sh apply X` (no
-   explicit choice: omit X — an active plan.md header wins, else inherit).
-   Knobs/setups: `reference.md` §Profiles. `pair-*` ⇒ read `pair.md` now:
-   a Codex judge over herdr takes the checker seats.
-5. **Size the task** — ceremony scales with the task, not only the model:
+## 1 · Intake
 
-   | Size | When | Plan | Execute | Final check |
-   |---|---|---|---|---|
-   | **S** | ≤2 milestones, all `risk: low`, one area | draft plan.md yourself — no scout, no planners | **yourself, in this context** — no executor spawns; the gate still checks every milestone | 1 `final-verifier` |
-   | **M** | 3–6 milestones | scout → 1 `planner` + `plan-critic` | fresh `executor` per milestone | 1 `final-verifier`; 3-lens panel if any `risk: high` |
-   | **L** | >6, architectural, or unfamiliar territory | scout → 3 `planner` lenses + `plan-critic` (fable-tier: 1 + critic) | fresh `executor` per milestone | 3-lens panel |
+1. Read what the request touches first. Never ask what the repo answers.
+2. Echo the goal (what, for whom, why) in ≤200 words. Ask the ONE question
+   that most changes what gets built, plus "what would make you reject
+   this even with every check green?" Quote answers in `notes.md` §Rulings.
+3. Give 2–3 approaches: what each builds, build cost (hours, lines, files
+   to maintain), verification cost (lanes, check code) and what it rules
+   out later. Recommend the least added scope; never narrow the request.
+4. Empirical fork (works? how fast?) → a ≤30-min throwaway in `scratch/`,
+   deleted after, not a debate. Direction, cost or preference → ask now,
+   with your pick and its cost.
+5. Unrequested mechanism (guard, retry, mode, abstraction, checker/judge/
+   selftest code) only if a contract requires it, leaving it out lets harm
+   land unnoticed, or adding it later is expensive; else Decisions gets
+   `[own] considered, not built: <what> — <why>`. Review findings asking
+   for more pass the same test.
+6. Slice 1 = the thinnest real end-to-end path through the product.
+7. Tripwire: time or lines pass 2× the approved estimate, or verification
+   code outgrows product code (`evidence.sh status`) → stop, re-present
+   cost and cheaper options — unattended too.
+8. Tag each decision `[human]`, `[inferred]`, `[own]`, or `[ASSUMED]` (an
+   intent call made without asking; `--auto` only).
+9. Clean tree first (commit, or ask whose changes they are); slug into
+   `tasks/CURRENT`; branch `task/<slug>` — never run a task on main.
 
-   Record profile AND size in the plan.md header; downstream reads the
-   recorded values, never the live model. In doubt between two sizes,
-   pick the larger. **M escalation:** if the critic returns blocker-level
-   *structural* findings against two consecutive candidates, re-plan with
-   the full 3-lens fan-out — buy planning diversity on evidence, not as
-   a flat premium.
+## 2 · Card (≤4 KB incl. room for ✓ suffixes) + notes.md
 
-## 0.5 · Scout → brief.md (M and L only)
+    # <title>
+    <!-- card v4 ; pair: codex|off ; base: <sha> ; estimate: <h>h <n>L -->
+    Goal: <what, for whom, why — ≤3 lines>
+    Done when: <predicate on the running product> ; outside check: <who/what, not you>
+    Decisions:
+    - [human] <decision>
+    ## Slices
+    - [ ] S1 <what the user sees> — lanes: smoke ; codex: no ; notes: §<name>
 
-Spawn `scout` with the goal + repo areas the task touches. It surveys ONCE
-and writes `tasks/<slug>/brief.md`: file map, key interfaces, commands,
-conventions, gotchas. Downstream contexts navigate by it instead of
-re-surveying — that discipline lives in their own agent bodies; brief
-corrections are appended per INDEX's writing protocol (`pair-*`: a Codex
-brief audit supplies them before planners read it — `pair.md` §0.5).
+1. Marks: `[ ]` todo · `[~]` in progress, at most one · `[o]` waiting on
+   the owner (state exactly what they must do) · `[x]` only via
+   `evidence.sh done` · `Closed:` only via `evidence.sh close`.
+2. Each slice: what the user sees + ≥1 lane; never consumes a later
+   slice's output. `codex: yes` when it touches money, secrets or
+   installs. `pair:` may raise `@pair`, never lower it.
+3. `notes.md` (never injected; >16 KB warns): constraints, interfaces,
+   edge cases, rulings verbatim, measured facts with their command — no
+   plan narrative (`reference.md` §Notes). Checkable detail → a lane
+   `expect` or check script, not prose.
+4. Any edit beyond status marks needs re-approval (§3.4).
 
-## 1 · Spec — acceptance criteria must be executable
+## 3 · Lanes, trust, approve
 
-Write `spec.md`:
+1. Every slice lane exists in `.claude/done-lanes` (≤3; format and
+   recipes: `reference.md` §Lanes). Adding one is a Decision.
+2. Untrusted → `bash scripts/evidence.sh trust <lane>`: the human approves
+   the prompt; the canary must go red.
+3. Run each lane once (`evidence.sh run <lane>`) before any unattended run.
+4. `bash scripts/evidence.sh lint`. Pair on → `bash scripts/task-pair.sh
+   check card` (`pair.md`); off → `checker` on "Check card" (`reference.md`
+   §Spawn). Fix blocker/major. Show the card per `reference.md` §Approval
+   (Codex runs included), then `bash scripts/evidence.sh approve` — the
+   human's yes on that prompt is the approval. `--auto` never skips it.
 
-    # Spec: <title>
-    Goal: <one paragraph — what exists afterwards, for whom>
+## 4 · Slice loop
 
-    ## Acceptance criteria
-    - [ ] AC1: <phrased as a check someone can run, with the command>
+1. `bash scripts/evidence.sh start S<n>` (records HEAD + time, marks `[~]`).
+2. Spawn `executor` (`reference.md` §Spawn): card path, slice line
+   verbatim, notes sections, start HEAD, lanes; on a retry the failing
+   output and the premise it rested on. It commits `S<n>` by path. Lanes
+   over ~8 min: you run them in the background and await the notification.
+3. Spawn `checker` (fresh): slice id, card path, start HEAD, lanes —
+   never the executor's report. The hook records its closing
+   `checker-verdict:` block; never run `evidence.sh check` yourself.
+4. `fail` with NOT VERIFIED → step 2 with those lines and findings verbatim;
+   `fail` on INCONCLUSIVE only → the human rules on what it could not reach.
+5. `codex: yes` and pair on → `bash scripts/task-pair.sh check slice S<n>`
+   in the background (`pair.md`); blocker/major → step 2; no verdict
+   twice → the human fixes, rescopes or waives (`approve --waive`).
+6. A repair changes content: re-run lanes and checker (and Codex) — `done`
+   refuses stale records.
+7. `bash scripts/evidence.sh done S<n>`. Refused → do what it lists.
+   Never write `[x]` by hand.
+8. Report demo-first: what the user sees as actual output, the calls
+   made (`notes.md` §Calls), one line `S<n> ✓ <records> · checker pass ·
+   codex pass|n/a`. Two lines to state.md Now/Next. Next slice.
 
-    ## Constraints
-    - <hard limits: interfaces to keep, deps to avoid, perf floors>
+## 5 · Stuck
 
-    ## Out of scope
-    - <explicitly not doing>
+1. Red with no proven cause → `/debug`. No reproduction, no fix.
+2. Two failed fixes on a slice → write their shared premise in `notes.md`
+   §Tried (wrong slice cut? missing constraint? an environment assumption
+   every attempt shared?) and test it before attempt 3.
+3. Three → stop; report per `reference.md` §Escalation. After 3
+   consecutive fails of one lane on one slice `evidence.sh run` writes
+   ESCALATE and asks the human before running again — never route around.
+4. Changing a lane, its expect or a threshold after it went red: own
+   commit, reason in §Tried naming what it no longer covers; thresholds
+   only on a human ruling.
 
-    ## Assumptions
-    - [ASSUMED: <call made without confirmation — reviewed at the end>]
+## 6 · Close
 
-Reject vibes criteria ("works well", "clean"). Every AC needs a command or
-a directly observable behavior; if the user can't supply one, propose one
-and confirm it (in `--auto`: record it under Assumptions instead).
-(`pair-*`: a Codex spec critique runs here, before round 0 — `pair.md` §1.)
+1. All `[x]` → pair on: `bash scripts/task-pair.sh check final` (`pair.md`);
+   off: `checker` on "Check final". Blocker/major or `fail` → a repair slice.
+2. `bash scripts/evidence.sh close` — needs every slice `[x]`, the card's
+   lanes fresh now, and the codex final, its waiver or (off) checker final.
+3. Outside check: its named owner runs it; quote the verdict in §Rulings.
+   Unattended → it heads the report as the open item.
+4. Report every `[own]`/`[ASSUMED]` call (Decisions + §Calls) per
+   `reference.md` §Close report.
+5. `/wrap` (row from `harness-report.sh --row`; clears CURRENT); offer to
+   merge `task/<slug>` or open a PR.
 
-§Assumptions is the run's decision ledger — the one spec section that
-stays append-only after the freeze: every spec-underdetermined call lands
-there as `[ASSUMED: ...]` (≤3 per milestone; executors report them, you
-append).
+## 7 · Unattended
 
-## 2 · Plan
-
-1. Per the size table: spawn planner(s) — each gets its lens with the
-   lens's definition (`reference.md` §Planner lenses), the spec, the
-   brief, and the profile's milestone tool-call budget — or draft the
-   plan yourself (S). Planners spot-check at most ~5 load-bearing claims;
-   the survey already happened.
-2. Spawn `plan-critic` over the candidate(s). It attacks; it never fixes.
-   (`pair-*`: a Codex planner joins round 0; round 1 runs this critic and
-   a Codex critic on the same frozen digest; from round 2 only the Codex
-   critic, until it passes a frozen digest, cap 10 rounds — `pair.md` §2.)
-   It also spot-checks brief.md's load-bearing claims, and flags any
-   `risk: low` milestone with a weak verify command (low risk skips model
-   verification — the gate is its only net, so the gate must be strong).
-3. **You synthesize** the final `plan.md`: soundest skeleton, best
-   milestones grafted in, every blocker/major finding resolved. Filter
-   first: a hypothetical that traces to no real call site or input, and
-   "I would do it differently", are not findings.
-4. Milestone size comes from the profile budget — one fresh executor
-   context must finish within it; split anything bigger (gate overhead is
-   linear, error compounding is exponential).
-5. Present the **kickoff brief** in prose before M1 (`reference.md`
-   §Kickoff brief): what will exist, each milestone's demo promise, and
-   the veto contract — every milestone lands as one commit, so "M\<n\> is
-   wrong, redo via Z" rolls back one milestone, never the task. plan.md
-   is for the gate's parser; the brief is for the human.
-
-`plan.md` format — **the Stop gate parses this; keep it exact**:
-
-    # Plan: <title>
-    <!-- profile: opus-tier | fable-tier | mixed | mixed-judge | pair-codex ; size: S | M | L -->
-    <!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-    ## M1: <milestone title> [pending]
-    - verify: `<command that fails today and passes when this milestone is done>`
-    - risk: low
-    - demo: <the verify translated for the human: "run X, you will see Y">
-
-**Non-code work** verifies via artifact checks, same executability bar
-(`test -s reports/x.md` — patterns: `reference.md` §Non-code verify).
-
-## 3 · Milestone loop
-
-For each milestone in order:
-
-1. Mark it `[in_progress]` in `plan.md` (exactly one at a time).
-2. **S:** execute it yourself; run its verify; continue at 4.
-   **M/L:** spawn `executor` with the task paths + the milestone's FULL
-   plan section — heading, verify/risk lines, comment block (forward
-   constraints ride there). The spawn prompt is authoritative: the
-   executor never re-reads plan.md.
-3. **Verification depth = the milestone's `risk:`** (`pair-*`: the
-   Codex judge takes the `med` seat and joins the `high` seat — `pair.md`
-   §3.3) —
-   - `low`: no model verifier. The mechanical gate re-runs the verify at
-     turn-end; that strength was policed at plan time.
-   - `med`: `verifier` in **light mode** — prompt carries the changed-file
-     list; it re-runs verify + reviews the diff for weakened tests and
-     scope creep. No re-discovery.
-   - `high`: `verifier` full protocol — fresh, adversarial, spot-checks
-     the ACs this milestone touches.
-4. **PASS** → mark `[done]`, commit (`feat(<slug>): M<n> <title>`), report
-   **demo-first**: the milestone's demo as actual output, then its
-   interpretation calls, then one gate line — never a bare PASS. Append
-   the calls to spec §Assumptions, update state.md Now/Next in two lines,
-   move on. (Hooks keep STATUS.md's machine half fresh; you own its
-   §Architecture — write it at kickoff, keep it current.)
-5. **FAIL** → escalation ladder (§4).
-6. **Drift check** (`verifier` drift mode: accumulated diff vs spec.md,
-   intent included — Goal, Out of scope, the `[ASSUMED]` ledger; `pair-*`:
-   the Codex judge, `pair.md` §3.6): after every `risk: high` milestone;
-   at the midpoint of M; on L at the profile's cadence.
-
-The Stop gate re-runs the in_progress verify whenever you try to end a
-turn; a red gate cannot be narrated over — don't try, fix it.
-
-## 4 · Escalation ladder (per milestone)
-
-| Rung | Who | Input |
-|---|---|---|
-| 1 | `executor` | milestone + brief + spec + lessons |
-| 2 | fresh `executor` | + rung-1 failure evidence + rung 1's premise in one line + "test that premise first, or use an approach that does not rest on it" — a new approach on the same premise is the same approach |
-| 3 | 3 × `executor` in parallel **worktrees** — read `reference.md` §Rung-3 protocol BEFORE starting; `verifier` picks the winner |
-| 4 | `reframer` | all failure evidence; it re-cuts the milestone / patches the spec — back to rung 1 on the revised problem |
-| exhausted | **stop** | append `lessons.md`, write a `journal/` entry, report honestly (three-strikes rule) |
-
-After every failed rung: append what-was-tried / why-it-failed / the
-premise it rested on to `lessons.md` — the next fresh context must not
-re-learn it, and rungs 3–4 see which premises already failed. Changing a
-milestone's `- verify:` after it went red needs its own lessons.md line
-(why the old command was wrong, what the new one no longer checks): the
-gatelog keeps both commands, and the final test-integrity lens and
-`harness-report.sh` flag a change with no reason. `fable-tier`
-skips rung 3 (two failed distinct approaches from a strong model = the
-problem is mis-posed; diagnose, don't resample). Planner / plan-critic /
-reframer not installed → collapse rungs 3–4 into stop-and-report.
-
-## 5 · Completion
-
-1. Final check — spawn `final-verifier` per the size table's last
-   column (`pair-*`: always the 3-lens panel, on both sides, union +
-   one rebuttal round — `pair.md` §5). Panel lenses:
-   correctness vs spec / regression & side effects / test-integrity
-   ("were tests weakened?"). Any FAIL → back into the loop as a repair
-   milestone.
-2. All green: mark everything `[done]`, delete `.ai_context/tasks/CURRENT`
-   (keep the task dir), run `/wrap` (it writes the scoreboard row), then
-   offer to merge `task/<slug>` or open a PR. The completion report lists
-   every `[ASSUMED: ...]` from spec.md as call / why / risk if wrong /
-   what changes if vetoed — in autonomous mode those are the decisions
-   the human still owes a review, and the reply alone must be enough to
-   rule on them.
-
-## Profiles — one protocol, tiered knobs
-
-The core is model-independent and always fully on; only knobs scale with
-the tier (milestone budget, fan-out, prompt style, drift cadence, ladder
-shape) — table, `mixed` setup, mid-task switch protocol: `reference.md`
-§Profiles.
+1. `--auto`: intent calls become `[ASSUMED]` Decisions instead of
+   questions. Approve, trust, destructive and outward steps still wait.
+2. `/goal` only for convergent mechanical work: its condition names a
+   script's printed verdict and ends "or stop after <N> turns" (`reference.md`
+   §Unattended). Never for direction, cost or "it works".
 
 ## Rules
 
-- Mid-run human messages are first-class: answer from plan/STATUS.md/spec
-  immediately (questions are never interruptions), fold vetoes into the
-  current milestone, resume.
-- Never claim done while a verify is red — the gate blocks it anyway.
-- `plan.md` statuses are the compaction anchor: update them at every
-  transition. SessionStart re-injects brief + lessons + a filtered plan
-  after /clear and after compaction — stale statuses poison the re-anchor.
-- A discovery that constrains a FUTURE milestone: append a dated line into
-  THAT milestone's comment block in plan.md — it resurfaces exactly when
-  the milestone arms. lessons.md is for approach lessons, not forward
-  constraints (it is injected every session; plan comments are lazy).
-- `brief.md` / `lessons.md`: ≤4 KB (the hook warns) — one line per entry,
-  narratives to `journal/`.
-- Scoreboard (/wrap writes it): profile, size, milestones, gate failures
-  **counted from `tasks/<slug>/gatelog`** (never from memory), highest
-  rung, interventions — the file that decides whether this harness earns
-  its keep.
+- Mid-run messages are first-class: answer from card, notes and
+  `evidence.sh status`; fold vetoes into the current slice; resume.
+- No `git add -A/.`, `git checkout -- <path>`/`.`/`-f`, `git restore|stash`,
+  `git switch --discard-changes` in a task (bash-guard asks); stage by path.
+- Never edit `.claude/done-lanes.trust`, `.claude/evidence/`, `donelog`.
+- Done/fixed claims go through `/prove`; numbers through `/number-check`.

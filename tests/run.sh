@@ -827,8 +827,8 @@ if [ -f "$REPO/sync-project.sh" ]; then
   out=$("$REPO/sync-project.sh" --adopt "$D" 2>&1)
   { [ -f "$D/.ai_context/INDEX.md" ] && [ -f "$D/CLAUDE.md" ] && [ -d "$D/.ai_context/tasks" ]; } && ok "adopt creates skeleton" || no "adopt skeleton incomplete"
   echo "$out" | grep -q 'run /setup' && ok "adopt hands off to /setup" || no "adopt handoff missing"
-  { [ -f "$D/.claude/agents/scout.md" ] && [ -f "$D/.claude/skills/task/reference.md" ]; } && ok "v3.3 files (scout, reference) land via sync" || no "scout/reference missing after sync"
-  { [ -f "$D/.claude/agents/final-verifier.md" ] && [ -f "$D/scripts/task-profile.sh" ]; } && ok "v3.13 files (final-verifier, task-profile) land via sync" || no "final-verifier/task-profile missing after sync"
+  { [ -f "$D/.claude/agents/checker.md" ] && [ -f "$D/.claude/skills/task/reference.md" ]; } && ok "v4 files (checker, task reference) land via sync" || no "checker/reference missing after sync"
+  { [ -f "$D/scripts/evidence.sh" ] && [ -f "$D/.claude/skills/prove/SKILL.md" ]; } && ok "v4 files (evidence.sh, prove) land via sync" || no "evidence.sh/prove missing after sync"
   # /number-check: the skill lands by sync; its DoD line is only suggested,
   # once (the installing sync), and never to a CLAUDE.md that names it.
   D7="$WORK/l14d"; mkdir -p "$D7/.ai_context"
@@ -901,12 +901,9 @@ chmod +x "$D/.claude/hooks/lint.sh"
 echo "=== L1-6 · resident-size guards + security entries"
 sz=$(wc -c < "$REPO/.ai_context/INDEX.md")
 [ "$sz" -le 4096 ] && ok "INDEX.md within 4 KB ($sz B — injected every session)" || no "INDEX.md re-bloated ($sz B > 4096)"
-# task SKILL.md has no size assertion since the pair-codex work (workshop
-# ADR-028): the cap was lifted by the user; on-demand detail still belongs
-# in reference.md / pair.md, so the pointer checks below stay.
 [ -f "$REPO/.claude/skills/task/pair.md" ] && ok "task pair.md exists (on-demand pair-codex protocol)" || no "task pair.md missing"
-grep -q 'pair.md' "$REPO/.claude/skills/task/SKILL.md" && ok "task body points at pair.md for pair-* profiles" || no "task body lost its pair.md pointer"
-[ "$(grep -c 'pair.md' "$REPO/.claude/skills/task/SKILL.md")" -ge 7 ] && ok "task body points at pair.md from the verify, drift and final stages" || no "task body lacks the per-stage pair.md pointers"
+grep -q 'pair.md' "$REPO/.claude/skills/task/SKILL.md" && ok "task body points at pair.md (pair-codex protocol, read on demand)" || no "task body lost its pair.md pointer"
+[ "$(grep -c 'pair.md' "$REPO/.claude/skills/task/SKILL.md")" -ge 3 ] && ok "task body points at pair.md from the card, slice and final checks" || no "task body lacks the per-check pair.md pointers (want >= 3, got $(grep -c 'pair.md' "$REPO/.claude/skills/task/SKILL.md"))"
 PM="$REPO/.claude/skills/task/pair.md"
 for sec in '## When pair is on' '## Requirements' '## Commands' '## Running a check' '## Stages' '## Result contract' '## No-verdict rule' '## Acting on findings' '## Quota' '## Files' '## Operator notes'; do
   grep -q "^$sec" "$PM" && ok "pair.md carries $sec" || no "pair.md missing $sec"
@@ -930,11 +927,6 @@ if [ -f "$REPO/templates/CLAUDE.md.analysis" ]; then
 else
   skp "analysis DoD → skill check (spawned project — template-repo only)"
 fi
-lenses="$(sed -n 's/^description:.*lens (\([^)]*\)).*/\1/p' "$REPO/.claude/agents/planner.md" | tr ',' '\n' | tr -d ' .' | grep -v '^$')"
-miss=""; for l in $lenses; do grep -q "^- \*\*$l\*\* — " "$REPO/.claude/skills/task/reference.md" || miss="$miss $l"; done
-{ [ -n "$lenses" ] && [ -z "$miss" ]; } && ok "every lens planner.md names is defined in task reference.md ($(echo $lenses | tr '\n' ' '))" || no "planner lenses without a definition:${miss:- none parsed}"
-grep -q '^| 2 | fresh `executor` | .*premise' "$REPO/.claude/skills/task/SKILL.md" && grep -q 'premise it rested on' "$REPO/.claude/skills/task/SKILL.md" && ok "rung 2 carries rung 1's premise; failed rungs log their premise" || no "ladder lost the premise step (rung 2 / lessons line)"
-grep -q 'exit 0 = vacuous' "$REPO/.claude/agents/plan-critic.md" && grep -q '126/127' "$REPO/.claude/agents/plan-critic.md" && ok "plan-critic observes fails-today (runs risk:low verifies)" || no "plan-critic lost the observed-red check"
 grep -qF 'Read(./**/.env)' "$REPO/.claude/settings.json" && ok "nested .env read-deny present" || no "nested .env deny missing"
 grep -qxF '**/.env' "$REPO/.gitignore" && ok "nested .env gitignored" || no "nested .env gitignore missing"
 grep -qF '.ai_context/tasks/*/pair/.fp-*' "$REPO/.gitignore" && ok "pair/.fp-* gitignored (in-flight fingerprints never memory)" || no "pair/.fp-* ignore missing"
@@ -1776,135 +1768,69 @@ else
   skp "TUTORIAL message table (spawned project — template-repo only)"
 fi
 
-echo "=== L1-19 · task legibility: STATUS.md view + statusline (v3.12)"
-TS="$REPO/scripts/task-status.sh"
-TSL="$REPO/scripts/task-statusline.sh"
-D="$WORK/l119"; mkdir -p "$D/.ai_context/tasks/lg" "$D/scripts"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-echo lg > "$D/.ai_context/tasks/CURRENT"
-cat > "$D/.ai_context/tasks/lg/plan.md" <<'EOF'
-# Plan: legibility fixture
-<!-- profile: opus-tier ; size: M -->
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: groundwork [done]
-- verify: `true`
-- risk: low
-- demo: run the tool, see the usage line
-
-## M2: current [in_progress]
-- verify: `true`
-- risk: med
-- demo: run the tool on a fixture, see exit 1 + offenders
-
-## M3: future [pending]
-- verify: `false`
-- risk: low
-EOF
-printf '# Spec\n## Assumptions\n- [ASSUMED: fixture assumption]\n' > "$D/.ai_context/tasks/lg/spec.md"
-bash "$TS" "$D/.ai_context/tasks/lg"
-ck 0 $? "task-status.sh exits 0 on a well-formed task dir"
-ST="$D/.ai_context/tasks/lg/STATUS.md"
-[ -f "$ST" ] && ok "STATUS.md created" || no "STATUS.md missing"
-grep -q 'M2 (2/3)' "$ST" && ok "position names the armed milestone" || no "position line wrong"
-grep -q 'mermaid' "$ST" && ok "mermaid map present" || no "mermaid map missing"
-grep -qF 'run the tool on a fixture' "$ST" && ok "demo promises rendered" || no "demo promises missing"
-grep -qF '[ASSUMED: fixture assumption]' "$ST" && ok "ASSUMED ledger mirrored from spec" || no "ASSUMED ledger missing"
-grep -qF 'unwritten — orchestrator' "$ST" && ok "fresh view carries the architecture stub" || no "architecture stub missing"
-# model-owned tail survives regeneration; machine region tracks transitions
-awk '/status:machine:end/{print; print "## Architecture"; print ""; print "ARCH-KEEP line"; exit} {print}' "$ST" > "$ST.tmp" && mv "$ST.tmp" "$ST"
-sed -i.bak 's/## M2: current \[in_progress\]/## M2: current [done]/; s/## M3: future \[pending\]/## M3: future [in_progress]/' "$D/.ai_context/tasks/lg/plan.md" && rm -f "$D/.ai_context/tasks/lg/plan.md.bak"
-bash "$TS" "$D/.ai_context/tasks/lg"
-grep -qF 'ARCH-KEEP line' "$ST" && ok "model-owned tail survives regeneration" || no "regeneration ate the model section"
-grep -q 'M3 (3/3)' "$ST" && ok "machine region tracks the transition" || no "machine region stale after transition"
-grep -qF 'unwritten — orchestrator' "$ST" && no "stub resurrected over model content" || ok "stub gone once the model wrote"
-# M2 back in progress: the statusline below reports position 2/3
-sed -i.bak 's/## M2: current \[done\]/## M2: current [in_progress]/; s/## M3: future \[in_progress\]/## M3: future [pending]/' "$D/.ai_context/tasks/lg/plan.md" && rm -f "$D/.ai_context/tasks/lg/plan.md.bak"
-# statusline: position line when a task is armed, silence otherwise
-sl=$(printf '{"current_dir":"%s"}' "$D" | bash "$TSL")
-echo "$sl" | grep -q 'lg ▶ 2/3' && ok "statusline shows slug + position ($sl)" || no "statusline wrong: '$sl'"
-sl=$(printf '{}' | CLAUDE_PROJECT_DIR="$WORK" bash "$TSL")
-[ -z "$sl" ] && ok "no task → empty statusline" || no "statusline noisy without a task: '$sl'"
-# the view never enters git or the fingerprint (gate-cache precedent)
-grep -qF '.ai_context/tasks/*/STATUS.md' "$REPO/.gitignore" && ok "STATUS.md gitignored (fingerprint-safe)" || no "STATUS.md ignore missing"
-grep -qF '.ai_context/tasks/*/.last-verify' "$REPO/.gitignore" && ok ".last-verify gitignored" || no ".last-verify ignore missing"
-# prose ↔ mechanism links (README §Prose → mechanism discipline)
-grep -qF -- '- demo:' "$REPO/.claude/skills/task/SKILL.md" && ok "SKILL.md carries the demo-line plan contract" || no "SKILL.md lost the demo line"
-grep -qF 'STATUS.md' "$REPO/.claude/skills/task/SKILL.md" && ok "SKILL.md names the STATUS.md duty" || no "SKILL.md lost STATUS.md"
-grep -qF 'Kickoff brief' "$REPO/.claude/skills/task/reference.md" && ok "reference.md carries the kickoff-brief format" || no "kickoff-brief section missing"
-grep -qF -- '- demo:' "$REPO/.claude/agents/executor.md" && ok "executor contract demands the demo" || no "executor lost the demo duty"
-grep -qF 'ASSUMED' "$REPO/.claude/agents/verifier.md" && ok "verifier drift mode audits the ASSUMED ledger" || no "verifier lost the intent lens"
-# CJK titles must truncate on character boundaries — a byte-based cut
-# leaves invalid UTF-8 inside mermaid labels (found live on stock_AGI).
-mkdir -p "$D/.ai_context/tasks/cjk"
-cat > "$D/.ai_context/tasks/cjk/plan.md" <<'EOF'
-# Plan: 中文截斷
-<!-- profile: fable-tier ; size: S -->
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: 里程碑中文標題超長需要截斷測試甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥 [in_progress]
-- verify: `true`
-- risk: low
-EOF
-bash "$TS" "$D/.ai_context/tasks/cjk"
-if command -v iconv >/dev/null 2>&1; then
-  iconv -f UTF-8 -t UTF-8 "$D/.ai_context/tasks/cjk/STATUS.md" >/dev/null 2>&1 && ok "CJK truncation keeps STATUS.md valid UTF-8" || no "CJK title truncated mid-character (invalid UTF-8 in view)"
-  echo cjk > "$D/.ai_context/tasks/CURRENT"
-  printf '{"current_dir":"%s"}' "$D" | bash "$TSL" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 && ok "CJK truncation keeps statusline valid UTF-8" || no "statusline CJK cut mid-character"
-  echo lg > "$D/.ai_context/tasks/CURRENT"
-else
-  skp "iconv absent — CJK truncation validity unchecked"
-fi
-
-echo "=== L1-20 · mixed-judge profile: task-profile.sh (v3.13)"
-D="$WORK/l120"; mkdir -p "$D/.claude/agents" "$D/scripts" "$D/.ai_context/tasks/pdemo"
-cp "$REPO"/.claude/agents/*.md "$D/.claude/agents/"
-cp "$REPO/scripts/task-profile.sh" "$D/scripts/"
-tp_before=$(cat "$D"/.claude/agents/*.md | md5sum)
-( cd "$D" && bash scripts/task-profile.sh mixed-judge >/dev/null 2>&1 )
-{ grep -q '^model: fable$' "$D/.claude/agents/planner.md" && grep -q '^model: fable$' "$D/.claude/agents/final-verifier.md" && grep -q '^model: fable$' "$D/.claude/agents/scout.md"; } \
-  && ok "mixed-judge pins judgment agents to fable" || no "mixed-judge fable pins missing"
-{ grep -q '^model: opus$' "$D/.claude/agents/executor.md" && grep -q '^model: opus$' "$D/.claude/agents/verifier.md"; } \
-  && ok "mixed-judge pins executor + verifier to opus" || no "mixed-judge opus pins missing"
-( cd "$D" && bash scripts/task-profile.sh inherit >/dev/null 2>&1 )
-tp_after=$(cat "$D"/.claude/agents/*.md | md5sum)
-[ "$tp_before" = "$tp_after" ] && ok "inherit restores frontmatter byte-identical (stock_update compatible)" || no "inherit round-trip not byte-identical"
-( cd "$D" && bash scripts/task-profile.sh apply >/dev/null 2>&1 )
-grep -q '^model: inherit$' "$D/.claude/agents/planner.md" && ok "apply: no flag + no active task -> inherit" || no "apply default is not inherit"
-printf 'pdemo\n' > "$D/.ai_context/tasks/CURRENT"
-printf '# Plan: p\n<!-- profile: mixed-judge ; size: M -->\n## M1: x [in_progress]\n- verify: `true`\n' > "$D/.ai_context/tasks/pdemo/plan.md"
-( cd "$D" && bash scripts/task-profile.sh apply >/dev/null 2>&1 )
-grep -q '^model: fable$' "$D/.claude/agents/scout.md" && ok "apply: resume re-applies the plan.md header profile" || no "resume did not restore the header profile"
-tp_warn=$( cd "$D" && bash scripts/task-profile.sh apply inherit 2>&1 >/dev/null )
-echo "$tp_warn" | grep -q 'PROFILE SWITCH' && ok "apply: conflicting flag warns (mid-task switch, never silent)" || no "mid-task switch warning missing"
-grep -q '^model: inherit$' "$D/.claude/agents/scout.md" && ok "apply: explicit flag still wins after the warning" || no "explicit flag did not apply"
-tp_env=$( cd "$D" && CLAUDE_CODE_SUBAGENT_MODEL=sonnet bash scripts/task-profile.sh status 2>&1 >/dev/null )
-echo "$tp_env" | grep -q 'CLAUDE_CODE_SUBAGENT_MODEL' && ok "status warns when CLAUDE_CODE_SUBAGENT_MODEL overrides pins" || no "env-override warning missing"
-
-
-# Every writing entry point must warn, not only `apply`.
-for tp_alias in mixed mixed-judge inherit; do
-  tp_active=mixed-judge
-  [ "$tp_alias" = mixed-judge ] && tp_active=mixed
-  printf '# Plan: p\n<!-- profile: %s ; size: M -->\n## M1: x [in_progress]\n- verify: `true`\n' "$tp_active" > "$D/.ai_context/tasks/pdemo/plan.md"
-  tp_warn=$( cd "$D" && bash scripts/task-profile.sh "$tp_alias" 2>&1 >/dev/null ); tp_rc=$?
-  ck 0 "$tp_rc" "$tp_alias still applies the user-selected profile"
-  echo "$tp_warn" | grep -q "PROFILE SWITCH mid-task ($tp_active -> $tp_alias)" && ok "$tp_alias warns on active profile mismatch" || no "$tp_alias switched without warning"
+echo "=== L1-33 · agents and the task skill (v4): checker, executor, card / lanes / evidence"
+AG="$REPO/.claude/agents"; TK="$REPO/.claude/skills/task"
+f="$AG/checker.md"
+{ [ "$(sed -n 1p "$f" 2>/dev/null)" = '---' ] && grep -q '^name: checker$' "$f" && grep -q '^description: .' "$f"; } && ok "checker.md registers (frontmatter; name: checker is what the Subagent matchers see)" || no "checker.md missing or its frontmatter is broken"
+grep -q '^tools: Bash, Read, Grep, Glob$' "$f" && ok "checker tools: Bash, Read, Grep, Glob (it cannot edit)" || no "checker tools line: '$(grep '^tools:' "$f" 2>/dev/null)'"
+n=$(wc -l < "$f" 2>/dev/null); [ "${n:-999}" -le 70 ] && ok "checker.md within 70 lines ($n — injected into every checker)" || no "checker.md is ${n:-?} lines (> 70)"
+{ grep -qF 'checker-verdict: S<n> pass|fail' "$f" && grep -qF 'VERIFIED (L4)' "$f" && grep -qF 'VERIFIED at L4' "$f" && grep -qF '"Check card"' "$f"; } \
+  && ok "checker: verdict line, claim grammar, first claim VERIFIED at L4-5 (R10), card mode (U7)" || no "checker.md lost its verdict line, claim grammar, the L4 first-claim rule or \"Check card\""
+{ grep -qF 'checker-verdict:' "$f" && grep -qF 'checker-verdict:' "$REPO/scripts/evidence.sh"; } && ok "checker-verdict: named by the agent and by the parser (evidence.sh check)" || no "checker-verdict: missing from checker.md or scripts/evidence.sh"
+{ grep -qF 'git checkout' "$f" && grep -qF 'git stash' "$f" && grep -qF 'git restore' "$f" && grep -qF 'run `evidence.sh check`' "$f"; } && ok "checker never runs git checkout / stash / restore or evidence.sh check" || no "checker.md lost its forbidden-command list"
+f="$AG/executor.md"
+{ grep -q '^name: executor$' "$f" && grep -qF 'evidence.sh run' "$f" && ! grep -qF -- '- verify:' "$f"; } && ok "executor: name: executor, proves with evidence.sh run (no v3 verify: line)" || no "executor.md name, evidence.sh run or a v3 '- verify:' line wrong"
+grep -qF 'Never edit `card.md` marks' "$f" && ok "executor keeps its hands off the card marks and the evidence" || no "executor.md lost 'Never edit \`card.md\` marks'"
+hits=""
+for f in "$AG"/*.md "$TK/SKILL.md" "$TK/reference.md" "$TK/pair.md" "$REPO"/.claude/skills/{prove,debug,backtest-check}/SKILL.md; do
+  h="$(grep -oE 'plan\.md|spec\.md|brief\.md|lessons\.md|gatelog|spawnlog|STATUS\.md|task-profile|final-verifier|plan-critic|reframer|scout|--sweep|/ack-' "$f" 2>/dev/null | sort -u | tr '\n' ' ')"
+  [ -z "$h" ] || hits="$hits ${f#"$REPO"/}: $h"
 done
-printf '# Plan: p\n<!-- profile: mixed-judge ; size: M -->\n' > "$D/.ai_context/tasks/pdemo/plan.md"
-tp_warn=$( cd "$D" && bash scripts/task-profile.sh mixed-judge 2>&1 >/dev/null )
-[ -z "$tp_warn" ] && ok "matching direct profile has no switch warning" || no "matching profile warned"
-# pair-codex (ADR-028): all seven inherit — the Codex judge is the only
-# non-Claude seat and it is not a pin; the plan header is the whole state.
-( cd "$D" && bash scripts/task-profile.sh pair-codex >/dev/null 2>&1 ); tp_rc=$?
-ck 0 "$tp_rc" "pair-codex is an accepted profile"
-[ "$(grep -h '^model:' "$D"/.claude/agents/*.md | sort -u)" = "model: inherit" ] && ok "pair-codex pins every agent to inherit (both sides run their session default)" || no "pair-codex wrote a model pin"
-printf '# Plan: p\n<!-- profile: pair-codex ; size: M -->\n## M1: x [in_progress]\n- verify: `true`\n' > "$D/.ai_context/tasks/pdemo/plan.md"
-tp_warn=$( cd "$D" && bash scripts/task-profile.sh apply mixed-judge 2>&1 >/dev/null )
-echo "$tp_warn" | grep -q 'PROFILE SWITCH mid-task (pair-codex -> mixed-judge)' && ok "leaving pair-codex mid-task warns like any other switch" || no "pair-codex switch was silent"
-( cd "$D" && bash scripts/task-profile.sh apply >/dev/null 2>&1 )
-grep -q '^model: inherit$' "$D/.claude/agents/executor.md" && ok "apply: resume restores pair-codex from the header (inherit pins)" || no "resume under pair-codex left pins behind"
-( cd "$D" && bash scripts/task-profile.sh status 2>/dev/null ) | grep -q 'active plan.md profile: pair-codex' && ok "status names the active plan.md profile" || no "status does not show the active profile"
+[ -z "$hits" ] && ok "agents, task skill files, prove/debug/backtest-check name no v3 /task artefact" || no "v3 artefacts still named:$hits"
+n=$(wc -l < "$TK/SKILL.md"); [ "$n" -le 150 ] && ok "task SKILL.md within 150 lines ($n — U10, ADR-039)" || no "task SKILL.md is $n lines (> 150)"
+n=$(wc -l < "$TK/reference.md"); [ "$n" -le 120 ] && ok "task reference.md within 120 lines ($n — read on demand)" || no "task reference.md is $n lines (> 120)"
+{ [ "$(sed -n 1p "$TK/SKILL.md")" = '---' ] && grep -q '^name: task$' "$TK/SKILL.md" && grep -q '^description: .' "$TK/SKILL.md"; } && ok "task skill registers (name + description frontmatter)" || no "task SKILL.md frontmatter broken"
+miss=""
+for s in 'evidence.sh start' 'evidence.sh done' 'evidence.sh approve' 'evidence.sh trust' 'check card' 'check slice' 'check final' \
+         'even with every check green' '[ASSUMED]' 'task/<slug>' 'considered, not built' '/goal' 'or stop after' 'shared premise' 'notes.md'; do
+  grep -qF -- "$s" "$TK/SKILL.md" || miss="$miss [$s]"
+done
+[ -z "$miss" ] && ok "task SKILL.md carries the v4 protocol (evidence.sh steps, Codex checks, intake and stuck rules)" || no "task SKILL.md lacks:$miss"
+subs="$(grep -ohE 'evidence\.sh [a-z]+' "$TK/SKILL.md" "$TK/reference.md" | awk '{print $2}' | sort -u)"; miss=""
+for s in $subs; do grep -qE "^  $s\) shift; cmd_$s " "$REPO/scripts/evidence.sh" || miss="$miss $s"; done
+{ [ "$(echo "$subs" | wc -w)" -ge 8 ] && [ -z "$miss" ]; } && ok "every evidence.sh subcommand the task skill names exists ($(echo $subs))" || no "task skill names evidence.sh subcommands without a case:${miss:- (only $(echo "$subs" | wc -w) parsed)}"
+miss=""
+for h in Resume Notes Lanes Approval Spawn Escalation 'Close report'; do grep -qx "## $h" "$TK/reference.md" || miss="$miss [$h]"; done
+[ -z "$miss" ] && ok "task reference.md has its seven sections (SKILL.md points at them)" || no "task reference.md missing:$miss"
+Pl="$WORK/l133l"; mkproj "$Pl"; mklanes "$Pl" "$(sed -nE 's/^ *(smoke \| .*)$/\1/p' "$TK/reference.md" | head -n 1)"
+mkcard "$Pl" demo off '- [ ] S1 first — lanes: smoke ; codex: no'
+rc=$(ev "$Pl" lint); { [ "$rc" = 0 ] && grep -q '^card lint ok' "$WORK/ev.out"; } && ok "reference.md's example smoke lane passes evidence.sh lint" || no "example lane refused (rc=$rc): $(cat "$WORK/ev.out" "$WORK/ev.err" | head -c 300)"
+left=""
+for f in .claude/agents/{planner,plan-critic,reframer,scout,final-verifier,verifier}.md scripts/{task-profile,task-status,task-statusline}.sh; do
+  [ -e "$REPO/$f" ] && left="$left $f"
+done
+[ -z "$left" ] && ok "v3 crew (planner, plan-critic, reframer, scout, final-verifier, verifier) and task-profile/status/statusline are gone" || no "retired files still shipped:$left"
+ms="$(python3 -I -c 'import json,sys; h=json.load(open(sys.argv[1]))["hooks"]; print(" ".join(sorted({e.get("matcher","") for k in ("SubagentStart","SubagentStop") for e in h.get(k,[])})))' "$REPO/.claude/settings.json" 2>/dev/null)"; miss=""
+for m in $ms; do grep -qx "name: $m" "$AG/$m.md" 2>/dev/null || miss="$miss $m"; done
+{ [ -n "$ms" ] && [ -z "$miss" ]; } && ok "every Subagent matcher names an agent file whose frontmatter name is the matcher ($ms)" || no "Subagent matchers without a matching agent name:${miss:- (none parsed)}"
+# The hooks review (H1): spawn-log reads only the checker's CURRENT wake, so
+# the agent text must ask for the whole report again on every re-wake.
+grep -qF 'reads only this wake' "$AG/checker.md" && grep -qF 'SendMessage re-wake' "$AG/checker.md" && ok "checker: every wake, a SendMessage re-wake too, ends with the whole report" || no "checker.md does not ask for the full report on every wake"
+# checker.md's own closing block, filled in and handed back, is a report the
+# hook records: spawn-log -> the real evidence.sh check (agent text and parser
+# share one grammar). The block is indented in the file; the checker writes it
+# unindented, as the file says.
+blk="$(sed -nE 's/^    ((VERIFIED|NOT VERIFIED|INCONCLUSIVE) \(L[1-5]\) |checker-verdict: )/\1/p' "$AG/checker.md")"
+crec() { python3 -I -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); print(r["unit"], r["verdict"], r["verified"], r["not_verified"], r["inconclusive"], r["source"])' "$1/.claude/evidence/checker.jsonl" 2>/dev/null; }
+Pc="$WORK/l133c"; mkproj "$Pc"; mklanes "$Pc" "$LANE_SMOKE"; ev "$Pc" trust smoke >/dev/null
+mkcard "$Pc" demo off '- [~] S1 first — lanes: smoke ; codex: no'
+ev "$Pc" approve >/dev/null; ev "$Pc" start S1 >/dev/null; ev "$Pc" run smoke >/dev/null
+mktr "$WORK/t133a" "$(printf '## Ran\n$ bash scripts/verify.sh → exit 0, 1s, verify: 3 passed, 0 failed\n\n%s\n' "$(sed 's/^checker-verdict: S<n> pass|fail$/checker-verdict: S1 fail/' <<<"$blk")")" agent-checker-handback.jsonl
+mkstop "$WORK/p133a" "$WORK/t133a"; CLAUDE_PROJECT_DIR="$Pc" bash "$SL" checker stop < "$WORK/p133a" >/dev/null 2>&1
+[ "$(crec "$Pc")" = 'S1 fail 1 1 1 handback' ] && ok "checker.md's example block, handed back, is recorded: S1 fail, 1 VERIFIED / 1 NOT VERIFIED / 1 INCONCLUSIVE" || no "example block record: '$(crec "$Pc")' (block: $(echo "$blk" | head -c 200))"
+mktr "$WORK/t133b" "$(sed -e '/^NOT VERIFIED /d' -e 's/^checker-verdict: S<n> pass|fail$/checker-verdict: S1 pass/' <<<"$blk")" agent-checker-handback.jsonl
+mkstop "$WORK/p133b" "$WORK/t133b"; CLAUDE_PROJECT_DIR="$Pc" bash "$SL" checker stop < "$WORK/p133b" >/dev/null 2>&1
+rc=$(ev "$Pc" "done" S1); { [ "$(crec "$Pc")" = 'S1 pass 1 0 1 handback' ] && [ "$rc" = 0 ]; } && ok "the same block without its NOT VERIFIED line records a pass that done accepts" || no "pass variant: '$(crec "$Pc")', done rc=$rc $(head -c 200 "$WORK/ev.out")"
 
 echo "=== L1-21 · every exit-2 block prints the stdout marker (CLI heuristic, v3.14)"
 # The missing-hook heuristic (exit 2 + EMPTY stdout + stderr matching
@@ -2497,17 +2423,17 @@ else
   miss=""
   for f in .claude/settings.json .claude/hooks/session-start.sh .claude/hooks/stop-gate.sh \
            .claude/hooks/post-edit.sh .claude/hooks/bash-guard.sh .claude/hooks/guard-patterns.sh \
+           .claude/hooks/spawn-log.sh .claude/gitleaks.toml \
            .claude/skills/wrap/SKILL.md .claude/skills/wrap/reference.md \
-           .claude/skills/task/SKILL.md \
+           .claude/skills/task/SKILL.md .claude/skills/task/pair.md \
            .claude/skills/task/reference.md .claude/skills/setup/SKILL.md \
-           .claude/skills/number-check/SKILL.md \
-           .claude/agents/scout.md .claude/agents/planner.md .claude/agents/plan-critic.md \
-           .claude/agents/executor.md .claude/agents/verifier.md .claude/agents/reframer.md \
-           .claude/agents/final-verifier.md \
+           .claude/skills/setup/verify-template.md .claude/skills/number-check/SKILL.md \
+           .claude/skills/prove/SKILL.md .claude/skills/debug/SKILL.md .claude/skills/backtest-check/SKILL.md \
+           .claude/agents/executor.md .claude/agents/checker.md \
            .claude/.starter-version .ai_context/INDEX.md .ai_context/tasks/.gitkeep \
-           .secrets/.gitkeep \
+           .secrets/.gitkeep NOTICE \
            scripts/harness-report.sh scripts/check-append-only.sh scripts/check-context-bulk.sh \
-           scripts/task-profile.sh \
+           scripts/evidence.sh scripts/task-pair.sh \
            CLAUDE.md README.md; do
     [ -e "$P/$f" ] || miss="$miss $f"
   done
