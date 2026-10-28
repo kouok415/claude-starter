@@ -159,6 +159,7 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 | `… in flight; evidence check deferred until it reports`(`WAITING` 列) | lane、Codex 傳送或 subagent 還在跑 | 等 —— 它結束時會喚醒 session |
 | `… is BLOCKED - n stops in a row on the same card and content …` `yielding now`(`STUCK` 列) | 同一份 card 與內容被擋兩次:這個 run 交給你了 | 讀 `donelog`;修掉原因、重新 trust 錯的 lane,或放棄 |
 | `internal error` … `not blocking this stop`(`GATE-ERROR` 列) | 閘門自己出錯;這次停止已放行 | 記一筆 friction;修好之前 slice 不會被檢查 |
+| `codex no verdict twice` | judge 在同一個 unit、同一份內容上兩次沒給 verdict;`done`/`close` 對它一直拒絕 | 看 judge pane(可能有對話框要你處理),修好再重跑 —— 或豁免這個 unit:`evidence.sh approve --waive <unit> --reason "…"` |
 | `TRUST REFUSED —` … `static-only command` | 這條 lane 只證明原始碼存在 | 讓 lane 真的跑產品 |
 | `TRUST REFUSED —` … `the canary passed` | 餵已知壞的輸入,lane 還是綠的 | 修 lane 或它的 canary |
 | `RUN REFUSED —` … `changed since trust` | trust 之後 lane 那行、某個 `@` 行或 `.claude/gitleaks.toml` 變了 | 看過改動,再跑一次 `bash scripts/evidence.sh trust <lane>` |
@@ -169,12 +170,12 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 | `lane files changed during the run` | lane 跑的時候有檔案被改;紀錄作廢 | 等改動停了再重跑 |
 | `NOT DONE —` / `NOT CLOSED —` … `Not proven this time` | `done` 或 `close` 拒絕,並列出缺什麼(紀錄、checker、Codex、核准、lane 範圍外的檔、過期的 lane) | 補上缺的;說「完成」之前先讀「沒證明到什麼」那段 |
 | `card changed since approval` / `CARD LINT —` | 你核准之後 card 被改了,或格式壞了 | 看過 diff 再核准一次 / 修掉 lint 指出的地方 |
+| `scratch_in_mailbox` / `AGENTS.md differs from CLAUDE.md` | judge 往 `pair/` 寫了東西(這次 run 作廢)/ judge 會讀到錯的說明 | 不用做事 —— 它會重跑 / 刪掉 `AGENTS.md`,或用 `CLAUDE.md` 蓋過它 |
 | `bash-guard` 跳出的確認提示 | 離開專案的 `rm -rf`、碰 `.env`;task 進行中的 `git add -A`/`.`、`git checkout -- <path>`、`git checkout .`/`-f`、`git switch --discard-changes`/`-f`、`git restore`、`git stash`;任何時候碰 `.claude/evidence/`、trust 檔或 donelog 的命令、`evidence.sh trust`/`approve`/`check`/`codex`、`run --escalated`、`task-pair.sh --over-estimate` | 只核准你真的要的;trust、approve、check 就是你的簽核。`bypassPermissions` 下只剩 `settings.json` 的三條 ask(trust/approve/check)會出現 |
 | `BASH GUARD — blocked (…)` | force-push、提權命令、`rm -rf /`:永不無人值守執行;記在 `private/bash-guard.log` | 真的要,就自己跑 |
 | 讀 `.env*` / `.secrets/` 被權限拒絕 | H1:Claude 永遠不讀密鑰 | 密鑰放那裡;程式在 runtime 讀 |
 | `WARNING: state.md last updated …` / `… is newer than state.md` / `WARNING: … bytes (cap …)` / `TRUNCATED: first 4096 of` | 記憶過期,或上個 session 沒跑 `/wrap`;或被注入的檔超過上限(state.md 5120、card.md 4096 —— 會被截斷、notes.md 16384、CLAUDE.md 20480) | `/wrap`;蒸餾,或把細節移到 `notes.md` |
 | `has been idle` … `the Stop gate does not check it` / `a v3 plan.md task without card.md` | task 閒置超過 7 天 / `tasks/CURRENT` 指向 v3 task,v4 既不注入也不檢查 | 用 `/task` 續跑或刪 `CURRENT` / 在 `v3-final` checkout 上做完、改寫成 card,或刪 `CURRENT` |
-| `lessons.md` 裡的 `pair: judge no-verdict ×2 …` | Codex judge 兩次沒給 verdict;改用 Claude 席 | 看 judge pane(exit 4 = 那裡有對話框要你處理) |
 | `harness-report.sh`:`verify changed after FAIL` | gate 在失敗後被移動了 | 去 `lessons.md` 找理由;沒有就問為什麼 |
 | `harness-report.sh`:`verification depth gap` | `risk: med/high` 的里程碑沒經過 verifier 就完成了 | 補驗,或知情地接受風險 |
 

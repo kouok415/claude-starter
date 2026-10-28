@@ -179,6 +179,7 @@ prefix; the ones you will meet:
 | `… in flight; evidence check deferred until it reports` (`WAITING` row) | a lane run, a Codex send or a subagent is still running | wait — its end wakes the session |
 | `… is BLOCKED - n stops in a row on the same card and content …` `yielding now` (`STUCK` row) | two blocks on the same card and content: the run is yours | read `donelog`; fix, re-trust a wrong lane, or abandon |
 | `internal error` … `not blocking this stop` (`GATE-ERROR` row) | the gate itself failed; this stop was allowed | file a friction row; slices are not checked until it is fixed |
+| `codex no verdict twice` | the judge gave no verdict twice on the same unit and content; `done`/`close` stay refused for it | look at the judge pane (a dialog may need you), fix and re-run — or waive the unit: `evidence.sh approve --waive <unit> --reason "…"` |
 | `TRUST REFUSED —` … `static-only command` | the lane only proves the source exists | make the lane run the product |
 | `TRUST REFUSED —` … `the canary passed` | the lane stays green on a known-bad input | fix the lane or its canary |
 | `RUN REFUSED —` … `changed since trust` | the lane's line, an `@` line or `.claude/gitleaks.toml` changed after trust | read the change, then `bash scripts/evidence.sh trust <lane>` again |
@@ -189,12 +190,12 @@ prefix; the ones you will meet:
 | `lane files changed during the run` | edits landed while the lane ran; the record was voided | re-run once edits stop |
 | `NOT DONE —` / `NOT CLOSED —` … `Not proven this time` | `done` or `close` refused and lists what is missing (record, checker, Codex, approval, files outside lane paths, stale lanes) | supply the missing piece; read the "not proven" footer before saying done |
 | `card changed since approval` / `CARD LINT —` | the card was edited after your yes, or its format is broken | review the diff and approve again / fix what lint names |
+| `scratch_in_mailbox` / `AGENTS.md differs from CLAUDE.md` | the judge wrote into `pair/` (run voided) / the judge would read the wrong brief | nothing — it re-runs / delete `AGENTS.md` or copy `CLAUDE.md` over it |
 | a confirmation prompt from `bash-guard` | `rm -rf` leaving the project, `.env` access, or during a task: `git add -A`/`.`, `git checkout -- <path>`, `git checkout .`/`-f`, `git switch --discard-changes`/`-f`, `git restore`, `git stash`; any time: a command touching `.claude/evidence/`, the trust file or a donelog, `evidence.sh trust`/`approve`/`check`/`codex`, `run --escalated`, `task-pair.sh --over-estimate` | approve only what you meant; trust, approve and check are your sign-off. Under `bypassPermissions` only the `settings.json` asks (trust/approve/check) still appear |
 | `BASH GUARD — blocked (…)` | force-push, a privileged command or `rm -rf /`: never run unattended; logged to `private/bash-guard.log` | run it yourself if you really mean it |
 | a permission denial reading `.env*` / `.secrets/` | H1: Claude never reads secrets | keep them there; code reads them at runtime |
 | `WARNING: state.md last updated …` / `… is newer than state.md` / `WARNING: … bytes (cap …)` / `TRUNCATED: first 4096 of` | memory is stale or the last session skipped `/wrap`; or an injected file outgrew its cap (state.md 5120, card.md 4096 — truncated, notes.md 16384, CLAUDE.md 20480) | `/wrap`; distill or move detail to `notes.md` |
 | `has been idle` … `the Stop gate does not check it` / `a v3 plan.md task without card.md` | the task idled > 7 days / `tasks/CURRENT` names a v3 task, which v4 neither injects nor gates | `/task` to resume or delete `CURRENT` / finish it on a `v3-final` checkout, rewrite it as a card, or delete `CURRENT` |
-| `pair: judge no-verdict ×2 …` in `lessons.md` | the Codex judge gave no verdict twice; the Claude seat was used | look at the judge pane (exit 4 = a dialog there needs you) |
 | `harness-report.sh`: `verify changed after FAIL` | a gate moved after it failed | find the reason in `lessons.md`; none → ask why |
 | `harness-report.sh`: `verification depth gap` | a `risk: med/high` milestone finished without its verifier | re-check it, or accept the risk knowingly |
 
