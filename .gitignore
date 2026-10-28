@@ -13,6 +13,12 @@
 # Claude session caches (if any tool drops these)
 .claude/cache/
 
+# Evidence ledger (claude-starter v4): per-machine lane, checker and Codex
+# records, run logs (mode 600) and pid locks — written only by
+# scripts/evidence.sh and scripts/task-pair.sh. Never memory, never committed;
+# .claude/done-lanes.trust and tasks/*/donelog are the tracked side.
+.claude/evidence/
+
 # Stop-gate PASS-cache — runtime state; MUST stay ignored (gitignoring it
 # keeps it out of its own change-fingerprint).
 .ai_context/tasks/*/.gate-cache

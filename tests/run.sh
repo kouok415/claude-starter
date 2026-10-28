@@ -28,6 +28,73 @@ WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-stuck-tsuite-* "${TMPDIR:-/tmp}"/claude-status-nag-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-green-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
 trap cleanup EXIT
 
+# --- v4 evidence fixtures ------------------------------------------------------
+# Lane records only ever come from evidence.sh trust/run/check; tests edit the
+# ledger, card or donelog by hand only to prove tampering and foreign records.
+EV="$REPO/scripts/evidence.sh"
+LANE_SMOKE='smoke | src/ scripts/ | 1 | ^verify: [1-9][0-9]* passed, 0 failed$ | bash scripts/canary.sh | bash scripts/verify.sh'
+LANE_MULTI='multi | src/ scripts/ | 1 | ^verify: [0-9]+ passed, 0 failed$ ; ^coverage: ok$ | bash scripts/canary.sh | bash scripts/verify.sh'
+TS_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+mkproj() { # $1 = dir: git repo on task/demo, evidence.sh and what it reads, fixture verify/canary; commit "base" (OLD=1: 8 days ago)
+  local d="$1" t
+  mkdir -p "$d/src" "$d/scripts" "$d/.claude/hooks" "$d/.ai_context/tasks"
+  git -C "$d" init -q -b task/demo 2>/dev/null || { git -C "$d" init -q && git -C "$d" checkout -qb task/demo; }
+  printf '# ok\n## Commands\n- Test: `true`\n' > "$d/CLAUDE.md"; echo a > "$d/src/a.txt"
+  # src/mode picks the behaviour; absent = pass (with a coverage line for LANE_MULTI)
+  cat > "$d/scripts/verify.sh" <<'EOF'
+#!/usr/bin/env bash
+n="$(ls src | wc -l | tr -d ' ')"
+case "$(cat src/mode 2>/dev/null)" in
+  broken) echo "verify: 0 passed, 1 failed"; exit 1 ;;
+  exit1) sleep 1; echo "verify: $n passed, 0 failed"; exit 1 ;;
+  zero) sleep 1; echo "verify: 0 passed, 0 failed"; echo "coverage: ok" ;;
+  partial) sleep 1; echo "verify: $n passed, 0 failed" ;;
+  mutate) sleep 1; echo x >> src/b.txt; echo "verify: $n passed, 0 failed" ;;
+  leak) sleep 1; cat src/emit.txt; echo "verify: $n passed, 0 failed" ;;
+  skips) sleep 1; echo "verify: $n passed, 0 failed"; echo "3 skipped" ;;
+  slow) sleep 3; echo "verify: $n passed, 0 failed" ;;
+  *) sleep 1; echo "verify: $n passed, 0 failed"; echo "coverage: ok" ;;
+esac
+EOF
+  printf '#!/usr/bin/env bash\necho "verify: 0 passed, 1 failed"; exit 1\n' > "$d/scripts/canary.sh"
+  cp "$EV" "$REPO/scripts/precommit-gitleaks.sh" "$REPO/scripts/harness-report.sh" "$d/scripts/"
+  cp "$REPO/.claude/hooks/guard-patterns.sh" "$d/.claude/hooks/"; cp "$REPO/.claude/gitleaks.toml" "$d/.claude/"; cp "$REPO/.gitignore" "$d/"
+  chmod +x "$d"/scripts/*.sh; git -C "$d" add -A
+  if [ "${OLD:-}" = 1 ]; then t="@$(( $(date +%s) - 8 * 86400 )) +0000"; GIT_AUTHOR_DATE="$t" GIT_COMMITTER_DATE="$t" git -C "$d" commit -qm base
+  else git -C "$d" commit -qm base; fi
+}
+mklanes() { local d="$1"; shift; { echo '# name | paths | min_secs | expect | canary | cmd'; printf '%s\n' "$@"; } > "$d/.claude/done-lanes"; }
+mkcard() { # $1 dir, $2 slug, $3 pair (codex|off), then slice lines; also points CURRENT at it
+  local d="$1" s="$2" p="$3"; shift 3; mkdir -p "$d/.ai_context/tasks/$s"
+  { echo '# Demo task'; echo "<!-- card v4 ; pair: $p ; base: $(git -C "$d" rev-parse HEAD) ; estimate: 2h 100L -->"
+    echo 'Goal: CARD-MARKER fixture goal'; echo 'Done when: verify passes ; outside check: suite'
+    echo 'Decisions: [human] use smoke ; [own] fixture only'; echo '## Slices'; printf '%s\n' "$@"; } > "$d/.ai_context/tasks/$s/card.md"
+  echo "$s" > "$d/.ai_context/tasks/CURRENT"
+}
+ev() { local d="$1"; shift; ( cd "$d" && PATH="${EVPATH:-$PATH}" bash scripts/evidence.sh "$@" ) >"$WORK/ev.out" 2>"$WORK/ev.err"; echo $?; }
+rep() { # checker report (I-5): claim lines (default one VERIFIED), then the verdict line
+  local u="$1" v="$2"; shift 2; [ $# -gt 0 ] || set -- 'VERIFIED (L4) fixture claim — bash scripts/verify.sh'
+  printf '%s\n' "$@" "checker-verdict: $u $v"
+}
+dl() { awk -F'\t' -v t="$3" '$2 == t' "$1/.ai_context/tasks/$2/donelog" 2>/dev/null | wc -l | tr -d ' '; }
+dl7() { local f="$1/.ai_context/tasks/$2/donelog"; [ -s "$f" ] && awk -F'\t' 'NF != 7 {exit 1}' "$f" && ! cut -f1 "$f" | grep -Evq "$TS_RE"; }
+lastid() { python3 -I -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["id"])' "$1/.claude/evidence/$2" 2>/dev/null; }
+cdig() { sed -e 's/^- \[[ ~ox]\] /- [ ] /' -e 's/ ✓ .*$//' -e '/^Closed:/d' "$1/.ai_context/tasks/$2/card.md" | sha256sum | cut -c1-12; }
+ready() { # $1 = dir: smoke trusted, card S1 [~] S2 [ ], approved, S1 started, run, checked and done
+  mkproj "$1"; mklanes "$1" "$LANE_SMOKE"; ev "$1" trust smoke >/dev/null
+  mkcard "$1" demo off '- [~] S1 first — lanes: smoke ; codex: no' '- [ ] S2 second — lanes: smoke ; codex: no'
+  ev "$1" approve >/dev/null; ev "$1" start S1 >/dev/null; ev "$1" run smoke >/dev/null
+  rep S1 pass | ev "$1" check S1 --agent fx --source human >/dev/null; ev "$1" "done" S1 >/dev/null
+}
+mkfakes() { # a fake gitleaks (FAKE-LEAK-0123 fires rule fake-leak) and a PATH without gitleaks
+  mkdir -p "$WORK/fakebin" "$WORK/nogl-bin"
+  printf '#!/usr/bin/env bash\n[ "$1" = help ] && exit 0\nf="$2"; [ "$1" = detect ] && f="$4"\ngrep -q FAKE-LEAK-0123 "$f" && { echo "RuleID:      fake-leak"; exit 1; }\nexit 0\n' > "$WORK/fakebin/gitleaks"
+  chmod +x "$WORK/fakebin/gitleaks"
+  for b in bash sh grep sed awk date tr cat rm mv mkdir wc head tail dirname env python3 sha256sum cut sort find stat touch ls kill ps timeout git mktemp chmod cmp cp sleep; do
+    p="$(command -v "$b" 2>/dev/null)" && [ -n "$p" ] && ln -sf "$p" "$WORK/nogl-bin/$b" 2>/dev/null
+  done
+}
+
 # Spec-faithful plan fixture: format header INCLUDED, one in_progress.
 write_plan() { # $1 = path, $2 = M2 verify command
   cat > "$1" <<EOF
@@ -63,6 +130,286 @@ ck 0 $? "stop_hook_active loop protection wins"
 printf '# t\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
 printf '{"session_id": "tsuite-d"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 0 $? "drafted CLAUDE.md passes forever"
+
+echo "=== L1-25 · evidence.sh: done-lanes, trust and --scan-file (v4)"
+mkfakes
+P="$WORK/l125"; mkproj "$P"; mklanes "$P" "$LANE_SMOKE"; TRF="$P/.claude/done-lanes.trust"
+# A size guard, not a budget: evidence.sh is executed, never injected into model context, so it
+# is written for reading; the guard only catches the file roughly doubling.
+n="$(wc -l < "$EV" | tr -d ' ')"; [ "$n" -le 1200 ] && ok "evidence.sh has not doubled ($n lines, guard 1200)" || no "evidence.sh is $n lines (guard 1200) — it roughly doubled; find out why before raising the guard"
+mklanes "$P" "$LANE_SMOKE" "${LANE_SMOKE/smoke/l2}" "${LANE_SMOKE/smoke/l3}" "${LANE_SMOKE/smoke/l4}"
+rc=$(ev "$P" trust smoke); { [ "$rc" = 2 ] && grep -qF 'declares 4 lanes (max 3)' "$WORK/ev.err"; } && ok "four lanes refused (max 3, exit 2)" || no "four lanes not refused (rc=$rc)"
+for c in 'bash -n scripts/verify.sh' 'python3 -m py_compile src/x.py' 'shellcheck scripts/verify.sh' 'bash scripts/verify.sh --help' 'bash scripts/verify.sh --list-tests' \
+         'bash scripts/verify.sh --parse-check' 'bash scripts/verify.sh --selftest' 'grep -q a src/a.txt' 'test -f src/a.txt && ls src'; do
+  mklanes "$P" "st | src/ | 1 | ^x\$ | bash scripts/canary.sh | $c"; rc=$(ev "$P" trust st)
+  { [ "$rc" = 3 ] && grep -qF 'TRUST REFUSED — st: static-only command' "$WORK/ev.err" && ! grep -q '	st	' "$TRF" 2>/dev/null; } \
+    && ok "trust refuses a static-only lane: $c" || no "static-only lane not refused (rc=$rc): $c"
+done
+mklanes "$P" "${LANE_SMOKE/| 1 |/| 0 |}"; rc=$(ev "$P" trust smoke)
+{ [ "$rc" = 2 ] && grep -qF 'min_secs must be an integer >= 1' "$WORK/ev.err"; } && ok "min_secs 0 is a done-lanes format error (exit 2)" || no "min_secs 0 accepted (rc=$rc)"
+mklanes "$P" 'smoke | src/ scripts/ | 1 |  | bash scripts/canary.sh | bash scripts/verify.sh'; rc=$(ev "$P" trust smoke)
+{ [ "$rc" = 2 ] && grep -qF 'expect is empty' "$WORK/ev.err"; } && ok "an empty expect is a format error (exit 2)" || no "empty expect accepted (rc=$rc)"
+# A canary that passes, spelled differently from cmd (a canary equal to cmd is refused earlier as trivial).
+mklanes "$P" "${LANE_SMOKE/bash scripts\/canary.sh/BROKEN=0 bash scripts/verify.sh}"; rc=$(ev "$P" trust smoke)
+{ [ "$rc" = 3 ] && grep -qF 'the canary passed' "$WORK/ev.err" && ! grep -q '	smoke	' "$TRF" 2>/dev/null; } && ok "a canary that passes is refused, nothing recorded" || no "passing canary accepted (rc=$rc)"
+mklanes "$P" 'vm | src/ | 1 | ^verify: [1-9] | skip:needs the VM | bash scripts/verify.sh'; rc=$(ev "$P" trust vm)
+{ [ "$rc" = 3 ] && grep -qF 'canary is skip:needs the VM' "$WORK/ev.err" && grep -qF -- '--skip-canary' "$WORK/ev.err"; } && ok "a skip: canary needs the human's --skip-canary" || no "skip: canary trusted without the flag (rc=$rc)"
+rc=$(ev "$P" trust vm --skip-canary); { [ "$rc" = 0 ] && [ "$(tail -n 1 "$TRF" | cut -f7)" = 'skip:needs the VM' ]; } && ok "--skip-canary records canary_result skip:<reason>" || no "--skip-canary trust failed (rc=$rc)"
+rm -f "$TRF"; mklanes "$P" "$LANE_SMOKE"; rc=$(ev "$P" trust smoke)
+{ [ "$rc" = 0 ] && grep -qF 'trusted lane smoke — canary red:exit=1' "$WORK/ev.out" && head -n 1 "$TRF" | grep -q '^# ts	lane	cmd_sha	lane_sha	dir_sha	canary_sha	canary_result' \
+  && [ "$(grep -vc '^#' "$TRF")" = 1 ] && tail -n 1 "$TRF" | awk -F'\t' 'NF == 7 && $2 == "smoke" && $7 == "red:exit=1"' | grep -q . && tail -n 1 "$TRF" | cut -f1 | grep -Eq "$TS_RE" \
+  && [ "$(tail -n 1 "$TRF" | cut -f3-6 | grep -Ec '^[0-9a-f]{12}	[0-9a-f]{12}	[0-9a-f]{12}	[0-9a-f]{12}$')" = 1 ]; } \
+  && ok "trust: red canary, commented header, one 7-field UTC row" || no "trust row or output wrong (rc=$rc): $(tail -n 1 "$TRF" 2>/dev/null)"
+[ "$(tail -n 1 "$TRF" | cut -f3)" = "$(printf '%s' 'bash scripts/verify.sh' | sha256sum | cut -c1-12)" ] && ok "cmd_sha = sha256(cmd)[:12]" || no "cmd_sha is not sha256 of the cmd field"
+mkcard "$P" demo off '- [~] S1 first — lanes: smoke ; codex: no'; rc=$(ev "$P" trust smoke)
+{ [ "$rc" = 0 ] && dl7 "$P" demo && awk -F'\t' '$2 == "TRUST" && $4 == "smoke" && $7 ~ /^canary red:exit=1 cmd /' "$P/.ai_context/tasks/demo/donelog" | grep -q .; } \
+  && ok "trust during a task writes a 7-field TRUST donelog row" || no "TRUST donelog row missing or malformed"
+grep -qxF '.claude/evidence/' "$REPO/.gitignore" && ok "template .gitignore ignores .claude/evidence/" || no ".claude/evidence/ not in the template .gitignore"
+miss=""; for f in static_only donelog_row lock_alive task_slug card_current_slice; do grep -q "^$f() {" "$REPO/.claude/hooks/guard-patterns.sh" || miss="$miss $f"; done
+[ -z "$miss" ] && ok "guard-patterns.sh ships the five v4 helpers evidence.sh sources" || no "guard-patterns.sh lacks:$miss"
+mv "$P/.claude/hooks/guard-patterns.sh" "$WORK/gp.bak"; rc=$(ev "$P" trust smoke); mv "$WORK/gp.bak" "$P/.claude/hooks/guard-patterns.sh"
+{ [ "$rc" = 6 ] && grep -qF 'guard-patterns.sh is missing or predates v4' "$WORK/ev.err"; } && ok "missing guard-patterns.sh is an internal error (exit 6)" || no "missing guard-patterns.sh not caught (rc=$rc)"
+cp "$P/.gitignore" "$WORK/gi.bak"; grep -vxF '.claude/evidence/' "$WORK/gi.bak" > "$P/.gitignore"; rc=$(ev "$P" trust smoke); grep -qF 'is not gitignored' "$WORK/ev.err"; m=$?
+rc2=$(ev "$P" status --porcelain); cp "$WORK/gi.bak" "$P/.gitignore"
+{ [ "$rc" = 6 ] && [ "$m" = 0 ] && [ "$rc2" = 0 ]; } && ok "unignored .claude/evidence/ refuses (exit 6); status --porcelain still exits 0" || no "ignore guard wrong (trust rc=$rc, porcelain rc=$rc2)"
+mklanes "$P" "${LANE_SMOKE/bash scripts\/canary.sh/false}"; rc=$(ev "$P" trust smoke)
+{ [ "$rc" = 3 ] && grep -qF 'canary is trivial' "$WORK/ev.err"; } && ok "canary 'false' is trivial" || no "trivial canary accepted (rc=$rc)"
+mklanes "$P" "${LANE_SMOKE/bash scripts\/canary.sh/echo y >> src/a.txt; bash scripts/canary.sh}"; rc=$(ev "$P" trust smoke); echo a > "$P/src/a.txt"
+{ [ "$rc" = 3 ] && grep -qF "the canary left the lane's content changed" "$WORK/ev.err"; } && ok "a canary that leaves the lane changed is refused" || no "dirty canary accepted (rc=$rc)"
+mklanes "$P" "$LANE_SMOKE" '@verify-paths src/'; rc=$(ev "$P" run smoke); grep -qF '@ directives or scan rules changed since trust' "$WORK/ev.err"; m=$?
+ev "$P" trust smoke >/dev/null; rc2=$(ev "$P" run smoke)
+{ [ "$rc" = 3 ] && [ "$m" = 0 ] && [ "$rc2" = 0 ]; } && ok "a new @ line needs a re-trust before run" || no "@ line change not caught (rc=$rc, after trust rc=$rc2)"
+cp "$P/.claude/gitleaks.toml" "$WORK/gl.bak"; echo '# local note' >> "$P/.claude/gitleaks.toml"; rc=$(ev "$P" run smoke); cp "$WORK/gl.bak" "$P/.claude/gitleaks.toml"
+{ [ "$rc" = 3 ] && grep -qF '@ directives or scan rules changed since trust' "$WORK/ev.err"; } && ok "editing .claude/gitleaks.toml needs a re-trust" || no "scan rule change not caught (rc=$rc)"
+mklanes "$P" "${LANE_SMOKE/failed\$/failed}" '@verify-paths src/'; rc=$(ev "$P" run smoke); mklanes "$P" "$LANE_SMOKE" '@verify-paths src/'
+{ [ "$rc" = 3 ] && grep -qF 'lane line changed since trust' "$WORK/ev.err"; } && ok "an expect edit needs a re-trust" || no "expect edit not caught (rc=$rc)"
+mklanes "$P" "${LANE_SMOKE/bash scripts\/verify.sh/bash scripts/verify.sh | cat}"; rc=$(ev "$P" trust smoke); mklanes "$P" "$LANE_SMOKE" '@verify-paths src/'
+{ [ "$rc" = 2 ] && grep -qF "no '|' inside cmd" "$WORK/ev.err"; } && ok "a pipeline in cmd is a format error" || no "pipe in cmd accepted (rc=$rc)"
+mklanes "$P" "$LANE_SMOKE" '@verify-paths src/' '@ext nosuch echo ab12cd3'; rc=$(ev "$P" trust smoke); mklanes "$P" "$LANE_SMOKE" '@verify-paths src/'
+{ [ "$rc" = 2 ] && grep -qF "@ext names unknown lane 'nosuch'" "$WORK/ev.err"; } && ok "@ext must name a declared lane" || no "@ext of an unknown lane accepted (rc=$rc)"
+GL="$REPO/.claude/gitleaks.toml"
+{ grep -qF 'useDefault = true' "$GL" && grep -qF 'id = "internal-ipv4"' "$GL" && grep -qF '10\.0\.2\.' "$GL"; } && ok ".claude/gitleaks.toml: default rules + internal-ipv4 + QEMU allowlist" || no ".claude/gitleaks.toml incomplete"
+echo 'all clean here' > "$WORK/scan-clean.txt"; printf 'connect 10.%s.30.40:443\n' 20 > "$WORK/scan-ip.txt"; printf 'qemu guest %s\n' "$(printf '10.0.2.%s' 15)" > "$WORK/scan-qemu.txt"
+PATH="$WORK/nogl-bin" bash "$P/scripts/precommit-gitleaks.sh" --scan-file "$WORK/scan-clean.txt" >/dev/null 2>&1; ck 3 $? "--scan-file without gitleaks: clean, internal-ipv4 only (exit 3)"
+out="$(PATH="$WORK/nogl-bin" bash "$P/scripts/precommit-gitleaks.sh" --scan-file "$WORK/scan-ip.txt" 2>/dev/null)"; rc=$?
+{ [ "$rc" = 1 ] && [ "$out" = internal-ipv4 ]; } && ok "--scan-file without gitleaks: an internal IP fires internal-ipv4" || no "ERE fallback missed the internal IP (rc=$rc, '$out')"
+PATH="$WORK/nogl-bin" bash "$P/scripts/precommit-gitleaks.sh" --scan-file "$WORK/scan-qemu.txt" >/dev/null 2>&1; ck 3 $? "--scan-file without gitleaks: QEMU 10.0.2.0/24 is allowlisted"
+if command -v gitleaks >/dev/null 2>&1; then
+  out="$(bash "$P/scripts/precommit-gitleaks.sh" --scan-file "$WORK/scan-ip.txt" 2>/dev/null)"; rc=$?
+  bash "$P/scripts/precommit-gitleaks.sh" --scan-file "$WORK/scan-qemu.txt" >/dev/null 2>&1; rc2=$?
+  { [ "$rc" = 1 ] && [ "$out" = internal-ipv4 ] && [ "$rc2" = 0 ]; } && ok "gitleaks and the ERE fallback agree (internal IP hit, QEMU clean)" || no "gitleaks parity broken (ip rc=$rc '$out', qemu rc=$rc2)"
+  G="$WORK/l125g"; mkdir -p "$G"; git -C "$G" init -q; cp "$WORK/scan-ip.txt" "$G/notes.txt"; git -C "$G" add notes.txt
+  ( cd "$G" && bash "$REPO/scripts/precommit-gitleaks.sh" ) >/dev/null 2>&1; ck 0 $? "pre-commit (no args) keeps gitleaks' own config: a staged internal IP passes"
+else
+  skp "gitleaks parity (gitleaks not installed)"; skp "pre-commit default-config scan (gitleaks not installed)"
+fi
+{ ! grep -qE 'gitleaks\.toml|--config' "$REPO/.pre-commit-config.yaml" && [ ! -e "$REPO/.gitleaks.toml" ]; } && ok "pre-commit gitleaks hook unchanged; no repo-root .gitleaks.toml" || no "pre-commit reads the lane rules or a root .gitleaks.toml appeared"
+
+echo "=== L1-26 · evidence.sh run (v4)"
+P="$WORK/l126"; mkproj "$P"; mklanes "$P" "$LANE_SMOKE" "$LANE_MULTI"; ev "$P" trust smoke >/dev/null; ev "$P" trust multi >/dev/null
+mkcard "$P" demo off '- [~] S1 first — lanes: smoke ; codex: no'; PL="$P/.claude/evidence/smoke.jsonl"; PD="$P/.ai_context/tasks/demo/donelog"
+jf() { python3 -I -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1]).get(sys.argv[2]))' "$P/.claude/evidence/$1" "$2" 2>/dev/null; }
+mklanes "$P" "$LANE_SMOKE" "$LANE_MULTI" 'fork | src/ | 1 | ^verify: [0-9]+ passed | bash scripts/canary.sh | bash scripts/verify.sh'; rc=$(ev "$P" run fork)
+{ [ "$rc" = 3 ] && grep -qF 'RUN REFUSED — lane fork: never trusted' "$WORK/ev.err" && [ ! -e "$P/.claude/evidence/fork.jsonl" ]; } && ok "an untrusted lane never runs" || no "untrusted lane ran (rc=$rc)"
+mklanes "$P" "${LANE_SMOKE/%verify.sh/verify.sh --again}" "$LANE_MULTI"; rc=$(ev "$P" run smoke); mklanes "$P" "$LANE_SMOKE" "$LANE_MULTI"
+{ [ "$rc" = 3 ] && grep -qF 'command changed since trust' "$WORK/ev.err"; } && ok "a changed command is refused until re-trusted" || no "changed command ran (rc=$rc)"
+rc=$(ev "$P" run smoke); { [ "$rc" = 0 ] && grep -q '^evidence: smoke PASS id=' "$WORK/ev.out"; } && ok "run smoke passes" || no "run smoke failed (rc=$rc): $(head -c 300 "$WORK/ev.out")"
+python3 -I - "$PL" "$TS_RE" <<'PY' && ok "lane record: 20 keys in order (id first, markers last), UTC started" || no "lane record keys or started wrong"
+import json, re, sys
+r = json.loads(open(sys.argv[1]).read().splitlines()[-1])
+want = "id lane slice tree head ext cmd_sha lane_sha exit started secs executed skipped scan log log_sha verdict why ack markers".split()
+ints = {"exit", "secs", "executed", "skipped", "ack"}
+sys.exit(0 if list(r) == want and all(isinstance(r[k], int) for k in ints) and isinstance(r["markers"], list) and re.match(sys.argv[2], r["started"]) else 1)
+PY
+{ [ "$(jf smoke.jsonl verdict)" = pass ] && [ "$(jf smoke.jsonl executed)" -gt 0 ] && [ "$(jf smoke.jsonl why)" = - ] && [ "$(jf smoke.jsonl ack)" = 0 ] && [ "$(jf smoke.jsonl slice)" = S1 ]; } \
+  && ok "pass record: executed > 0, why -, ack 0, slice S1" || no "pass record fields wrong"
+python3 -I - "$P" "$(jf smoke.jsonl log)" <<'PY' && ok "log name <lane>-<UTC>.log, mode 600 in a 700 logs/ dir" || no "log naming or modes wrong"
+import os, re, stat, sys
+p, log = sys.argv[1], sys.argv[2]
+m = lambda f: stat.S_IMODE(os.stat(os.path.join(p, f)).st_mode)
+sys.exit(0 if re.fullmatch(r"\.claude/evidence/logs/smoke-\d{8}T\d{6}Z\.log", log) and m(log) == 0o600 and m(".claude/evidence/logs") == 0o700 else 1)
+PY
+{ awk -F'\t' -v id="$(lastid "$P" smoke.jsonl)" '$2 == "RUN" && NF == 7 && $3 == "S1" && $4 == "smoke" && $6 == id && $7 == "pass"' "$PD" | grep -q .; } && ok "RUN donelog row names slice, lane, record id, verdict" || no "RUN donelog row wrong"
+echo partial > "$P/src/mode"; rc=$(ev "$P" run multi)
+{ [ "$rc" = 1 ] && [ "$(jf multi.jsonl verdict)" = fail ] && [ "$(jf multi.jsonl why)" = expect=2 ] && grep -qF 'expect not matched — pattern 2' "$WORK/ev.out"; } && ok "a missing second marker fails with why=expect=2" || no "expect=2 not reported (rc=$rc)"
+echo zero > "$P/src/mode"; ev "$P" run multi >/dev/null
+{ [ "$(jf multi.jsonl verdict)" = fail ] && [ "$(jf multi.jsonl why)" = executed=0 ]; } && ok "zero work fails with why=executed=0" || no "executed=0 not caught"
+echo exit1 > "$P/src/mode"; ev "$P" run smoke >/dev/null
+{ [ "$(jf smoke.jsonl verdict)" = fail ] && [ "$(jf smoke.jsonl why)" = exit=1 ]; } && ok "a non-zero exit fails with why=exit=1" || no "exit=1 not caught"
+rm -f "$P/src/mode"; mklanes "$P" "${LANE_SMOKE/| 1 |/| 5 |}" "$LANE_MULTI"; ev "$P" trust smoke >/dev/null; rc=$(ev "$P" run smoke)
+{ [ "$(jf smoke.jsonl verdict)" = fail ] && case "$(jf smoke.jsonl why)" in too-fast:*) true ;; *) false ;; esac && grep -qF 'too fast' "$WORK/ev.out"; } && ok "faster than min_secs fails (too-fast)" || no "too-fast not caught (rc=$rc)"
+mklanes "$P" "$LANE_SMOKE" "$LANE_MULTI"; ev "$P" trust smoke >/dev/null; ev "$P" run smoke >/dev/null; echo r > "$P/README.md"
+ev "$P" status --line >/dev/null; grep -qF 'smoke fresh' "$WORK/ev.out" && ok "a file outside the lane's paths keeps it fresh" || no "status --line lost 'smoke fresh': $(cat "$WORK/ev.out")"
+echo b > "$P/src/a.txt"; ev "$P" status --line >/dev/null; echo a > "$P/src/a.txt"
+grep -qF 'smoke stale' "$WORK/ev.out" && ok "an edit inside the lane's paths makes it stale" || no "status --line missed 'smoke stale': $(cat "$WORK/ev.out")"
+echo mutate > "$P/src/mode"; rc=$(ev "$P" run smoke); rm -f "$P/src/mode" "$P/src/b.txt"
+{ [ "$(jf smoke.jsonl verdict)" = void ] && [ "$(jf smoke.jsonl why)" = changed-during-run ] && grep -qF 'changed during the run' "$WORK/ev.out"; } && ok "lane files changed during the run void the record" || no "mid-run change not voided (rc=$rc)"
+echo leak > "$P/src/mode"; echo 'token FAKE-LEAK-0123' > "$P/src/emit.txt"; rc=$(EVPATH="$WORK/fakebin:$PATH" ev "$P" run smoke)
+{ [ "$(jf smoke.jsonl scan)" = hit:fake-leak ] && [ "$(jf smoke.jsonl why)" = leak:fake-leak ] && [ "$(jf smoke.jsonl markers)" = "['withheld: scan hit']" ]; } && ok "a secret in the log fails the run and withholds the markers" || no "secret scan not applied (rc=$rc, scan=$(jf smoke.jsonl scan))"
+printf 'connect 10.%s.30.40:443\n' 20 > "$P/src/emit.txt"; EVPATH="$WORK/nogl-bin" ev "$P" run smoke >/dev/null
+[ "$(jf smoke.jsonl scan)" = hit:internal-ipv4 ] && ok "without gitleaks an internal IP still fails the run" || no "ERE scan missed the IP: scan=$(jf smoke.jsonl scan)"
+echo slow > "$P/src/mode"; ( cd "$P" && bash scripts/evidence.sh run smoke >/dev/null 2>&1 ) & bgp=$!; sleep 1
+LK="$P/.claude/evidence/locks/run-smoke.lock"
+{ [ -f "$LK" ] && kill -0 "$(cut -f1 "$LK")" 2>/dev/null && [ "$(cut -f2-3 "$LK")" = "run	smoke" ] && cut -f5 "$LK" | grep -Eq "$TS_RE"; } && ok "a running lane holds a pid lock (pid, run, lane, slice, UTC)" || no "run lock missing or malformed: $(cat "$LK" 2>/dev/null)"
+rc=$(ev "$P" run smoke); { [ "$rc" = 4 ] && grep -qF 'is already running (pid' "$WORK/ev.err"; } && ok "a second run of a running lane is refused (exit 4)" || no "concurrent run not refused (rc=$rc)"
+wait "$bgp"; [ ! -e "$LK" ] && ok "the lock goes when the run ends" || no "lock left behind"
+echo broken > "$P/src/mode"; n=0; for _ in 1 2 3; do [ "$(ev "$P" run smoke)" = 1 ] && n=$((n + 1)); done; c0="$(wc -l < "$PL" | tr -d ' ')"; rc=$(ev "$P" run smoke)
+{ [ "$n" = 3 ] && [ "$rc" = 5 ] && grep -qF 'ESCALATE — lane smoke failed 3 times in a row on S1' "$WORK/ev.out" && [ "$(wc -l < "$PL" | tr -d ' ')" = "$c0" ]; } && ok "three straight fails on a slice ESCALATE (exit 5, no run)" || no "ESCALATE missing (fails=$n rc=$rc)"
+awk -F'\t' '$2 == "ESCALATE" && $3 == "S1" && $4 == "smoke" && $7 == "3 consecutive fails"' "$PD" | grep -q . && ok "ESCALATE donelog row" || no "ESCALATE row missing"
+c0="$(wc -l < "$PL" | tr -d ' ')"; ev "$P" run smoke --escalated >/dev/null
+{ [ "$(wc -l < "$PL" | tr -d ' ')" = $((c0 + 1)) ] && [ "$(jf smoke.jsonl verdict)" = fail ] && [ "$(jf smoke.jsonl ack)" = 1 ] \
+  && awk -F'\t' '$2 == "ESCALATE" && $7 == "escalated: human override"' "$PD" | grep -q .; } && ok "--escalated runs once more (ack=1, override row)" || no "--escalated did not run as an override"
+rm -f "$P/src/mode"; mklanes "$P" "$LANE_SMOKE" "$LANE_MULTI" '@ext smoke echo 0123456789ab'; ev "$P" trust smoke >/dev/null; ev "$P" run smoke >/dev/null
+[ "$(jf smoke.jsonl ext)" = 0123456789ab ] && ok "@ext records the external commit" || no "@ext not recorded: $(jf smoke.jsonl ext)"
+mklanes "$P" "$LANE_SMOKE" "$LANE_MULTI" '@ext smoke echo not-hex'; ev "$P" trust smoke >/dev/null; rc=$(ev "$P" run smoke)
+{ [ "$rc" = 1 ] && [ "$(jf smoke.jsonl ext)" = invalid ] && [ "$(jf smoke.jsonl why)" = ext ] && grep -qF '@ext printed no commit id' "$WORK/ev.out"; } && ok "a non-hex @ext fails the run (why=ext)" || no "bad @ext passed (rc=$rc)"
+mklanes "$P" "$LANE_SMOKE" "$LANE_MULTI"; ev "$P" trust smoke >/dev/null
+echo leak > "$P/src/mode"; printf 'guest %s\n' "$(printf '10.0.2.%s' 15)" > "$P/src/emit.txt"; EVPATH="$WORK/nogl-bin" ev "$P" run smoke >/dev/null
+{ [ "$(jf smoke.jsonl verdict)" = pass ] && [ "$(jf smoke.jsonl scan)" = clean-ip-only ]; } && ok "QEMU addresses pass; without gitleaks scan=clean-ip-only" || no "QEMU log: verdict=$(jf smoke.jsonl verdict) scan=$(jf smoke.jsonl scan)"
+rm -f "$P/src/mode" "$P/src/emit.txt"; sleep 0 & dp=$!; wait "$dp"; printf '%s\trun\tsmoke\tS1\t%s\n' "$dp" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$LK"; rc=$(ev "$P" run smoke)
+{ [ "$rc" = 0 ] && grep -qF 'removed stale lock run-smoke.lock' "$WORK/ev.err"; } && ok "a dead lock is cleared, the run goes ahead" || no "stale lock blocked the run (rc=$rc)"
+mv "$P/.ai_context/tasks/CURRENT" "$WORK/cur.bak"; c0="$(wc -l < "$PD")"; rc=$(ev "$P" run smoke); mv "$WORK/cur.bak" "$P/.ai_context/tasks/CURRENT"
+{ [ "$rc" = 0 ] && [ "$(jf smoke.jsonl slice)" = - ] && [ "$(wc -l < "$PD")" = "$c0" ]; } && ok "no task: slice -, no donelog row" || no "taskless run wrote task state (rc=$rc)"
+
+echo "=== L1-27 · evidence.sh lint / approve / start / status (v4)"
+P="$WORK/l127"; mkproj "$P"; mklanes "$P" "$LANE_SMOKE"; ev "$P" trust smoke >/dev/null
+mkcard "$P" demo off '- [~] S1 first — lanes: smoke ; codex: no' '- [ ] S2 second — lanes: smoke ; codex: no'
+C="$P/.ai_context/tasks/demo/card.md"; PD="$P/.ai_context/tasks/demo/donelog"; cp "$C" "$WORK/c127"
+cedit() { sed -E "$1" "$WORK/c127" > "$C"; } # one edit on the pristine card
+crestore() { cp "$WORK/c127" "$C"; }
+rc=$(ev "$P" lint); { [ "$rc" = 0 ] && grep -q '^card lint ok — card .*pair off$' "$WORK/ev.out"; } && ok "lint passes a well-formed card" || no "lint rejected a good card (rc=$rc): $(cat "$WORK/ev.out")"
+cedit 's/(S2 second — lanes:) smoke/\1 nosuch/'; rc=$(ev "$P" lint); { [ "$rc" = 1 ] && grep -qF "S2 names lane 'nosuch'" "$WORK/ev.out"; } && ok "lint: an undeclared lane" || no "undeclared lane passed lint (rc=$rc)"
+cedit 's/^Done when: .*/Done when:/'; rc=$(ev "$P" lint); { [ "$rc" = 1 ] && grep -qF 'Done when: is empty' "$WORK/ev.out"; } && ok "lint: empty Done when:" || no "empty Done when: passed (rc=$rc)"
+cedit 's/^Decisions: .*/Decisions: use smoke/'; rc=$(ev "$P" lint); { [ "$rc" = 1 ] && grep -qF 'decision without a [human]/[inferred]/[own]/[ASSUMED] tag' "$WORK/ev.out"; } && ok "lint: an untagged decision" || no "untagged decision passed (rc=$rc)"
+cedit 's/^- \[ \] S2/- [~] S2/'; rc=$(ev "$P" lint); { [ "$rc" = 1 ] && grep -qF '2 slices are [~] (at most one)' "$WORK/ev.out"; } && ok "lint: two [~] slices" || no "two [~] passed (rc=$rc)"
+cedit 's/^- \[[ ~]\] (S[12] .*)$/- [x] \1 ✓ smoke@0000000 check@0000000/'; rc=$(ev "$P" lint); ck 0 "$rc" "lint checks the format only: two [x] with references pass"
+cedit "s/^Goal: .*/Goal: $(printf '%*s' $((4200 - $(wc -c < "$WORK/c127") + 24)) '' | tr ' ' x)/"; rc=$(ev "$P" lint)
+{ [ "$rc" = 1 ] && grep -qF "card is 4200 B (cap 4096)" "$WORK/ev.out"; } && ok "lint: a card over 4096 B" || no "oversized card passed (rc=$rc, $(wc -c < "$C") B)"
+crestore; mklanes "$P" '@pair codex' "$LANE_SMOKE"; rc=$(ev "$P" lint)
+{ [ "$rc" = 1 ] && grep -qF 'a card may raise pairing, never lower it' "$WORK/ev.out"; } && ok "lint: card pair: off under @pair codex" || no "pairing lowered by the card (rc=$rc)"
+mklanes "$P" "$LANE_SMOKE"; cedit 's/pair: off/pair: codex/'; rc=$(ev "$P" lint); ck 0 "$rc" "a card may raise pairing (pair: codex without @pair)"
+crestore; rc=$(ev "$P" approve)
+{ [ "$rc" = 0 ] && grep -qF 'card approved at card:' "$WORK/ev.out" && awk -F'\t' -v d="$(cdig "$P" demo)" '$2 == "APPROVE" && $4 == "human" && $5 == d' "$PD" | grep -q .; } && ok "approve writes APPROVE with the card digest" || no "approve row wrong (rc=$rc)"
+n="$(dl "$P" demo APPROVE)"; cedit 's/^Goal: .*/Goal:/'; rc=$(ev "$P" approve)
+{ [ "$rc" = 1 ] && grep -qF 'approve refused — fix the card first:' "$WORK/ev.out" && [ "$(dl "$P" demo APPROVE)" = "$n" ]; } && ok "approve refuses a card that fails lint" || no "approve accepted a bad card (rc=$rc)"
+cedit 's/^- \[ \] S2 (.*)$/- [x] S2 \1 ✓ smoke@0000000 check@0000000/'; ev "$P" status --line >/dev/null
+grep -qF 'card approved' "$WORK/ev.out" && ok "status marks and refs keep the approval" || no "status --line lost the approval: $(cat "$WORK/ev.out")"
+cedit 's/^Goal: .*/Goal: another goal/'; ev "$P" status --line >/dev/null; grep -qF 'card changed' "$WORK/ev.out" && ok "a content edit shows card changed" || no "content edit not shown: $(cat "$WORK/ev.out")"
+crestore; rc=$(ev "$P" start S1)
+{ [ "$rc" = 0 ] && grep -qF 'S1 started at' "$WORK/ev.out" && awk -F'\t' -v h="$(git -C "$P" rev-parse HEAD | cut -c1-12)" '$2 == "START" && $3 == "S1" && $5 == h' "$PD" | grep -q .; } && ok "start S1 records START with HEAD" || no "start S1 wrong (rc=$rc)"
+rc=$(ev "$P" start S9); { [ "$rc" = 2 ] && grep -qF 'no slice S9 on the card' "$WORK/ev.err"; } && ok "start of an unknown slice is a usage error" || no "start S9 rc=$rc"
+mklanes "$P" '@pair codex' "$LANE_SMOKE"; cedit 's/pair: off/pair: codex/'; ev "$P" status >/dev/null
+head -n 1 "$WORK/ev.out" | grep -qF 'pair on' && ok "status shows pair on (@pair codex + card pair: codex)" || no "status first line lacks pair on: $(head -n 1 "$WORK/ev.out")"
+ev "$P" lint >/dev/null; grep -q 'pair on$' "$WORK/ev.out" && ok "lint reports pair on" || no "lint lacks pair on: $(cat "$WORK/ev.out")"
+mklanes "$P" "$LANE_SMOKE"; cedit 's/^- \[~\] S1/- [ ] S1/; s/^- \[ \] S2/- [~] S2/'; ev "$P" status --line >/dev/null
+grep -qF 'evidence[demo]: slice S2' "$WORK/ev.out" && ok "status --line names the [~] slice" || no "status --line slice wrong: $(cat "$WORK/ev.out")"
+mv "$P/.ai_context/tasks/CURRENT" "$WORK/cur.bak"; rc=$(ev "$P" status --line); mv "$WORK/cur.bak" "$P/.ai_context/tasks/CURRENT"
+{ [ "$rc" = 0 ] && [ ! -s "$WORK/ev.out" ]; } && ok "no task: status --line prints nothing" || no "status --line without a task: rc=$rc '$(cat "$WORK/ev.out")'"
+cedit 's/^- \[~\] S1 first/- [~] S1 里程碑中文標題超長需要截斷測試甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥里程碑中文標題超長需要截斷測試甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申/'; rc=$(ev "$P" lint)
+if command -v iconv >/dev/null 2>&1; then ev "$P" status --line >/dev/null
+  { [ "$rc" = 0 ] && iconv -f UTF-8 -t UTF-8 "$WORK/ev.out" >/dev/null 2>&1; } && ok "a long CJK title lints and status --line stays valid UTF-8" || no "CJK title broke lint or the line (rc=$rc)"
+else skp "iconv absent — CJK status line unchecked"; fi
+crestore; P3="$WORK/l127c"; mkproj "$P3"; mkcard "$P3" demo off '- [~] S1 first — lanes: smoke ; codex: no'; rc=$(ev "$P3" status --porcelain)
+{ [ "$rc" = 0 ] && [ "$(grep -c '^TREE	' "$WORK/ev.out")" = 1 ] && [ "$(grep -c '^CLOSED	none' "$WORK/ev.out")" = 1 ] && [ "$(grep -c '^LINE	' "$WORK/ev.out")" = 1 ]; } \
+  && ok "porcelain without done-lanes or ledger: TREE, CLOSED none, LINE, exit 0" || no "porcelain incomplete (rc=$rc): $(cat "$WORK/ev.out")"
+P2="$WORK/l127b"; mkproj "$P2"; mklanes "$P2" "$LANE_SMOKE"; ev "$P2" trust smoke >/dev/null
+mkcard "$P2" demo off '- [ ] S1 first — lanes: smoke ; codex: no' '- [ ] S2 second — lanes: smoke ; codex: no'
+rc=$(ev "$P2" lint); rc2=$(ev "$P2" approve); { [ "$rc" = 0 ] && [ "$rc2" = 0 ]; } && ok "a card with no [~] lints and approves" || no "all-[ ] card refused (lint=$rc approve=$rc2)"
+ev "$P2" start S1 >/dev/null; grep -q '^- \[~\] S1 ' "$P2/.ai_context/tasks/demo/card.md" && ok "start marks the slice [~]" || no "start did not mark [~]"
+rc=$(ev "$P2" start S2); { [ "$rc" = 1 ] && grep -qF 'S1 is still [~]' "$WORK/ev.err"; } && ok "start refuses a second [~]" || no "second start accepted (rc=$rc)"
+rc=$(ev "$P2" start S1); { [ "$rc" = 1 ] && grep -qF 'already started at' "$WORK/ev.err"; } && ok "a repeated start is refused (the first start is the baseline)" || no "restart accepted (rc=$rc)"
+cedit 's/^Decisions: .*/Decisions: [ASSUMED] x ; [inferred] y/'; rc=$(ev "$P" lint); ck 0 "$rc" "[ASSUMED] and [inferred] decisions lint"
+cedit 's/(S2 second — lanes:) smoke/\1 -/'; rc=$(ev "$P" lint); { [ "$rc" = 1 ] && grep -qF 'slice line does not parse' "$WORK/ev.out"; } && ok "lanes: - does not parse (every slice has a lane)" || no "lanes: - accepted (rc=$rc)"
+cedit "s/^Goal: .*/Goal: $(printf '%*s' $((3900 - $(wc -c < "$WORK/c127") + 24)) '' | tr ' ' x)/"; rc=$(ev "$P" lint); rc2=$(ev "$P" approve)
+{ [ "$(wc -c < "$C" | tr -d ' ')" = 3900 ] && [ "$rc" = 1 ] && grep -qF 'leaves no room for evidence suffixes' "$WORK/ev.out" && [ "$rc2" = 1 ]; } && ok "lint and approve keep room for ✓ suffixes" || no "suffix budget not enforced (lint=$rc approve=$rc2, $(wc -c < "$C") B)"
+crestore
+
+echo "=== L1-28 · evidence.sh done / check / close / show — and what is not proven (v4)"
+P="$WORK/l128"; mkproj "$P"; mklanes "$P" "$LANE_SMOKE"; ev "$P" trust smoke >/dev/null
+mkcard "$P" demo off '- [~] S1 first — lanes: smoke ; codex: no' '- [ ] S2 second — lanes: smoke ; codex: no'; ev "$P" approve >/dev/null; ev "$P" start S1 >/dev/null
+C="$P/.ai_context/tasks/demo/card.md"; PD="$P/.ai_context/tasks/demo/donelog"
+Pb="$WORK/l128b"; mkproj "$Pb"; mklanes "$Pb" "$LANE_SMOKE"; ev "$Pb" trust smoke >/dev/null
+mkcard "$Pb" demo off '- [~] S1 first — lanes: smoke ; codex: no' '- [ ] S2 second — lanes: smoke ; codex: no'; ev "$Pb" start S1 >/dev/null
+Pp="$WORK/l128p"; mkproj "$Pp"; mklanes "$Pp" '@pair codex' "$LANE_SMOKE"; ev "$Pp" trust smoke >/dev/null
+mkcard "$Pp" demo codex '- [~] S1 first — lanes: smoke ; codex: yes' '- [ ] S2 second — lanes: smoke ; codex: yes'; ev "$Pp" approve >/dev/null; ev "$Pp" start S1 >/dev/null
+ev "$Pp" run smoke >/dev/null; rep S1 pass | ev "$Pp" check S1 --agent fx --source human >/dev/null; Cp="$Pp/.ai_context/tasks/demo/card.md"
+pkt() { # $1 = dir, $2 = name, $3 = stage, $4 = unit, $5 = base -> packet path (06: D's packet header)
+  local f="$1/.ai_context/tasks/demo/pair/$2.md"; mkdir -p "${f%/*}"; printf 'stage: %s\nunit: %s\nbase: %s\n\n# Task\n' "$3" "$4" "$5" > "$f"; echo "$f"
+}
+res() { # $1 = packet, $2 = verdict, $3 = blocker, $4 = major -> result path
+  printf 'run: completed\nverdict: %s\nbase: %s\nblocker: %s\nmajor: %s\nminor: 0\n\nfindings\n' "$2" "$(sed -n 's/^base: //p' "$1")" "$3" "$4" > "${1%.md}.result.md"; echo "${1%.md}.result.md"
+}
+cp "$C" "$WORK/c128"; rc=$(ev "$P" "done" S1); { [ "$rc" = 1 ] && cmp -s "$C" "$WORK/c128"; } && ok "done S1 refuses without a lane run; the card stays byte-identical" || no "done without a lane run (rc=$rc) or the card changed"
+{ grep -qF 'NOT DONE — S1:' "$WORK/ev.out" && grep -qF 'lane smoke: never run' "$WORK/ev.out"; } && ok "NOT DONE lists the lane that never ran" || no "NOT DONE text wrong: $(head -c 400 "$WORK/ev.out")"
+ev "$P" run smoke >/dev/null; rc=$(ev "$P" "done" S1); { [ "$rc" = 1 ] && grep -qF 'no checker record for S1' "$WORK/ev.out"; } && ok "done needs a checker record" || no "done without checker (rc=$rc)"
+rc=$(printf '' | ev "$P" check S1 --agent t0 --source human); { [ "$rc" = 0 ] && grep -Eq '^check S1 uncaptured [0-9a-f]{8}$' "$WORK/ev.out"; } && ok "an empty report records verdict uncaptured" || no "empty report: rc=$rc $(cat "$WORK/ev.out")"
+rc=$(ev "$P" "done" S1); { [ "$rc" = 1 ] && grep -qF 'for S1: uncaptured' "$WORK/ev.out"; } && ok "done names the uncaptured checker record" || no "uncaptured checker not reported (rc=$rc)"
+printf 'VERIFIED (L4) a — b\n' | ev "$P" check S1 --agent t1 --source human >/dev/null; grep -q '^check S1 unparsed ' "$WORK/ev.out" && ok "a report without a verdict line is unparsed" || no "no-verdict report: $(cat "$WORK/ev.out")"
+rep S1 pass 'NOT VERIFIED (L2) a — b' | ev "$P" check S1 --agent t2 --source human >/dev/null
+awk -F'\t' -v id="$(lastid "$P" checker.jsonl)" '$2 == "CHECK" && $3 == "S1" && $4 == "checker" && $5 ~ /^[0-9a-f]{12}$/ && $6 == id && $7 == "fail"' "$PD" | grep -q . \
+  && ok "a NOT VERIFIED claim makes the check fail (CHECK row)" || no "NOT VERIFIED check row wrong"
+rc=$(ev "$P" "done" S1); ck 1 "$rc" "done refuses a failing checker record"
+rep S2 pass | ev "$P" check S1 --agent t3 --source human >/dev/null; grep -q '^check S1 fail ' "$WORK/ev.out" && ok "a verdict for another slice fails (slice-mismatch)" || no "slice mismatch: $(cat "$WORK/ev.out")"
+rep S1 pass 'VERIFIED (L4) a — b' 'INCONCLUSIVE (L3) c — d' | ev "$P" check S1 --agent t4 --source human >/dev/null; grep -q '^check S1 pass ' "$WORK/ev.out" && ok "VERIFIED + INCONCLUSIVE with a pass line passes" || no "pass check: $(cat "$WORK/ev.out")"
+rc=$(ev "$P" "done" S1); { [ "$rc" = 0 ] && grep -qF 'S1 ✓ smoke@' "$WORK/ev.out"; } && ok "done S1 with a fresh lane and a passing check" || no "done S1 refused (rc=$rc): $(head -c 600 "$WORK/ev.out")"
+cp "$WORK/ev.out" "$WORK/done1.out"; sid="$(lastid "$P" smoke.jsonl)"; cid="$(lastid "$P" checker.jsonl)"
+grep -qxF -- "- [x] S1 first — lanes: smoke ; codex: no ✓ smoke@$sid check@$cid" "$C" && ok "the card line carries ✓ smoke@<id> check@<id>" || no "card line wrong: $(grep ' S1 ' "$C")"
+awk -F'\t' -v r="smoke@$sid,check@$cid" '$2 == "DONE" && $3 == "S1" && $6 == r' "$PD" | grep -q . && ok "DONE row repeats the card's tokens" || no "DONE row tokens differ"
+{ grep -qF 'Not proven this time' "$WORK/done1.out" && grep -qF 'INCONCLUSIVE' "$WORK/done1.out"; } && ok "done prints what is not proven (the INCONCLUSIVE claim)" || no "done footer missing"
+ev "$P" status --porcelain >/dev/null; grep -q '^SLICE	S1	ok' "$WORK/ev.out" && ok "porcelain: S1 ok" || no "porcelain S1: $(grep SLICE "$WORK/ev.out")"
+ev "$P" start S2 >/dev/null; rc=$(ev "$P" "done" S2); { [ "$rc" = 1 ] && grep -qF 'no run since S2 started' "$WORK/ev.out"; } && ok "a run from before the slice started does not count" || no "pre-start run accepted (rc=$rc)"
+mkdir -p "$P/docs"; echo x > "$P/docs/x.md"; ev "$P" run smoke >/dev/null; rep S2 pass | ev "$P" check S2 --agent t5 --source human >/dev/null; rc=$(ev "$P" "done" S2)
+{ [ "$rc" = 1 ] && grep -qF "outside its lanes' paths" "$WORK/ev.out" && grep -qF 'docs/x.md' "$WORK/ev.out"; } && ok "done refuses changes outside the slice's lane paths" || no "uncovered change accepted (rc=$rc)"
+ev "$Pb" run smoke >/dev/null; rep S1 pass | ev "$Pb" check S1 --agent fx --source human >/dev/null; rc=$(ev "$Pb" "done" S1)
+{ [ "$rc" = 1 ] && grep -qF 'approved never' "$WORK/ev.out"; } && ok "done refuses an unapproved card" || no "unapproved done (rc=$rc)"
+ev "$Pb" approve >/dev/null; sed -i.bak 's/^Goal: .*/Goal: moved/' "$Pb/.ai_context/tasks/demo/card.md"; rc=$(ev "$Pb" "done" S1)
+{ [ "$rc" = 1 ] && grep -qF 'card changed since approval' "$WORK/ev.out"; } && ok "done refuses a card edited after approval" || no "edited card accepted (rc=$rc)"
+rc=$(ev "$Pp" "done" S1); { [ "$rc" = 1 ] && grep -qF 'no approving codex-card review' "$WORK/ev.out"; } && ok "pair on: done needs the card's Codex review" || no "codex-card gap missing (rc=$rc)"
+k="$(pkt "$Pp" 001-card card card "card:$(sed -e 's/^- \[[ ~ox]\] /- [ ] /' -e 's/ ✓ .*$//' -e '/^Closed:/d' "$Cp" | sha256sum | cut -c1-64)")"
+out="$(cd "$Pp" && bash scripts/evidence.sh codex "$k" "$(res "$k" pass 0 0)" completed ok 2>/dev/null)"; rc=$(ev "$Pp" "done" S1)
+{ [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] && [ "$out" = "$(lastid "$Pp" codex.jsonl)" ] && [ "$rc" = 1 ] && grep -qF 'no approving codex-slice review of S1' "$WORK/ev.out"; } \
+  && ok "codex prints only the record id; the slice still needs its own review" || no "codex card record or slice gap wrong (out='$out' rc=$rc)"
+k="$(pkt "$Pp" 002-slice-S1 slice S1 "$(git -C "$Pp" rev-parse HEAD)")"; ( cd "$Pp" && bash scripts/evidence.sh codex "$k" "$(res "$k" pass 0 1)" completed ok >/dev/null 2>&1 ); rc=$(ev "$Pp" "done" S1)
+{ [ "$rc" = 1 ] && [ "$(python3 -I -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); print(r["verdict"], r["high"])' "$Pp/.claude/evidence/codex.jsonl")" = 'pass 1' ]; } \
+  && ok "a pass carrying a major does not approve" || no "pass+major approved (rc=$rc)"
+k="$(pkt "$Pp" 003-slice-S1 slice S1 "$(git -C "$Pp" rev-parse HEAD)")"; ( cd "$Pp" && bash scripts/evidence.sh codex "$k" "${k%.md}.result.md" failed no_result >/dev/null 2>&1 )
+k="$(pkt "$Pp" 004-slice-S1 slice S1 "$(git -C "$Pp" rev-parse HEAD)")"; err="$(cd "$Pp" && bash scripts/evidence.sh codex "$k" "${k%.md}.result.md" failed no_result 2>&1 >/dev/null)"; rc=$(ev "$Pp" "done" S1)
+{ printf '%s' "$err" | grep -qF 'codex no verdict twice' && [ "$rc" = 1 ]; } && ok "two no-verdict runs at one content warn; done stays refused" || no "no-verdict twice: '$err' rc=$rc"
+rc=$(ev "$Pp" approve --waive S1 --reason "quota out")
+{ [ "$rc" = 0 ] && awk -F'\t' -v d="$(awk -F'\t' '$2 == "APPROVE" {a = $5} END {print a}' "$Pp/.ai_context/tasks/demo/donelog")" '$2 == "WAIVE" && NF == 7 && $3 == "S1" && $4 == "human" && $5 == d && $7 == "quota out"' "$Pp/.ai_context/tasks/demo/donelog" | grep -q .; } \
+  && ok "approve --waive writes a WAIVE row bound to the card digest" || no "WAIVE row wrong (rc=$rc)"
+rc=$(ev "$Pp" "done" S1); { [ "$rc" = 0 ] && grep -q '^- \[x\] S1 .*codex@waived' "$Cp" && grep -qF 'waived by the human' "$WORK/ev.out"; } && ok "a waived Codex review lets done write codex@waived" || no "waived done refused (rc=$rc): $(head -c 400 "$WORK/ev.out")"
+sed -i.bak 's/^Goal: .*/Goal: moved/' "$Cp"; ev "$Pp" approve >/dev/null; ev "$Pp" status --porcelain >/dev/null; grep -q '^SLICE	S1	bad' "$WORK/ev.out"; b1=$?
+sed -i.bak 's/^Goal: .*/Goal: CARD-MARKER fixture goal/' "$Cp"; ev "$Pp" approve >/dev/null; ev "$Pp" status --porcelain >/dev/null; grep -q '^SLICE	S1	ok' "$WORK/ev.out"; b2=$?
+{ [ $b1 = 0 ] && [ $b2 = 0 ]; } && ok "a waiver holds only under the digest it was given at" || no "waiver digest binding wrong (changed=$b1 restored=$b2)"
+rc=$(ev "$P" approve --waive S1 --reason x); { [ "$rc" = 1 ] && grep -qF 'pairing is off' "$WORK/ev.err"; } && ok "pair off: nothing to waive" || no "waive with pair off (rc=$rc)"
+rc=$(ev "$Pp" approve --waive S9 --reason x); rc2=$(ev "$Pp" approve --waive S2); { [ "$rc" = 2 ] && [ "$rc2" = 2 ]; } && ok "--waive needs a real unit and a reason" || no "bad --waive accepted ($rc, $rc2)"
+ev "$Pp" start S2 >/dev/null; ev "$Pp" run smoke >/dev/null; rep S2 pass | ev "$Pp" check S2 --agent fx --source human >/dev/null
+k="$(pkt "$Pp" 005-slice-S2 slice S2 "$(git -C "$Pp" rev-parse HEAD)")"; ( cd "$Pp" && bash scripts/evidence.sh codex "$k" "$(res "$k" pass 0 0)" completed ok >/dev/null 2>&1 ); rc=$(ev "$Pp" "done" S2)
+{ [ "$rc" = 0 ] && grep -q "^- \[x\] S2 .* codex@$(lastid "$Pp" codex.jsonl)\$" "$Cp"; } && ok "an approving codex-slice review lands as codex@<id>" || no "codex slice done failed (rc=$rc)"
+ev "$P" show smoke >/dev/null; { grep -qF "record: {\"id\":\"$(lastid "$P" smoke.jsonl)\"" "$WORK/ev.out" && grep -qF '"lane":"smoke"' "$WORK/ev.out"; } && ok "show prints the latest record" || no "show record wrong"
+grep -qF 'Not proven this time' "$WORK/ev.out" && ok "show ends with what is not proven" || no "show footer missing"
+echo skips > "$P/src/mode"; ev "$P" run smoke >/dev/null; ev "$P" show smoke >/dev/null; rm -f "$P/src/mode"
+grep -qF 'smoke log reports 3 skipped' "$WORK/ev.out" && ok "show names skipped tests" || no "skipped not reported"
+echo b > "$P/src/a.txt"; ev "$P" show smoke >/dev/null; echo a > "$P/src/a.txt"; grep -qF 'lane smoke: stale' "$WORK/ev.out" && ok "show flags a stale lane" || no "stale lane not shown"
+rc=$(ev "$P" close); { [ "$rc" = 1 ] && grep -qF 'NOT CLOSED —' "$WORK/ev.out" && grep -qF 'not done: S2 [~]' "$WORK/ev.out"; } && ok "close refuses while a slice is not [x]" || no "close with open slice (rc=$rc)"
+rm -rf "$P/docs"; ev "$P" run smoke >/dev/null; rep S2 pass | ev "$P" check S2 --agent fx --source human >/dev/null; ev "$P" "done" S2 >/dev/null
+echo b > "$P/src/a.txt"; rc=$(ev "$P" close); echo a > "$P/src/a.txt"
+{ [ "$rc" = 1 ] && grep -qF 'lane smoke: stale' "$WORK/ev.out"; } && ok "close refuses a stale lane" || no "close with a stale lane (rc=$rc)"
+ev "$P" run smoke >/dev/null; rc=$(ev "$P" close); { [ "$rc" = 1 ] && grep -qF 'no passing checker final record' "$WORK/ev.out"; } && ok "pair off: close needs a checker final record" || no "close without checker final (rc=$rc)"
+mklanes "$P" "$LANE_SMOKE" 'idle | docs/ | 1 | ^x | bash scripts/canary.sh | bash scripts/verify.sh'
+rep final pass | ev "$P" check final --agent fx --source human >/dev/null; rc=$(ev "$P" close); cp "$WORK/ev.out" "$WORK/close.out"
+{ [ "$rc" = 0 ] && grep -Eq "^Closed: tree:[0-9a-f]{12} head:[0-9a-f]{12} ✓ smoke@$(lastid "$P" smoke.jsonl) check@$(lastid "$P" checker.jsonl) — [0-9TZ:-]+\$" "$C" \
+  && grep -qF 'Not proven this time' "$WORK/close.out" && grep -qF 'next: /wrap' "$WORK/close.out"; } && ok "close writes Closed: (an uncited, never-run lane does not block)" || no "close failed (rc=$rc): $(head -c 600 "$WORK/close.out")"
+awk -F'\t' -v r="$(sed -n 's/^Closed: .* ✓ \(.*\) — .*/\1/p' "$C" | tr ' ' ,)" '$2 == "CLOSE" && $6 == r' "$PD" | grep -q . && ok "CLOSE row repeats the Closed: tokens" || no "CLOSE row tokens differ"
+ev "$P" status --porcelain >/dev/null; { grep -q '^CLOSED	ok' "$WORK/ev.out" && [ ! -s "$WORK/ev.err" ]; } && ok "porcelain: CLOSED ok, nothing on stderr" || no "porcelain CLOSED: $(grep CLOSED "$WORK/ev.out") stderr: $(head -c 200 "$WORK/ev.err")"
+rc=$(ev "$Pp" close); { [ "$rc" = 1 ] && grep -qF 'no approving codex-final review' "$WORK/ev.out"; } && ok "pair on: close needs the final Codex review" || no "close without codex-final (rc=$rc): $(head -c 400 "$WORK/ev.out")"
+ev "$Pp" approve --waive final --reason x >/dev/null; rc=$(ev "$Pp" close); { [ "$rc" = 0 ] && grep -q '^Closed: .*codex@waived' "$Cp"; } && ok "a waived final review closes with codex@waived" || no "waived close failed (rc=$rc): $(head -c 400 "$WORK/ev.out")"
+bad=""; for d in "$P" "$Pp"; do dl7 "$d" demo || bad="$bad 7col:$d"; cut -f2 "$d/.ai_context/tasks/demo/donelog" | grep -Evxq 'TRUST|APPROVE|WAIVE|START|SPAWN|RETURN|RUN|CHECK|CODEX|DONE|CLOSE|BLOCK|WAITING|STUCK|ESCALATE|GATE-ERROR' && bad="$bad type:$d"; done
+[ -z "$bad" ] && ok "donelogs: 7 fields, UTC ts, the 16 row types only" || no "donelog format:$bad"
+rc=$(rep card pass | ev "$Pb" check card --agent fx --source human); rc2=$(ev "$Pb" approve)
+{ [ "$rc" = 0 ] && awk -F'\t' -v d="$(cdig "$Pb" demo)" '$2 == "CHECK" && $3 == "card" && $5 == d && $7 == "pass"' "$Pb/.ai_context/tasks/demo/donelog" | grep -q . && [ ! -e "$Pb/.ai_context/defects.csv" ] && [ "$rc2" = 0 ]; } \
+  && ok "a card-mode check records unit card at the card digest; approve does not need it" || no "card check wrong (rc=$rc approve=$rc2)"
 
 echo "=== L1-2 · stop-gate: milestone gate (spec-faithful plans)"
 D="$WORK/l12"; mkdir -p "$D/.ai_context/tasks/demo"

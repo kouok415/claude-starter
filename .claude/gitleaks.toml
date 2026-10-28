@@ -1,0 +1,43 @@
+# .claude/gitleaks.toml — claude-starter (v4). scripts/evidence.sh scans every
+# lane and canary log with it (via scripts/precommit-gitleaks.sh --scan-file);
+# a hit fails the run. gitleaks' default rules stay on (useDefault).
+# Not read by the pre-commit hook: to scan commits too, extend it from a
+# repo-root .gitleaks.toml. Editing this file changes the lanes' trust hash —
+# the human re-runs evidence.sh trust. internal-ipv4's regex and allowlist must
+# stay valid in BOTH Go RE2 and POSIX ERE: precommit-gitleaks.sh greps with
+# them when gitleaks is not installed.
+
+title = "claude-starter lane-log rules"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "internal-ipv4"
+description = "Private or carrier-grade-NAT IPv4 address (RFC 1918, RFC 6598 incl. Tailscale)"
+regex = '''(^|[^0-9.])(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})([^0-9.]|\.([^0-9]|$)|$)'''
+secretGroup = 2
+keywords = ["10.", "172.", "192.168.", "100."]
+[rules.allowlist]
+description = "QEMU user-mode network defaults (10.0.2.0/24) are the same on every host"
+regexes = ['''^10\.0\.2\.[0-9]{1,3}$''']
+
+[[rules]]
+id = "tailnet-hostname"
+description = "Tailscale MagicDNS host name (<host>.<tailnet>.ts.net)"
+regex = '''[a-z0-9-]+\.[a-z0-9-]+\.ts\.net'''
+keywords = [".ts.net"]
+
+[[rules]]
+id = "url-userinfo-credential"
+description = "Password embedded in a URL (scheme://user:password@host)"
+regex = '''[a-z][a-z0-9+.-]*://[^/\s:@'"]+:([^/\s:@'"]{6,})@[^/\s'"]+'''
+secretGroup = 1
+keywords = ["://"]
+
+[[rules]]
+id = "url-query-credential"
+description = "Credential passed as a URL query parameter"
+regex = '''[?&](api[_-]?key|apikey|access[_-]?token|auth[_-]?token|token|secret|password|passwd|key)=([A-Za-z0-9._~%+/-]{16,})'''
+secretGroup = 2
+keywords = ["key=", "token=", "secret=", "password=", "passwd="]

@@ -117,6 +117,8 @@ copy_if_missing scripts/task-status.sh
 copy_if_missing scripts/task-statusline.sh
 copy_if_missing scripts/task-profile.sh
 copy_if_missing scripts/task-pair.sh
+copy_if_missing scripts/evidence.sh
+copy_if_missing .claude/gitleaks.toml
 copy_if_missing .pre-commit-config.yaml
 copy_if_missing NOTICE
 
@@ -176,6 +178,8 @@ stock_update scripts/task-status.sh
 stock_update scripts/task-statusline.sh
 stock_update scripts/task-profile.sh
 stock_update scripts/task-pair.sh
+stock_update scripts/evidence.sh
+stock_update .claude/gitleaks.toml
 stock_update .pre-commit-config.yaml
 # NOTICE is stock only while it carries the template's marker; a project's
 # own NOTICE is never replaced (it gets the append suggestion below).

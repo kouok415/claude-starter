@@ -34,3 +34,4 @@ jobs:
         run: |
           python3 -m json.tool .claude/settings.json > /dev/null
           python3 -m json.tool .mcp.json.example > /dev/null
+          python3 -c 'import sys, tomllib; tomllib.load(open(".claude/gitleaks.toml", "rb"))'

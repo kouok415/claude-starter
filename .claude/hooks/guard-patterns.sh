@@ -88,3 +88,63 @@ guard_forbidden_verify() { # $1 = verify command -> rc 0 when forbidden
   printf '%s' "$1" | grep -Eq "$GUARD_RM_RF_ABS" && return 0
   return 1
 }
+
+# --- v4 task helpers (claude-starter v4) ------------------------------------
+# Shared with scripts/evidence.sh, which sources this file and refuses to run
+# (exit 6) without all five — one copy of the static-command matcher and of
+# the donelog writer (ADR-004).
+
+# A command that only lints, parses or lists the code: each segment (split
+# on && || ; |, leading VAR=x dropped) starts with a static tool or carries
+# a no-op flag. evidence.sh trust refuses such a lane — it proves nothing.
+GUARD_STATIC_HEAD='^(((bash|sh|zsh)[[:space:]]+-n)|(python3?[[:space:]]+-m[[:space:]]+(py_compile|compileall))|shellcheck|grep|egrep|fgrep|rg|test|\[|\[\[|ls|true|:|echo|printf|cat|wc|head|tail|find|stat|file|cd)([[:space:]]|$)'
+GUARD_STATIC_FLAG='(^|[[:space:]])(--help|-h|--version|-V|--list-[^[:space:]]*|--parse-check|--selftest|--dry-run|--collect-only)([[:space:]]|$)'
+static_only() { # $1 = command -> rc 0 when every segment is static
+  local seg
+  while IFS= read -r seg; do
+    seg="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//')"
+    [ -z "$seg" ] && continue
+    printf '%s\n' "$seg" | grep -Eq "$GUARD_STATIC_HEAD|$GUARD_STATIC_FLAG" || return 1
+  done < <(printf '%s\n' "$1" | awk '{ gsub(/&&|\|\||;|\|/, "\n"); print }')
+  return 0
+}
+
+# .ai_context/tasks/CURRENT -> slug; rc 1 when absent, empty, or a path.
+task_slug() { # $1 = project root
+  local s
+  s="$(tr -d '[:space:]' < "$1/.ai_context/tasks/CURRENT" 2>/dev/null)" || return 1
+  case "$s" in ''|*/*|*..*) return 1 ;; esac
+  printf '%s\n' "$s"
+}
+
+# The card's in-progress slice: S<n> of the first `- [~]` line, else `-`.
+card_current_slice() { # $1 = card.md
+  local s
+  s="$(sed -nE 's/^- \[~\] (S[0-9]+)( .*)?$/\1/p' "$1" 2>/dev/null | head -n 1)"
+  printf '%s\n' "${s:--}"
+}
+
+# A pid lock (.claude/evidence/locks/*.lock) is alive when its pid runs and,
+# where ps exists, that process is evidence.sh or task-pair.sh (pid reuse).
+lock_alive() { # $1 = pid
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$1" 2>/dev/null || return 1
+  command -v ps >/dev/null 2>&1 || return 0
+  ps -p "$1" -o args= 2>/dev/null | grep -Eq 'evidence\.sh|task-pair\.sh'
+}
+
+# One donelog row (v4 I-1): 7 TAB-separated fields, UTC ts first; TAB/CR/LF
+# inside a field become spaces, empty fields `-`, result capped at 300 chars.
+# No donelog directory (no task) -> nothing written. Always rc 0.
+donelog_row() { # $1 = donelog, $2..$7 = TYPE slice lane|agent|class tree12 record result
+  local f="$1" row i v; shift
+  [ -d "${f%/*}" ] || return 0
+  row="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  for i in 1 2 3 4 5 6; do
+    v="$(printf '%s' "${1:-}" | tr '\t\r\n' '   ')"; shift 2>/dev/null
+    [ "$i" = 6 ] && v="${v:0:300}"
+    row="$row	${v:--}"
+  done
+  printf '%s\n' "$row" >> "$f" 2>/dev/null
+  return 0
+}
