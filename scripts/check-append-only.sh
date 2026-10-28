@@ -2,15 +2,16 @@
 #
 # pre-commit hook — mechanical enforcement of the append-only contracts in
 # .ai_context/INDEX.md's writing protocol: decisions.md, journal/*.md,
-# scoreboard.csv, friction.csv, tasks/*/gatelog and tasks/*/spawnlog
-# accumulate history — a commit may ADD lines to them, never change or
-# remove what is already there, and never delete or rename the files
-# themselves. (gatelog and spawnlog are the same evidence class — the
-# runtime layer Edit/Write-denies both, so this layer covers both, F18.)
+# scoreboard.csv, scoreboard-v4.csv, friction.csv, defects.csv,
+# tasks/*/donelog, .claude/done-lanes.trust (and v3's tasks/*/gatelog,
+# tasks/*/spawnlog) accumulate history — a commit may ADD lines to them,
+# never change or remove what is already there, and never delete or rename
+# the files themselves. Their writers (evidence.sh, the hooks,
+# harness-report.sh) only append; the v3 logs stay frozen evidence.
 #
-# Deliberately NOT covered: lessons.md and brief.md — /wrap legitimately
-# distills them when they exceed their 4 KB caps. state.md is overwrite-
-# friendly by design (it has its own S7 size check instead).
+# Deliberately NOT covered: card.md (scripts flip its status marks),
+# notes.md (rewritten as facts change), state.md (overwrite-friendly; S7
+# has its own check).
 #
 # Corrections to covered files are made by APPENDING a correcting row or a
 # dated addendum entry. For the rare legitimate rewrite (e.g. pruning a
@@ -28,10 +29,14 @@ while IFS=$'\t' read -r status path _rest; do
   case "$path" in
     .ai_context/decisions.md) ;;
     .ai_context/scoreboard.csv) ;;
+    .ai_context/scoreboard-v4.csv) ;;
     .ai_context/friction.csv) ;;
+    .ai_context/defects.csv) ;;
     .ai_context/journal/*.md) ;;
-    .ai_context/tasks/*/gatelog) ;;
-    .ai_context/tasks/*/spawnlog) ;;
+    .ai_context/tasks/*/donelog) ;;
+    .ai_context/tasks/*/gatelog) ;;      # v3 evidence — still history (the v4 pilot compares against it)
+    .ai_context/tasks/*/spawnlog) ;;     # v3 evidence — still history
+    .claude/done-lanes.trust) ;;
     *) continue ;;
   esac
   case "$status" in

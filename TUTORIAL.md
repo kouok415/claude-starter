@@ -196,8 +196,7 @@ prefix; the ones you will meet:
 | a permission denial reading `.env*` / `.secrets/` | H1: Claude never reads secrets | keep them there; code reads them at runtime |
 | `WARNING: state.md last updated …` / `… is newer than state.md` / `WARNING: … bytes (cap …)` / `TRUNCATED: first 4096 of` | memory is stale or the last session skipped `/wrap`; or an injected file outgrew its cap (state.md 5120, card.md 4096 — truncated, notes.md 16384, CLAUDE.md 20480) | `/wrap`; distill or move detail to `notes.md` |
 | `has been idle` … `the Stop gate does not check it` / `a v3 plan.md task without card.md` | the task idled > 7 days / `tasks/CURRENT` names a v3 task, which v4 neither injects nor gates | `/task` to resume or delete `CURRENT` / finish it on a `v3-final` checkout, rewrite it as a card, or delete `CURRENT` |
-| `harness-report.sh`: `verify changed after FAIL` | a gate moved after it failed | find the reason in `lessons.md`; none → ask why |
-| `harness-report.sh`: `verification depth gap` | a `risk: med/high` milestone finished without its verifier | re-check it, or accept the risk knowingly |
+| `harness-report.sh`: `defect candidate` | a fix commit within 30 days after `Closed:` touched this task's files | confirm (`/defect`) or dismiss (`harness-report.sh --defect-dismiss <sha>`) |
 
 ## 8. Cheat sheet
 

@@ -98,6 +98,7 @@ copy_if_missing .claude/skills/setup/verify-template.md
 copy_if_missing .claude/skills/number-check/SKILL.md
 copy_if_missing .claude/skills/prove/SKILL.md
 copy_if_missing .claude/skills/debug/SKILL.md
+copy_if_missing .claude/skills/defect/SKILL.md
 copy_if_missing .claude/skills/backtest-check/SKILL.md
 copy_if_missing .claude/agents/executor.md
 copy_if_missing .claude/agents/checker.md
@@ -152,6 +153,7 @@ stock_update .claude/skills/setup/verify-template.md
 stock_update .claude/skills/number-check/SKILL.md
 stock_update .claude/skills/prove/SKILL.md
 stock_update .claude/skills/debug/SKILL.md
+stock_update .claude/skills/defect/SKILL.md
 stock_update .claude/skills/backtest-check/SKILL.md
 stock_update .claude/agents/executor.md
 stock_update .claude/agents/checker.md

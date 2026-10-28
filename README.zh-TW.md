@@ -265,6 +265,7 @@ claude-starter/
 │       ├── setup/verify-template.md  專案 verify skill 的範本
 │       ├── prove/SKILL.md      /prove —— 任何 done/fixed 宣稱之前先拿出證據
 │       ├── debug/SKILL.md      /debug —— 先找原因再修;失敗 2 次 → 查前提,3 次 → 停
+│       ├── defect/SKILL.md     /defect —— 記下 done 之後才發現的缺陷(使用者呼叫)
 │       ├── backtest-check/SKILL.md  /backtest-check —— 回測與策略評估的完整性檢查
 │       └── number-check/SKILL.md  /number-check —— 回報量測數字前先檢查它
 ├── .ai_context/                第 3 層(schema v3)

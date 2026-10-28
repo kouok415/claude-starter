@@ -17,6 +17,10 @@ CAP=102400
 bad=0
 while IFS= read -r f; do
   case "$f" in .ai_context/*) ;; *) continue ;; esac
+  # The harness's own machine logs are not dumps: scripts and hooks append one
+  # row per event (the append-only guard protects them) and long tasks outgrow
+  # the cap (v3 gatelogs reached 137 KB on one project).
+  case "$f" in .ai_context/tasks/*/donelog|.ai_context/tasks/*/gatelog|.ai_context/tasks/*/spawnlog) continue ;; esac
   sz="$(git cat-file -s ":$f" 2>/dev/null || echo 0)"
   if [ "${sz:-0}" -gt "$CAP" ]; then
     echo "S2 violation: $f is ${sz} bytes staged (cap ${CAP})."

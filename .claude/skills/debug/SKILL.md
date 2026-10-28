@@ -5,6 +5,8 @@ description: Bug, crash, wrong output, failing test, red lane, flaky check, regr
 
 # /debug — no fix before a reproduction and a causal chain
 
+0. The broken thing is finished work (a `[x]` slice, a `Closed:` card,
+   shipped)? Record it first per `.claude/skills/defect/SKILL.md`.
 1. Reproduce on the user's surface (the `verify` skill or the lane), twice.
    Can't → instrument each boundary (input, output, env, cwd, PATH, the
    stdin each child sees), run once, read where it breaks. State

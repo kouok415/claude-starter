@@ -297,6 +297,7 @@ claude-starter/
 │       ├── setup/verify-template.md  template for the project's verify skill
 │       ├── prove/SKILL.md      /prove — evidence before any done/fixed claim
 │       ├── debug/SKILL.md      /debug — cause before fix; 2 fails → premise, 3 → stop
+│       ├── defect/SKILL.md     /defect — record a defect found after done (user-invoked)
 │       ├── backtest-check/SKILL.md  /backtest-check — backtest and strategy integrity
 │       └── number-check/SKILL.md  /number-check — vet a measured number before reporting it
 ├── .ai_context/                Layer 3 (schema v3) — INDEX, state, decisions…

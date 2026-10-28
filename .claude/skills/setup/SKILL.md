@@ -16,7 +16,11 @@ Ask only what the code cannot tell you, in ONE message:
 
 - What is this project? (what / for whom / what does success look like)
 - Stack preference, or "you pick" (skip if code already exists)
-- What does "working" look like → seeds the Verify command and the DoD bars
+- What does "working" look like → seeds the Verify command, the smoke lane
+  and the DoD bars
+- Codex cross-checks for /task (card, risky slices, close; spends your
+  Codex quota)? Ask only when herdr and codex are on PATH; the answer
+  becomes `@pair codex|off` in §4.
 
 If the codebase already exists (adopted project), survey it first and ask
 only about intent and bars. If the user already stated intent when opening
@@ -41,23 +45,48 @@ the session, don't re-ask — proceed on what they said.
   liveness: "ready" means a real request succeeds, not that the process
   answered; it checks side effects too (file written, row inserted,
   message sent); a dry-run flag counts only once you saw what it skips.
+  The Verify command is the smoke lane's cmd (§4) — keep the two identical.
 - `README.md` — from the interview, not boilerplate.
 - `state.md` — Now: "project bootstrapped"; Next steps: the first 1–3 real
-  milestones from the interview.
+  tasks from the interview.
 - `decisions.md` — if a stack was chosen, record ADR-001 with the why.
 
 Then tell the human exactly what to review: the CLAUDE.md diff — especially
 Verify and DoD; those two carry the intent everything downstream enforces.
 
-## 4 · Mechanism check
+## 4 · Mechanisms — run skill, verify skill, lanes
 
-- hooks executable; pre-commit installed if available.
-- Run the drafted Verify command once — it must actually pass today, even
-  if it only proves a hello-world skeleton.
+1. Hooks executable; pre-commit installed if available.
+2. Something to run (an app, CLI, service or pipeline)? Invoke
+   `/run-skill-generator` to write the project's run skill (setup, env,
+   build, launch, expected output, gotchas). Follow it once from a clean
+   shell and fix what it got wrong. Research/analysis with no runnable
+   product: skip.
+3. Copy `.claude/skills/setup/verify-template.md` to
+   `.claude/skills/verify/SKILL.md` and fill every `<…>`: Surface, Launch,
+   Doctor, one Drive journey, Evidence, `Lane: smoke`. Only steps that
+   finish in a few minutes — Claude Code runs this skill before every
+   commit. Never add `disable-model-invocation`.
+4. Declare lanes in `.claude/done-lanes` (≤3; format and recipes:
+   `.claude/skills/task/reference.md` §Lanes): `smoke` runs the Verify
+   command; each slow path (VM, full backtest, remote target) is its own
+   lane. Add `@pair codex|off` from the interview and
+   `@verify-paths <dirs holding test or probe code>`.
+5. Trust each lane: `bash scripts/evidence.sh trust <lane>` — the human
+   approves the prompt and the canary must go red. A refusal (static
+   command, empty expect, `min_secs` 0) means fix the lane, never the
+   script.
+6. First run: `bash scripts/evidence.sh run <lane>` per lane, then
+   `bash scripts/evidence.sh show <lane>`. It must pass today, even if it
+   only proves a hello-world skeleton. Stamp the verify skill's `Proven:`
+   line (date · commit · journey · record id).
 
 ## 5 · Commit and hand off
 
-- `chore: set up project (interview + scaffold + brief)`
+- `chore: set up project (interview + scaffold + lanes)` — stage by path:
+  CLAUDE.md, README.md, .ai_context/, .claude/done-lanes,
+  .claude/done-lanes.trust, .claude/skills/verify/, the run skill; never
+  `git add -A`.
 - Report: what was set up, what to review, and suggest the first `/task`.
 
 ## Rules

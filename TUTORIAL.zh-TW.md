@@ -176,8 +176,7 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 | 讀 `.env*` / `.secrets/` 被權限拒絕 | H1:Claude 永遠不讀密鑰 | 密鑰放那裡;程式在 runtime 讀 |
 | `WARNING: state.md last updated …` / `… is newer than state.md` / `WARNING: … bytes (cap …)` / `TRUNCATED: first 4096 of` | 記憶過期,或上個 session 沒跑 `/wrap`;或被注入的檔超過上限(state.md 5120、card.md 4096 —— 會被截斷、notes.md 16384、CLAUDE.md 20480) | `/wrap`;蒸餾,或把細節移到 `notes.md` |
 | `has been idle` … `the Stop gate does not check it` / `a v3 plan.md task without card.md` | task 閒置超過 7 天 / `tasks/CURRENT` 指向 v3 task,v4 既不注入也不檢查 | 用 `/task` 續跑或刪 `CURRENT` / 在 `v3-final` checkout 上做完、改寫成 card,或刪 `CURRENT` |
-| `harness-report.sh`:`verify changed after FAIL` | gate 在失敗後被移動了 | 去 `lessons.md` 找理由;沒有就問為什麼 |
-| `harness-report.sh`:`verification depth gap` | `risk: med/high` 的里程碑沒經過 verifier 就完成了 | 補驗,或知情地接受風險 |
+| `harness-report.sh`:`defect candidate` | `Closed:` 之後 30 天內有 fix commit 動到這個 task 的檔 | 確認(`/defect`)或排除(`harness-report.sh --defect-dismiss <sha>`) |
 
 ## 8. 速查表
 

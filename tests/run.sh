@@ -923,7 +923,7 @@ sz=$(wc -c < "$REPO/.claude/skills/wrap/SKILL.md")
 [ "$sz" -le 2560 ] && ok "wrap SKILL.md within 2.5 KB ($sz B — task machinery lives in reference.md)" || no "wrap SKILL.md bloated ($sz B > 2560)"
 [ -f "$REPO/.claude/skills/wrap/reference.md" ] && ok "wrap reference.md exists (on-demand task close-out)" || no "wrap reference.md missing"
 grep -q 'reference.md' "$REPO/.claude/skills/wrap/SKILL.md" && ok "wrap body points at the reference" || no "wrap body lost its reference pointer"
-grep -qF 'duration_min,outcome,harness' "$REPO/.claude/skills/wrap/reference.md" && ok "wrap reference carries the scoreboard header (harness column)" || no "wrap reference missing the scoreboard header"
+grep -qF 'date,slug,slices,blocks,stuck,codex_runs,interventions,duration_min,outcome,harness' "$REPO/.claude/skills/wrap/reference.md" && ok "wrap reference carries the scoreboard-v4.csv header (R25)" || no "wrap reference missing the scoreboard-v4.csv header"
 nc="$REPO/.claude/skills/number-check/SKILL.md"
 { [ "$(sed -n 1p "$nc" 2>/dev/null)" = '---' ] && grep -q '^name: number-check$' "$nc" && grep -q '^description: .' "$nc"; } && ok "number-check skill registers (name + description frontmatter)" || no "number-check skill missing or its frontmatter is broken"
 if [ -f "$REPO/templates/CLAUDE.md.analysis" ]; then
@@ -972,7 +972,15 @@ f="$SK/number-check/SKILL.md"
 { grep -q '^description: .*Eight questions' "$f" && grep -qF 'Does an outside source agree?' "$f" && grep -qF 'Is it possible' "$f"; } && ok "number-check: eight questions incl. hard range and outside-source cross-check" || no "number-check lost Eight questions, the Q3 range or the Q8 cross-check"
 
 echo "=== L1-11 · harness-report.sh (scoring is computed, never recalled)"
+SB_V4='date,slug,slices,blocks,stuck,codex_runs,interventions,duration_min,outcome,harness'
+CSV_V2='csv_version,project,harness,n_tasks,n_success,n_failed,n_abandoned,slices_sum,codex_runs_sum,interventions_sum,duration_med,block_rows,stuck_rows,escalate_rows,gate_error_rows,defects_pre_done,defects_post_done,defects_post_close,friction_total,friction_blockers'
+csvget() { # $1 = --csv output, $2 = harness, then column names -> their values on that row (looked up by header name)
+  local c="$1" h="$2"; shift 2
+  awk -F, -v h="$h" -v cols="$*" 'NR == 1 {for (i = 1; i <= NF; i++) ix[$i] = i; next}
+    $ix["harness"] == h {n = split(cols, C, " "); o = ""; for (i = 1; i <= n; i++) o = o (i > 1 ? " " : "") ((C[i] in ix) ? $ix[C[i]] : "?"); print o}' <<<"$c"
+}
 D="$WORK/l111"; mkdir -p "$D/.ai_context/tasks/t1" "$D/.ai_context/tasks/live"
+# v3 scoreboard.csv stays readable history (R25); v4 rows go to scoreboard-v4.csv
 cat > "$D/.ai_context/scoreboard.csv" <<'EOF'
 date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness
 2026-07-10,t1,opus-tier,M,4,1,1,0,90,success,aaa1111
@@ -982,36 +990,39 @@ date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,durat
 2026-07-12,t5,opus-tier,M,4,1,3,2,100,success,aaa1111
 2026-07-08,old1,fable-tier,S,2,1,4,0,?,abandoned
 EOF
-printf '2026-07-11T10:00:00\tM2\tFAIL\tbash t\n2026-07-11T11:00:00\t?\tINTEGRITY\tempty-current\n2026-07-11T12:00:00\tM1\tUNARMED\tbash t\n' > "$D/.ai_context/tasks/t1/gatelog"
-printf '2026-07-15T09:00:00\tM1\tINTEGRITY\ttask-on-main\n' > "$D/.ai_context/tasks/live/gatelog"
+echo "$SB_V4" > "$D/.ai_context/scoreboard-v4.csv"
+printf '2026-07-11T10:00:00Z\tBLOCK\tS2\tnoref\t-\t-\tblock 1/2\n2026-07-11T10:01:00Z\tBLOCK\tS2\tnoref\t-\t-\tblock 2/2\n2026-07-11T11:00:00Z\tGATE-ERROR\t-\tgate\t-\t-\tevidence.sh status --porcelain failed (rc 1)\n' > "$D/.ai_context/tasks/t1/donelog"
+printf '2026-07-15T09:00:00Z\tWAITING\tS1\tsubagent:executor\t-\t-\tdeferred\n' > "$D/.ai_context/tasks/live/donelog"
 printf 'date,harness,area,severity,summary,ref\n2026-07-12,aaa1111,hooks,blocker,gate blocked wrap turn,journal/x.md\n2026-07-13,bbb2222,sync,papercut,stale stamp,-\n' > "$D/.ai_context/friction.csv"
 out=$(bash "$REPO/scripts/harness-report.sh" "$D")
 echo "$out" | grep -q 'tasks: 6 (success 4, failed 1, abandoned 1)' && ok "dataset counts computed" || no "dataset counts wrong"
-echo "$out" | grep -q 'aaa1111 · opus-tier · M : n=5 .* (success 80%)' && ok "N>=5 cell prints success rate" || no "N>=5 cell missing its rate"
+echo "$out" | grep -q '^aaa1111 : n=5 .* (success 80%)' && ok "N>=5 cell (per harness) prints success rate" || no "N>=5 cell missing its rate"
 echo "$out" | grep -q 'unknown(1)' && ok "old 10-field row lands in the unknown bucket" || no "unknown bucket missing"
-echo "$out" | grep -q 'unknown · fable-tier · S : n=1 success=0 failed=0 abandoned=1$' && ok "N<5 cell prints counts only (no %)" || no "N<5 cell printed a percentage"
-echo "$out" | grep -q 'INTEGRITY rows: 2' && ok "INTEGRITY rows joined from gatelogs" || no "INTEGRITY join wrong"
-echo "$out" | grep -q 'UNARMED rows: 1' && ok "UNARMED rows surfaced (vacuous gates visible)" || no "UNARMED count missing"
-# STUCK yields surface even mid-flight (no scoreboard row yet) — the handoff
+echo "$out" | grep -q '^unknown : n=1 success=0 failed=0 abandoned=1$' && ok "N<5 cell prints counts only (no %)" || no "N<5 cell printed a percentage"
+echo "$out" | grep -q '^donelog: BLOCK 2 · ' && ok "BLOCK rows joined from donelogs" || no "donelog BLOCK join wrong"
+echo "$out" | grep -q '^!! donelog GATE-ERROR rows: 1 (t1:1)' && ok "GATE-ERROR rows surfaced per task (the gate failed open)" || no "GATE-ERROR rows not surfaced"
+# STUCK rows surface even mid-flight (no scoreboard row yet) — the handoff
 # happens before any wrap can write one.
 S2="$WORK/l111s"; mkdir -p "$S2/.ai_context/tasks/live"
-printf '2026-07-22T01:00:00\tM6\tFAIL\tfalse\n2026-07-22T01:05:00\tM6\tSTUCK\tyielded to the human after 3 consecutive red blocks\n' > "$S2/.ai_context/tasks/live/gatelog"
-printf '# Plan: x\n## M6: c [in_progress]\n- verify: `false`\n- risk: high\n' > "$S2/.ai_context/tasks/live/plan.md"
+printf '# Live\n<!-- card v4 ; pair: off ; base: 0000000 ; estimate: 1h 10L -->\n## Slices\n- [~] S6 c — lanes: smoke ; codex: no\n' > "$S2/.ai_context/tasks/live/card.md"
+printf '2026-07-22T01:05:00Z\tSTUCK\tS6\tnoref\t-\t-\tyielded after 3 blocks on the same card and content\n' > "$S2/.ai_context/tasks/live/donelog"
 echo live > "$S2/.ai_context/tasks/CURRENT"
 out2=$(bash "$REPO/scripts/harness-report.sh" "$S2")
-echo "$out2" | grep -q 'STUCK yields: 1 (live:1)' && ok "mid-flight STUCK yield surfaces without scoreboard data" || no "mid-flight STUCK invisible"
+echo "$out2" | grep -qxF '!! donelog STUCK rows: 1 (live:1) — the gate handed a blocked slice to the human' && ok "mid-flight STUCK row surfaces without scoreboard data (fleet-report parses this line)" || no "mid-flight STUCK invisible or reworded"
 echo "$out" | grep -q 'blocker:1 friction:0 papercut:1' && ok "friction severities counted" || no "friction counts wrong"
 csv=$(bash "$REPO/scripts/harness-report.sh" --csv "$D")
-echo "$csv" | head -1 | grep -qxF 'project,harness,n_tasks,n_success,n_failed,n_abandoned,gate_fail_rows,integrity_rows,rung_ge3,interventions_sum,duration_med,friction_total,friction_blockers' && ok "--csv header is the fleet contract" || no "--csv header drifted"
-echo "$csv" | grep -q '^l111,aaa1111,5,4,1,0,4,1,1,3,90,1,1$' && ok "--csv per-version aggregates correct" || no "--csv aggregate row wrong"
-echo "$csv" | grep -q '^l111,bbb2222,0,0,0,0,0,0,0,0,-,1,0$' && ok "--csv covers friction-only versions" || no "friction-only version row missing"
+[ "$(echo "$csv" | head -1)" = "$CSV_V2" ] && ok "--csv header is the v2 fleet contract (csv_version first)" || no "--csv header drifted: $(echo "$csv" | head -1)"
+got="$(csvget "$csv" aaa1111 csv_version project harness n_tasks n_success n_failed n_abandoned interventions_sum duration_med block_rows gate_error_rows friction_blockers)"
+[ "$got" = '2 l111 aaa1111 5 4 1 0 3 90 2 1 1' ] && ok "--csv per-version aggregates correct (read by column name)" || no "--csv aggregate row wrong: $got"
+got="$(csvget "$csv" bbb2222 n_tasks friction_total friction_blockers)"
+[ "$got" = '0 1 0' ] && ok "--csv covers friction-only versions" || no "friction-only version row wrong: $got"
 E="$WORK/l111e"; mkdir -p "$E"
 bash "$REPO/scripts/harness-report.sh" "$E" >/dev/null 2>&1
 ck 0 $? "no data yields a clean exit 0"
 B="$WORK/l111b"; mkdir -p "$B/.ai_context"; echo "garbage,x" > "$B/.ai_context/scoreboard.csv"
 bash "$REPO/scripts/harness-report.sh" "$B" >/dev/null 2>&1
 ck 2 $? "malformed scoreboard header exits 2"
-grep -qF 'date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness' "$REPO/.claude/skills/wrap/reference.md" && grep -qF 'col["harness"]' "$REPO/scripts/harness-report.sh" && ok "wrap reference and report parser agree on the schema" || no "wrap and report schema drifted apart"
+grep -qF "$SB_V4" "$REPO/.claude/skills/wrap/reference.md" && grep -qF "SB_V4='$SB_V4'" "$REPO/scripts/harness-report.sh" && ok "wrap reference and harness-report.sh carry the same scoreboard-v4.csv header" || no "wrap and report scoreboard-v4 headers drifted apart"
 grep -qF 'date,harness,area,severity,summary,ref' "$REPO/.claude/skills/wrap/reference.md" && ok "wrap reference carries the friction schema" || no "friction schema missing from wrap reference"
 if [ -f "$REPO/sync-project.sh" ]; then
   grep -q 'stock_update scripts/harness-report.sh' "$REPO/sync-project.sh" && ok "sync ships harness-report.sh" || no "sync does not ship harness-report.sh"
@@ -1583,13 +1594,13 @@ done
 [ -z "$bad" ] && ok "L4 settings.json Edit-asks and bash-guard asks on writes to bash-guard, session-start, checker.md, settings.local.json" || no "L4 uncovered:$bad"
 
 echo "=== L1-14 · pre-commit guards: append-only + S2 bulk"
-D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$D/.ai_context/knowledge"
+D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$D/.ai_context/knowledge/lessons"
 printf 'preamble\n' > "$D/.ai_context/decisions.md"
 printf 'date,slug\n2026-07-01,t1\n' > "$D/.ai_context/scoreboard.csv"
 printf '2026-07-01T00:00:00\tM1\tPASS\ttrue\n' > "$D/.ai_context/tasks/demo/gatelog"
 printf '2026-07-01T00:00:00\tM1\texecutor\n' > "$D/.ai_context/tasks/demo/spawnlog"
 printf 'first line\n' > "$D/.ai_context/journal/2026-07-01-x.md"
-printf 'lesson 1\n' > "$D/.ai_context/tasks/demo/lessons.md"
+printf '# build fails on a cold cache\nWhat works: warm it first\n' > "$D/.ai_context/knowledge/lessons/build.md"
 git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm base
 printf '## ADR-001: x\n' >> "$D/.ai_context/decisions.md"
 printf '2026-07-02,t2\n' >> "$D/.ai_context/scoreboard.csv"
@@ -1607,22 +1618,22 @@ ck 1 $? "edited scoreboard row blocks"
 sed -i.bak '1d' "$D/.ai_context/tasks/demo/gatelog" && rm -f "$D/.ai_context/tasks/demo/gatelog.bak"
 git -C "$D" add -A
 ( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
-ck 1 $? "gatelog row removal blocks"
+ck 1 $? "gatelog row removal blocks (frozen v3 evidence, R24)"
 ( cd "$D" && git reset -q && git checkout -q -- .ai_context/tasks/demo/gatelog )
 # F18: spawnlog is the same evidence class — a history rewrite must block.
 sed -i.bak '1d' "$D/.ai_context/tasks/demo/spawnlog" && rm -f "$D/.ai_context/tasks/demo/spawnlog.bak"
 git -C "$D" add -A
 ( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
-ck 1 $? "spawnlog rewrite blocks (F18 — commit layer now agrees with runtime deny)"
+ck 1 $? "spawnlog rewrite blocks (F18 — commit layer agrees with the runtime deny, R24)"
 ( cd "$D" && git reset -q && git checkout -q -- .ai_context/tasks/demo/spawnlog )
 git -C "$D" mv -f .ai_context/journal/2026-07-01-x.md .ai_context/journal/renamed.md
 ( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
 ck 1 $? "journal rename blocks"
 ( cd "$D" && git reset -q && git checkout -q -- .ai_context/journal && rm -f .ai_context/journal/renamed.md )
-printf 'distilled to one line\n' > "$D/.ai_context/tasks/demo/lessons.md"
+printf '# build fails on a cold cache\nWhat works: warm it first (re-confirmed)\nLast confirmed: 2026-07-03\n' > "$D/.ai_context/knowledge/lessons/build.md"
 git -C "$D" add -A
 ( cd "$D" && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1
-ck 0 $? "lessons.md rewrite passes (wrap distills it — deliberately not covered)"
+ck 0 $? "a lesson file rewrite passes (one lesson per file, updated in place — deliberately not covered)"
 ( cd "$D" && git reset -q && git checkout -q -- . )
 python3 - "$D/.ai_context/knowledge/dump.txt" <<'PY'
 import sys; open(sys.argv[1],'w').write('x'*150000)
@@ -1638,7 +1649,7 @@ git -C "$D" add -A
 ( cd "$D" && bash "$REPO/scripts/check-context-bulk.sh" ) >/dev/null 2>&1
 ck 0 $? "big files outside .ai_context are not the bulk guard's business"
 grep -q 'ai-context-append-only' "$REPO/.pre-commit-config.yaml" && grep -q 'ai-context-bulk' "$REPO/.pre-commit-config.yaml" && ok "both guards wired in .pre-commit-config.yaml" || no "pre-commit wiring missing"
-grep -qF 'tasks/.+/(gatelog|spawnlog)' "$REPO/.pre-commit-config.yaml" && ok "pre-commit files regex covers spawnlog (F18)" || no "pre-commit files regex misses spawnlog"
+grep -qF 'tasks/.+/(donelog|gatelog|spawnlog)' "$REPO/.pre-commit-config.yaml" && grep -qF 'done-lanes\.trust' "$REPO/.pre-commit-config.yaml" && ok "pre-commit files regex covers donelog, the v3 logs and the trust file" || no "pre-commit files regex misses donelog, gatelog/spawnlog or done-lanes.trust"
 
 echo "=== L1-16 · session-start: INDEX size warning"
 D="$WORK/l116"; mkdir -p "$D/.ai_context"
@@ -1655,68 +1666,204 @@ echo "$out" | grep -q 'INDEX.md is .* bytes (cap 4096)' && no "small INDEX false
 
 echo "=== L1-17 · harness-report: integrity cross-checks"
 D="$WORK/l117"; mkdir -p "$D/.ai_context/tasks/bad" "$D/.ai_context/tasks/orphan" "$D/.ai_context/tasks/cur"
-cat > "$D/.ai_context/scoreboard.csv" <<'EOF'
-date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness
-2026-07-10,bad,opus-tier,M,2,0,1,0,50,success,ccc3333
-2026-07-11,weird,opus-tier,M,2,0,1,0,30,succeeded,ccc3333
+cat > "$D/.ai_context/scoreboard-v4.csv" <<'EOF'
+date,slug,slices,blocks,stuck,codex_runs,interventions,duration_min,outcome,harness
+2026-07-10,bad,2,0,0,0,-,50,success,ccc3333
+2026-07-11,weird,2,0,0,0,-,30,succeeded,ccc3333
 EOF
-printf '2026-07-10T10:00:00\tM1\tFAIL\ttrue\n2026-07-10T11:00:00\tM1\tFAIL\ttrue\n' > "$D/.ai_context/tasks/bad/gatelog"
-printf '# Plan: bad\n\n## M1: a [done]\n- verify: `true`\n\n## M2: b [done]\n- verify: `true`\n' > "$D/.ai_context/tasks/bad/plan.md"
-printf '# Plan: orphan\n\n## M1: a [done]\n- verify: `true`\n' > "$D/.ai_context/tasks/orphan/plan.md"
-printf '# Plan: cur\n\n## M1: a [in_progress]\n- verify: `true`\n' > "$D/.ai_context/tasks/cur/plan.md"
+# bad: S1 is evidence.sh's (tokens + DONE row), S2 was marked [x] by hand; 2 BLOCK rows the row says 0 of
+cardx() { # $1 = task dir, $2 = title, then slice lines
+  local d="$1" t="$2"; shift 2
+  { echo "# $t"; echo '<!-- card v4 ; pair: off ; base: 0000000 ; estimate: 1h 10L -->'; echo '## Slices'; printf '%s\n' "$@"; } > "$d/card.md"
+}
+cardx "$D/.ai_context/tasks/bad" bad '- [x] S1 a — lanes: smoke ; codex: no ✓ smoke@1a2b3c4d check@5e6f7a8b' '- [x] S2 b — lanes: smoke ; codex: no'
+printf '2026-07-10T09:00:00Z\tDONE\tS1\t-\t9c8b7a6f5e4d\tsmoke@1a2b3c4d,check@5e6f7a8b\tok\n2026-07-10T09:10:00Z\tBLOCK\tS2\tnoref\t-\t-\tblock 1/2\n2026-07-10T09:11:00Z\tBLOCK\tS2\tnoref\t-\t-\tblock 2/2\n' > "$D/.ai_context/tasks/bad/donelog"
+cardx "$D/.ai_context/tasks/orphan" orphan '- [ ] S1 a — lanes: smoke ; codex: no'
+cardx "$D/.ai_context/tasks/cur" cur '- [~] S1 a — lanes: smoke ; codex: no'
 echo cur > "$D/.ai_context/tasks/CURRENT"
 out=$(bash "$REPO/scripts/harness-report.sh" "$D")
-echo "$out" | grep -q 'gate_failures mismatch: bad — scoreboard says 0, gatelog has 2' && ok "scoreboard↔gatelog mismatch surfaced" || no "mismatch not surfaced"
+echo "$out" | grep -q 'scoreboard/donelog mismatch: bad — blocks: scoreboard 0, donelog 2' && ok "scoreboard↔donelog mismatch surfaced" || no "mismatch not surfaced"
 echo "$out" | grep -q 'orphan task: tasks/orphan/' && ok "orphan task dir surfaced (survivor-bias net)" || no "orphan not surfaced"
-echo "$out" | grep -q 'gate evidence gap: tasks/bad/' && ok "missing PASS/UNARMED evidence surfaced" || no "evidence gap not surfaced"
+echo "$out" | grep -q '\[x\] without evidence: tasks/bad/ S2 ' && ! echo "$out" | grep -q 'without evidence: tasks/bad/ S1 ' && ok "[x] slice evidence.sh done never wrote surfaced (S1 with tokens and a DONE row is not)" || no "[x] without evidence not surfaced, or S1 misflagged"
 echo "$out" | grep -q 'enum violation: scoreboard weird: outcome="succeeded"' && ok "outcome enum violation surfaced" || no "enum violation not surfaced"
 echo "$out" | grep -q 'orphan task: tasks/cur/' && no "in-flight CURRENT task misflagged as orphan" || ok "in-flight CURRENT task not flagged"
 csv=$(bash "$REPO/scripts/harness-report.sh" --csv "$D")
-echo "$csv" | grep -q 'mismatch' && no "--csv polluted by integrity lines (13-col contract)" || ok "--csv untouched by integrity section"
+echo "$csv" | grep -q 'mismatch' && no "--csv polluted by integrity lines (v2 contract)" || ok "--csv untouched by integrity section"
+echo "$csv" | grep -q 'without evidence' && no "--csv polluted by the [x]-without-evidence line" || ok "--csv untouched by the [x]-without-evidence line"
 out2=$(bash "$REPO/scripts/harness-report.sh" "$WORK/l111")
-echo "$out2" | grep -q 'clean — scoreboard, gatelogs and task dirs agree' && ok "healthy dataset reports clean" || no "healthy dataset not reported clean"
+echo "$out2" | grep -q 'clean — scoreboard, donelogs, cards and defects agree' && ok "healthy dataset reports clean" || no "healthy dataset not reported clean"
 D2="$WORK/l117b"; mkdir -p "$D2/.ai_context/tasks/ghost"
-printf '# Plan: g\n\n## M1: a [done]\n- verify: `true`\n' > "$D2/.ai_context/tasks/ghost/plan.md"
+cardx "$D2/.ai_context/tasks/ghost" ghost '- [ ] S1 a — lanes: smoke ; codex: no'
 out3=$(bash "$REPO/scripts/harness-report.sh" "$D2"); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out3" | grep -q 'orphan task: tasks/ghost/'; } && ok "orphan surfaces even with an empty scoreboard (cold-start case)" || no "cold-start orphan hidden by the no-data early exit"
 D3="$WORK/l117c"; mkdir -p "$D3/.ai_context"
 out4=$(bash "$REPO/scripts/harness-report.sh" "$D3")
 echo "$out4" | grep -q 'no harness data yet' && ok "truly-empty project still gets the no-data line" || no "no-data early exit regressed"
-D4="$WORK/l117d"; mkdir -p "$D4/.ai_context/tasks/mv"
-printf '# Plan: mv\n\n## M1: a [done]\n- verify: `x`\n\n## M2: b [done]\n- verify: `x`\n\n## M3: c [done]\n- verify: `x`\n\n## M4: d [done]\n- verify: `x`\n' > "$D4/.ai_context/tasks/mv/plan.md"
-{ printf '2026-07-10T10:00:00\tM1\tFAIL\tcheck --all\n2026-07-10T10:05:00\tM1\tPASS\tcheck --year 2014\n'
-  printf '2026-07-10T11:00:00\tM2\tFAIL\tpytest\n2026-07-10T11:05:00\tM2\tPASS\tpytest\n'
-  printf '2026-07-10T12:00:00\tM3\tPASS\ta\n2026-07-10T12:05:00\tM3\tPASS\tb\n'
-  printf '2026-07-10T13:00:00\tM4\tFAIL\tgen | wc -l\n2026-07-10T13:05:00\tM4\tPASS\tgen | head\n'; } > "$D4/.ai_context/tasks/mv/gatelog"
-out5=$(bash "$REPO/scripts/harness-report.sh" "$D4")
-echo "$out5" | grep -q 'verify changed after FAIL: tasks/mv/ M1 — FAIL ran `check --all`, PASS ran `check --year 2014`' && ok "verify narrowed after a FAIL surfaced with both commands" || no "verify change after FAIL not surfaced"
-echo "$out5" | grep -q 'verify changed after FAIL: tasks/mv/ M2' && no "same-command repair misflagged as a moved gate" || ok "fix-the-code repair (same command) not flagged"
-echo "$out5" | grep -q 'verify changed after FAIL: tasks/mv/ M3' && no "change without a prior FAIL misflagged" || ok "command change with no FAIL before it not flagged"
-echo "$out5" | grep -q 'verify changed after FAIL: tasks/mv/ M4 — FAIL ran `gen / wc -l`, PASS ran `gen / head`' && ok "pipes inside commands survive the report stream" || no "piped verify command broke the VC row"
-D5="$WORK/l117e"; T5="$D5/.ai_context/tasks"; mkdir -p "$T5/dv" "$T5/legacy" "$T5/small" "$T5/nosl" "$T5/pr/pair"
-mkplan() { # $1 file, $2 profile, $3 size, then "id status risk" triples
-  local f="$1" p="$2" z="$3"; shift 3
-  printf '# Plan: x\n<!-- profile: %s ; size: %s -->\n' "$p" "$z" > "$f"
-  while [ $# -gt 0 ]; do printf '\n## %s: t [%s]\n- verify: `true`\n- risk: %s\n' "$1" "$2" "$3" >> "$f"; shift 3; done
+
+echo "=== L1-34 · harness-report v4: --row, defects, fix-commit candidates, --tripwire, pair runlog"
+HR="$REPO/scripts/harness-report.sh"
+utc() { date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -r "$1" '+%Y-%m-%dT%H:%M:%SZ'; }
+gco() { # $1 = repo, $2 = epoch, $3 = subject: commit everything at that author/committer time
+  git -C "$1" add -A && GIT_AUTHOR_DATE="@$2 +0000" GIT_COMMITTER_DATE="@$2 +0000" git -C "$1" commit -qm "$3"
 }
-mkplan "$T5/dv/plan.md" opus-tier M M1 "done" med M2 "done" high M3 "done" low M4 pending med
-printf 'x\t-\tother\nx\tM1\texecutor\nx\tM1\tverifier\nx\tM2\texecutor\nx\tM2\tother\nx\tM3\texecutor\n' > "$T5/dv/spawnlog"
-mkplan "$T5/legacy/plan.md" opus-tier L M1 "done" med M2 "done" med
-printf 'x\t-\tother\nx\tM1\texecutor\nx\tM1\tother\nx\tM2\texecutor\n' > "$T5/legacy/spawnlog"
-mkplan "$T5/small/plan.md" opus-tier S M1 "done" high
-printf 'x\t-\tother\n' > "$T5/small/spawnlog"
-mkplan "$T5/nosl/plan.md" opus-tier M M1 "done" high
-mkplan "$T5/pr/plan.md" pair-codex M M1 "done" med M2 "done" high M3 "done" med
-printf 'x\t-\tother\nx\tM1\texecutor\nx\tM2\texecutor\nx\tM3\texecutor\nx\t-\tverifier\n' > "$T5/pr/spawnlog"
-printf 'x\t1\treset\tverifier\tM1\nx\t1\tstart\tverifier\tM1\nx\t2\tstart\tverifier\tM2\n' > "$T5/pr/pair/runlog"
-out6=$(bash "$REPO/scripts/harness-report.sh" "$D5")
-echo "$out6" | grep -q 'verification depth gap: tasks/dv/ — 1 of 2 \[done\] risk:med/high milestones had no verifier spawn while in progress (M2)$' && ok "depth gap: high milestone with only a non-verifier spawn flagged; low and pending ignored" || no "depth gap (verifier class) wrong"
-echo "$out6" | grep -q 'verification depth gap: tasks/legacy/ — 1 of 2 .*(M2)$' && ok "depth gap: pre-class spawnlogs count 'other' as the verifier seat" || no "depth gap (legacy spawnlog) wrong"
-echo "$out6" | grep -q 'depth gap: tasks/small/' && no "S task flagged (S has no verifier step)" || ok "depth gap: S tasks exempt"
-echo "$out6" | grep -q 'depth gap: tasks/nosl/' && no "task without a spawnlog flagged (SubagentStart may never fire)" || ok "depth gap: no spawnlog = Claude seat unjudged"
-echo "$out6" | grep -q 'verification depth gap: tasks/pr/ — 2 of 3 .*(M2 M3)$' && ok "depth gap: pair-* reads the runlog for med, both seats for high" || no "depth gap (pair) wrong"
-csv=$(bash "$REPO/scripts/harness-report.sh" --csv "$D5")
-echo "$csv" | grep -q 'depth gap' && no "--csv polluted by the depth-gap line" || ok "--csv untouched by the depth-gap line"
+D="$WORK/l134"; DT="$D/.ai_context/tasks/demo"; mkdir -p "$D/src" "$DT" "$D/.claude/evidence"
+TC=$(( $(date +%s) - 5 * 86400 ))   # the task closed five days ago
+git -C "$D" init -q; echo a > "$D/src/a.txt"; echo o > "$D/src/other.txt"; gco "$D" $((TC - 3 * 86400)) base
+base=$(git -C "$D" rev-parse HEAD)
+echo a2 >> "$D/src/a.txt"; gco "$D" $((TC - 2 * 86400)) "S1 change a"
+head=$(git -C "$D" rev-parse HEAD)
+echo a3 >> "$D/src/a.txt"; gco "$D" $((TC - 86400)) "fix: early"   # touches the task's file, but before the close
+{ echo '# Demo'; echo "<!-- card v4 ; pair: off ; base: $base ; estimate: 2h 100L -->"; echo 'Goal: fixture'; echo '## Slices'
+  echo '- [x] S1 a — lanes: smoke ; codex: no ✓ smoke@1a2b3c4d check@5e6f7a8b'
+  echo '- [x] S2 b — lanes: smoke ; codex: no ✓ smoke@2b3c4d5e check@6f7a8b9c'
+  echo '- [x] S3 c — lanes: smoke ; codex: no ✓ smoke@3c4d5e6f check@7a8b9c0d'
+  echo "Closed: tree:4d3c2b1a0f9e head:${head:0:12} ✓ smoke@3c4d5e6f check@8b9c0d1e — $(utc "$TC")"; } > "$DT/card.md"
+{ T0=$((TC - 5400)); r() { printf '%s\t%s\n' "$(utc $((T0 + $1)))" "$2"; }
+  r 0 "APPROVE	-	human	efb2b73e63fb	-	-"; r 60 "START	S1	-	8a7b6c5d4e3f	-	started"; r 120 "RUN	S1	smoke	9c8b7a6f5e4d	1a2b3c4d	pass"
+  r 180 "BLOCK	S1	noref	-	-	block 1/2"; r 240 "BLOCK	S1	noref	-	-	block 2/2"; r 300 "STUCK	S1	noref	4d3c2b1a0f9e	-	yielded after 3 blocks on the same card and content"
+  r 360 "CODEX	S1	codex-slice	9c8b7a6f5e4d	0a1b2c3d	reject"; r 420 "CODEX	S1	codex-slice	9c8b7a6f5e4d	0b1c2d3e	approve"
+  r 480 "CHECK	S1	checker	9c8b7a6f5e4d	5e6f7a8b	pass"; r 540 "DONE	S1	-	9c8b7a6f5e4d	smoke@1a2b3c4d,check@5e6f7a8b	ok"
+  r 5400 "CLOSE	-	-	4d3c2b1a0f9e	smoke@3c4d5e6f,check@8b9c0d1e	ok"; } > "$DT/donelog"
+printf 'spawned-by: claude-starter@0000000 on 2026-01-01\nsynced-to: claude-starter@abc1234 on 2026-10-01\n' > "$D/.claude/.starter-version"
+echo "$SB_V4" > "$D/.ai_context/scoreboard-v4.csv"
+echo 'date,slug,slice,finder,phase,severity,n,summary,fixed_in,ref' > "$D/.ai_context/defects.csv"
+echo '{"id":"5e6f7a8b","lane":"checker","unit":"S1","verdict":"pass"}' > "$D/.claude/evidence/checker.jsonl"
+want1="$(utc "$TC" | cut -c1-10),demo,3,2,1,2,-,90,success,abc1234"
+row1=$(bash "$HR" --row demo "$D" 2>"$WORK/hr.err"); rc=$?
+[ "$row1" = "$want1" ] && ok "--row: one row from card + donelog (slices 3, blocks 2, stuck 1, codex_runs 2, interventions -, 90 min, harness stamp)" || no "--row printed '$row1' (want '$want1')"
+{ [ "$rc" = 0 ] && [ ! -s "$WORK/hr.err" ]; } && ok "--row: exit 0, nothing on stderr" || no "--row: rc=$rc stderr: $(head -c 200 "$WORK/hr.err")"
+cp "$DT/card.md" "$WORK/l134-card"; grep -v '^Closed:' "$WORK/l134-card" > "$DT/card.md"
+bash "$HR" --row demo "$D" >/dev/null 2>"$WORK/hr.err"; rc=$?
+{ [ "$rc" = 3 ] && grep -qF 'has no Closed: line — ask the human' "$WORK/hr.err"; } && ok "--row without Closed: asks for the outcome (exit 3)" || no "--row without Closed: rc=$rc $(head -c 200 "$WORK/hr.err")"
+out=$(bash "$HR" --row demo --outcome abandoned "$D" 2>/dev/null); rc=$?
+{ [ "$rc" = 0 ] && [ "$(echo "$out" | cut -d, -f9)" = abandoned ]; } && ok "--row --outcome abandoned scores the unfinished task" || no "--outcome abandoned: rc=$rc '$out'"
+cp "$WORK/l134-card" "$DT/card.md"
+bash "$HR" --row nosuch "$D" >/dev/null 2>"$WORK/hr.err"; rc=$?
+{ [ "$rc" = 3 ] && grep -qF 'card.md not found' "$WORK/hr.err"; } && ok "--row of a task without a card exits 3 (v4 tasks only)" || no "--row nosuch: rc=$rc $(head -c 200 "$WORK/hr.err")"
+# fix-commit candidates: commits after the close that touch the task's files
+echo fix >> "$D/src/a.txt"; gco "$D" "$(date +%s)" "fix: repair a"; s6=$(git -C "$D" rev-parse HEAD | cut -c1-7)
+out=$(bash "$HR" "$D")
+echo "$out" | grep -qF "defect candidate: $s6 " && echo "$out" | grep -qF '"fix: repair a" touches 1 file(s) of tasks/demo/' && ok "a fix commit after the close on the task's file is a defect candidate" || no "fix-commit candidate missing: $(echo "$out" | grep -F 'candidate' | head -c 300)"
+echo more >> "$D/src/a.txt"; gco "$D" "$(date +%s)" "feat: more a"
+bash "$HR" "$D" | grep -qF '"feat: more a"' && no "a feat: commit listed as a defect candidate" || ok "a feat: commit on the same file is not a candidate"
+echo o2 >> "$D/src/other.txt"; gco "$D" "$(date +%s)" "fix: other"
+bash "$HR" "$D" | grep -qF '"fix: other"' && no "a fix on an unrelated file listed" || ok "a fix: commit on a file the task never touched is not a candidate"
+bash "$HR" "$D" | grep -qF '"fix: early"' && no "a fix made before the close listed" || ok "a fix: commit before the close is not a candidate"
+out=$(cd "$D" && bash "$HR" --defect-dismiss "$s6" 2>&1)
+{ [ "$out" = "defect candidate $s6 dismissed" ] && ! bash "$HR" "$D" | grep -qF "defect candidate: $s6" \
+  && tail -n 1 "$D/.ai_context/defects.csv" | grep -qE ",fix-commit,-,none,0,dismissed: not a defect of the closed work,$s6,-\$"; } \
+  && ok "--defect-dismiss settles the candidate with a severity-none row" || no "--defect-dismiss: '$out' / $(tail -n 1 "$D/.ai_context/defects.csv")"
+out=$(cd "$D" && bash "$HR" --defect demo S1 human major "x" - 2>&1); rc=$?
+{ [ "$rc" = 0 ] && [ "${out#defect recorded: }" != "$out" ] && tail -n 1 "$D/.ai_context/defects.csv" | awk -F, 'NF == 10 && $4 == "human" && $5 == "post-close" {f = 1} END {exit !f}'; } \
+  && ok "--defect writes a 10-column row; the phase is derived (post-close: the card is Closed)" || no "--defect: rc=$rc '$out' / $(tail -n 1 "$D/.ai_context/defects.csv")"
+( cd "$D" && bash "$HR" --defect demo S1 badfinder major "x" - ) >/dev/null 2>"$WORK/hr.err"; rc=$?
+{ [ "$rc" = 1 ] && grep -qF 'is not one of' "$WORK/hr.err"; } && ok "--defect rejects a finder outside the enum (exit 1)" || no "badfinder: rc=$rc $(head -c 200 "$WORK/hr.err")"
+( cd "$D" && bash "$HR" --defect demo S1 checker unrated "x" - ) >/dev/null 2>"$WORK/hr.err"; rc=$?
+( cd "$D" && bash "$HR" --defect demo S1 checker major "x" check@5e6f7a8b ) >/dev/null 2>&1; rc2=$?
+{ [ "$rc" = 1 ] && grep -qF 'needs ref check@<id>|codex@<id>' "$WORK/hr.err" && [ "$rc2" = 1 ]; } && ok "checker rows need a ledger record ref and severity unrated (R26)" || no "checker finder: rc=$rc/$rc2 $(head -c 200 "$WORK/hr.err")"
+out=$(bash "$HR" "$D")
+echo "$out" | grep -qF 'post-close: 1 (human 1,' && echo "$out" | grep -qF 'by severity: blocker 0 · major 1 · minor 0 · unrated 0' && ok "== defects counts phases and severities (the dismissed row counts nowhere)" || no "defect counts wrong: $(echo "$out" | grep -A2 '== defects' | tr '\n' '|')"
+Pc="$WORK/l134c"; mkproj "$Pc"; mklanes "$Pc" "$LANE_SMOKE"; mkcard "$Pc" demo off '- [~] S1 first — lanes: smoke ; codex: no'
+rep S1 pass 'NOT VERIFIED (L2) a — b' | ev "$Pc" check S1 --agent fx --source human >/dev/null
+id=$(lastid "$Pc" checker.jsonl)
+tail -n 1 "$Pc/.ai_context/defects.csv" 2>/dev/null | awk -F, -v r="check@$id" '$2 == "demo" && $3 == "S1" && $4 == "checker" && $5 == "pre-done" && $6 == "unrated" && $7 == 1 && $10 == r {f = 1} END {exit !f}' \
+  && ok "a failing checker record lands in defects.csv (checker, pre-done, unrated, n = NOT VERIFIED count, ref check@<id>)" || no "checker defect row: '$(tail -n 1 "$Pc/.ai_context/defects.csv" 2>/dev/null)' (id $id) $(head -c 200 "$WORK/ev.err")"
+csv=$(bash "$HR" --csv "$D")
+{ [ "$(echo "$csv" | head -1)" = "$CSV_V2" ] && [ "$(echo "$csv" | sed 1d | grep -c .)" -ge 1 ] && ! echo "$csv" | sed 1d | grep -qv '^2,'; } && ok "--csv: the v2 header, every data row starts with csv_version 2" || no "--csv v2 shape wrong: $(echo "$csv" | head -3 | tr '\n' '|')"
+V="$WORK/l134v"; mkdir -p "$V/.ai_context"
+printf 'date,slug,profile,size,milestones,gate_failures,highest_rung,interventions,duration_min,outcome,harness\n2026-07-01,a,opus-tier,M,4,0,1,0,30,success,h1\n2026-07-02,b,opus-tier,M,5,0,1,0,40,failed,h1\n' > "$V/.ai_context/scoreboard.csv"
+printf '%s\n2026-11-01,c,3,0,0,1,-,60,success,h1\n' "$SB_V4" > "$V/.ai_context/scoreboard-v4.csv"
+{ bash "$HR" "$V" | grep -qF 'tasks: 3 (success 2, failed 1, abandoned 0)' && [ "$(csvget "$(bash "$HR" --csv "$V")" h1 slices_sum codex_runs_sum)" = '3 1' ]; } \
+  && ok "v3 scoreboard.csv and scoreboard-v4.csv read together; v3 rows add nothing to slices_sum (R25)" || no "v3+v4 scoreboards: $(bash "$HR" --csv "$V" | tr '\n' '|')"
+mv "$D/.claude/evidence" "$D/.claude/evidence.off"
+[ "$(bash "$HR" --row demo "$D" 2>/dev/null)" = "$want1" ] && ok "--row reads card + donelog only, never the per-machine ledger (R25)" || no "--row changed without the ledger"
+mv "$D/.claude/evidence.off" "$D/.claude/evidence"
+rm "$D/.ai_context/scoreboard-v4.csv"
+[ "$(bash "$HR" --row demo "$D" 2>/dev/null)" = "$(printf '%s\n%s' "$SB_V4" "$want1")" ] && ok "--row prints the v4 header first when scoreboard-v4.csv is missing" || no "--row without scoreboard-v4.csv: $(bash "$HR" --row demo "$D" 2>&1 | tr '\n' '|')"
+echo "$SB_V4" > "$D/.ai_context/scoreboard-v4.csv"
+cp "$D/.ai_context/defects.csv" "$WORK/l134-defects"
+printf 'date,what,where,who,when,sev,fix,ref\n2026-01-01,x,y,z,w,major,-,-\n' > "$D/.ai_context/defects.csv"
+bash "$HR" "$D" >/dev/null 2>"$WORK/hr.err"; rc=$?
+( cd "$D" && bash "$HR" --defect demo S1 human minor "x" - ) >/dev/null 2>"$WORK/hr.err2"; rc2=$?
+{ [ "$rc" = 0 ] && grep -qF 'non-v4 header' "$WORK/hr.err" && [ "$rc2" = 2 ] && grep -qF 'has a non-v4 header' "$WORK/hr.err2"; } \
+  && ok "a project's own defects.csv: the report warns and skips it, --defect refuses to append (exit 2)" || no "foreign defects.csv: report rc=$rc, --defect rc=$rc2 $(head -c 200 "$WORK/hr.err2")"
+cp "$WORK/l134-defects" "$D/.ai_context/defects.csv"
+echo late >> "$D/src/a.txt"; gco "$D" $((TC + 31 * 86400)) "fix: late"
+bash "$HR" "$D" | grep -qF '"fix: late"' && no "a fix 31 days after the close listed" || ok "candidates stop 30 days after the close"
+( cd "$D" && bash "$HR" --defect demo S1 post-close-review minor "y" - ) >/dev/null 2>&1; rc=$?
+( cd "$D" && bash "$HR" --defect demo S1 review minor "y" - ) >/dev/null 2>&1; rc2=$?
+{ [ "$rc" = 0 ] && [ "$rc2" = 1 ]; } && ok "finder post-close-review accepted, the old name review refused (R26)" || no "post-close-review rc=$rc, review rc=$rc2"
+Pt="$WORK/l134t"; mkproj "$Pt"; mklanes "$Pt" '@verify-paths tests/' "$LANE_SMOKE"; mkcard "$Pt" demo off '- [~] S1 first — lanes: smoke ; codex: no'
+printf '%s\tAPPROVE\t-\thuman\tefb2b73e63fb\t-\t-\n' "$(utc $(( $(date +%s) - 3600 )))" > "$Pt/.ai_context/tasks/demo/donelog"
+mkdir -p "$Pt/tests"; seq 60 > "$Pt/tests/t.txt"; seq 10 > "$Pt/src/b.txt"
+tw=$(cd "$Pt" && bash scripts/harness-report.sh --tripwire demo 2>&1)
+echo "$tw" | grep -qE '^tripwire: product \+10 · verify \+60 lines since base [0-9a-f]{7} · 1\.0h of 2h est\. — TRIPPED: verify>product$' && ok "--tripwire: verify lines over product lines (>= 50) trip it" || no "--tripwire: '$tw'"
+rc=$(ev "$Pt" status --line); { [ "$rc" = 0 ] && grep -qF 'tripwire: verify>product' "$WORK/ev.out"; } && ok "evidence.sh status --line carries the tripped reasons" || no "status --line: rc=$rc $(head -c 300 "$WORK/ev.out")"
+rm "$Pt/tests/t.txt"
+tw=$(cd "$Pt" && bash scripts/harness-report.sh --tripwire demo 2>&1)
+echo "$tw" | grep -q ' — ok$' && ok "--tripwire within the estimate ends in ok" || no "--tripwire (product only): '$tw'"
+mkdir -p "$D/.ai_context/tasks/nc"
+printf '# NC\n<!-- card v4 ; pair: off ; base: %s ; estimate: 1h 10L -->\n## Slices\n- [ ] S1 a — lanes: smoke ; codex: no\nClosed: tree:000000000000 head:000000000000 ✓ smoke@1a2b3c4d check@5e6f7a8b — 2026-01-01T00:00:00Z\n' "$base" > "$D/.ai_context/tasks/nc/card.md"
+printf '2026-01-01T00:00:00Z\tAPPROVE\t-\thuman\tefb2b73e63fb\t-\t-\n' > "$D/.ai_context/tasks/nc/donelog"
+bash "$HR" "$D" | grep -qF 'Closed: without a CLOSE row: tasks/nc/' && ok "a Closed: line no CLOSE row backs is surfaced (written by hand?)" || no "Closed: without a CLOSE row not surfaced"
+mkdir -p "$DT/pair"
+{ p() { printf '2026-11-02T01:00:0%s\t%s\t%s\t%s\t%s\t-\t-\tGPT-5.6-Sol high\t-\t%s\t%s\n' "$@"; }
+  p 0 1 reset - - - '/new + current worktree'; p 1 1 start card card - 'timeout=7200000ms'; p 2 1 end:failed card card - not_started
+  p 3 2 start card card - 'timeout=7200000ms'; p 4 2 end:failed card card - herdr_blocked
+  p 5 3 start slice S1 - 'timeout=7200000ms'; p 6 3 blocked slice S1 - 'the judge waits for the human'
+  # shellcheck disable=SC2088 # the runlog writes the rollout path with a literal ~ (task-pair.sh tilde())
+  p 7 3 end:completed slice S1 '~/.codex/sessions/2026/11/02/rollout-x.jsonl' 'verdict=pass blocker=0 major=0 minor=0'; } > "$DT/pair/runlog"
+bash "$HR" "$D" | grep -qF 'pair runlog: Codex runs 1 (completed 1, failed 0) · not started 2 (never a run) · blocked mid-run 1 · record failed 0' \
+  && ok "pair runlog: not_started / herdr_blocked attempts are never counted as Codex runs" || no "pair runlog line: $(bash "$HR" "$D" | grep -F 'pair runlog' || echo none)"
+echo '2026-11-02,demo,S1,human,post-close,huge,1,x,-,-' >> "$D/.ai_context/defects.csv"
+bash "$HR" "$D" | grep -qF 'enum violation: defects 2026-11-02: severity="huge"' && ok "a defects.csv severity outside the enum is an integrity line" || no "defects enum violation not surfaced"
+
+echo "=== L1-35 · wrap, setup and defect skills; append-only and bulk guards (v4)"
+SK="$REPO/.claude/skills"
+f="$SK/wrap/SKILL.md"
+{ grep -qF 'harness-report.sh --row' "$f" && grep -qF 'Re-run every command state.md cites' "$f" && ! grep -qF -- '--sweep' "$f" && ! grep -qF 'Offer to commit' "$f"; } \
+  && ok "wrap: the row comes from harness-report.sh --row, cited commands re-run, no --sweep, commits itself" || no "wrap SKILL.md lost --row / re-run, or still says --sweep / Offer to commit"
+f="$SK/wrap/reference.md"
+{ grep -qF 'knowledge/lessons/' "$f" && grep -qF 'one lesson per file' "$f" && grep -qF 'never add a' "$f" && grep -qF -- '--defect-dismiss' "$f" && grep -qF 'scoreboard-v4.csv' "$f" \
+  && ! grep -qF 'gatelog' "$f" && ! grep -qF -- '--sweep' "$f"; } && ok "wrap reference: lessons one per file (no twins), defect candidates, scoreboard-v4.csv; no gatelog or --sweep" || no "wrap reference.md content drifted"
+f="$SK/setup/SKILL.md"
+{ grep -qF '/run-skill-generator' "$f" && grep -qF 'verify-template.md' "$f" && grep -qF 'evidence.sh trust' "$f" && grep -qF '.claude/done-lanes' "$f" && grep -qF 'Proven:' "$f" && ! grep -q 'milestone' "$f"; } \
+  && ok "setup: run skill, verify skill from the template, lanes declared and trusted, Proven: stamp; no milestones" || no "setup SKILL.md lacks the v4 mechanisms step or still says milestone"
+f="$SK/defect/SKILL.md"
+{ grep -q '^name: defect$' "$f" && grep -q '^disable-model-invocation: true$' "$f"; } 2>/dev/null && ok "defect skill registers, user-invoked only" || no "defect/SKILL.md missing or not user-invoked"
+{ grep -qF 'harness-report.sh --defect' "$f" && grep -qF 'Never edit `defects.csv` by hand' "$f"; } 2>/dev/null && ok "defect: writes through harness-report.sh --defect, never by hand" || no "defect SKILL.md lost the script or the never-by-hand rule"
+D="$WORK/l135"; DT="$D/.ai_context/tasks/demo"; mkdir -p "$DT" "$D/.claude"
+printf '2026-11-02T01:00:00Z\tSTART\tS1\t-\t8a7b6c5d4e3f\t-\tstarted\n2026-11-02T01:05:00Z\tRUN\tS1\tsmoke\t9c8b7a6f5e4d\t1a2b3c4d\tpass\n' > "$DT/donelog"
+printf 'date,slug,slice,finder,phase,severity,n,summary,fixed_in,ref\n2026-11-02,demo,S1,human,pre-done,minor,1,x,-,-\n' > "$D/.ai_context/defects.csv"
+printf '%s\n2026-11-02,demo,1,0,0,0,-,10,success,abc1234\n' "$SB_V4" > "$D/.ai_context/scoreboard-v4.csv"
+printf '# ts\tlane\tcmd_sha\tlane_sha\tdir_sha\tcanary_sha\tcanary_result — written only by scripts/evidence.sh trust; append-only\n2026-11-02T01:00:05Z\tsmoke\t3f2a9c0d1e2b\t77aa01bc23de\t5d6e7f809a1b\tc0ffee123456\tred:exit=1\n' > "$D/.claude/done-lanes.trust"
+printf '# Demo\n- [~] S1 a\n' > "$DT/card.md"; printf '## Rulings\n- none\n' > "$DT/notes.md"
+git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm base
+ao() { ( cd "$D" && git add -A && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1; echo $?; }
+undo() { ( cd "$D" && git reset -q && git checkout -q -- . ); }
+sed -i.bak '1d' "$DT/donelog" && rm -f "$DT/donelog.bak"; ck 1 "$(ao)" "a deleted donelog row blocks the commit"; undo
+sed -i.bak 's/pass$/fail/' "$DT/donelog" && rm -f "$DT/donelog.bak"; ck 1 "$(ao)" "a donelog row changed in place blocks the commit"; undo
+grep -E '^ +name: "append-only:' "$REPO/.pre-commit-config.yaml" | grep -q 'donelog' && grep -E '^ +name: "append-only:' "$REPO/.pre-commit-config.yaml" | grep -q 'trust' \
+  && ok "the append-only hook names donelog and trust (R24: files regex keeps gatelog|spawnlog)" || no "append-only hook name lacks donelog or trust"
+miss=""
+for c in '.ai_context/tasks/*/donelog) ;;' '.claude/done-lanes.trust) ;;' '.ai_context/scoreboard-v4.csv) ;;' '.ai_context/defects.csv) ;;' '.ai_context/tasks/*/gatelog) ;;' '.ai_context/tasks/*/spawnlog) ;;'; do
+  grep -qF -- "$c" "$REPO/scripts/check-append-only.sh" || miss="$miss [$c]"
+done
+[ -z "$miss" ] && ok "check-append-only.sh covers donelog, the trust file, scoreboard-v4.csv, defects.csv and still the v3 logs" || no "check-append-only.sh case list lacks:$miss"
+sed -i.bak 's/red:exit=1/skip:none/' "$D/.claude/done-lanes.trust" && rm -f "$D/.claude/done-lanes.trust.bak"; ck 1 "$(ao)" "an edited done-lanes.trust row blocks the commit"; undo
+sed -i.bak 's/minor/blocker/' "$D/.ai_context/defects.csv" && rm -f "$D/.ai_context/defects.csv.bak"; ck 1 "$(ao)" "an edited defects.csv row blocks the commit"; undo
+printf '2026-11-02T01:06:00Z\tCHECK\tS1\tchecker\t9c8b7a6f5e4d\t5e6f7a8b\tpass\n' >> "$DT/donelog"
+printf '2026-11-03,demo,S1,human,post-done,major,1,y,-,-\n' >> "$D/.ai_context/defects.csv"
+printf '2026-11-03,demo,1,0,0,0,-,12,success,abc1234\n' >> "$D/.ai_context/scoreboard-v4.csv"
+printf '2026-11-03T01:00:05Z\tsmoke\t3f2a9c0d1e2b\t77aa01bc23de\t5d6e7f809a1b\tc0ffee123456\tred:exit=1\n' >> "$D/.claude/done-lanes.trust"
+ck 0 "$(ao)" "appending to donelog, defects.csv, scoreboard-v4.csv and done-lanes.trust passes"; undo
+printf '# Demo\n- [x] S1 a ✓ smoke@1a2b3c4d check@5e6f7a8b\n' > "$DT/card.md"; printf '## Rulings\n- one\n' > "$DT/notes.md"
+ck 0 "$(ao)" "rewriting card.md and notes.md passes (deliberately not append-only)"; undo
+python3 - "$DT/donelog" <<'PY'
+import sys; open(sys.argv[1],'a').write(('2026-11-02T01:07:00Z\tWAITING\tS1\tsubagent:executor\t-\t-\tdeferred\n')*2600)
+PY
+( cd "$D" && git add -A && bash "$REPO/scripts/check-context-bulk.sh" ) >/dev/null 2>&1
+ck 0 $? "a 150 KB donelog passes the S2 bulk guard (machine log, R34)"; undo
 
 echo "=== L1-18 · doc freshness floor (F24)"
 if [ -f "$REPO/MIGRATION.md" ] && [ -f "$REPO/README.zh-TW.md" ]; then
@@ -1787,11 +1934,11 @@ f="$AG/executor.md"
 { grep -q '^name: executor$' "$f" && grep -qF 'evidence.sh run' "$f" && ! grep -qF -- '- verify:' "$f"; } && ok "executor: name: executor, proves with evidence.sh run (no v3 verify: line)" || no "executor.md name, evidence.sh run or a v3 '- verify:' line wrong"
 grep -qF 'Never edit `card.md` marks' "$f" && ok "executor keeps its hands off the card marks and the evidence" || no "executor.md lost 'Never edit \`card.md\` marks'"
 hits=""
-for f in "$AG"/*.md "$TK/SKILL.md" "$TK/reference.md" "$TK/pair.md" "$REPO"/.claude/skills/{prove,debug,backtest-check}/SKILL.md; do
+for f in "$AG"/*.md "$REPO"/.claude/skills/*/*.md; do
   h="$(grep -oE 'plan\.md|spec\.md|brief\.md|lessons\.md|gatelog|spawnlog|STATUS\.md|task-profile|final-verifier|plan-critic|reframer|scout|--sweep|/ack-' "$f" 2>/dev/null | sort -u | tr '\n' ' ')"
   [ -z "$h" ] || hits="$hits ${f#"$REPO"/}: $h"
 done
-[ -z "$hits" ] && ok "agents, task skill files, prove/debug/backtest-check name no v3 /task artefact" || no "v3 artefacts still named:$hits"
+[ -z "$hits" ] && ok "agents and every skill file name no v3 /task artefact" || no "v3 artefacts still named:$hits"
 n=$(wc -l < "$TK/SKILL.md"); [ "$n" -le 150 ] && ok "task SKILL.md within 150 lines ($n — U10, ADR-039)" || no "task SKILL.md is $n lines (> 150)"
 n=$(wc -l < "$TK/reference.md"); [ "$n" -le 120 ] && ok "task reference.md within 120 lines ($n — read on demand)" || no "task reference.md is $n lines (> 120)"
 { [ "$(sed -n 1p "$TK/SKILL.md")" = '---' ] && grep -q '^name: task$' "$TK/SKILL.md" && grep -q '^description: .' "$TK/SKILL.md"; } && ok "task skill registers (name + description frontmatter)" || no "task SKILL.md frontmatter broken"
@@ -2684,6 +2831,7 @@ else
            .claude/skills/task/reference.md .claude/skills/setup/SKILL.md \
            .claude/skills/setup/verify-template.md .claude/skills/number-check/SKILL.md \
            .claude/skills/prove/SKILL.md .claude/skills/debug/SKILL.md .claude/skills/backtest-check/SKILL.md \
+           .claude/skills/defect/SKILL.md \
            .claude/agents/executor.md .claude/agents/checker.md \
            .claude/.starter-version .ai_context/INDEX.md .ai_context/tasks/.gitkeep \
            .secrets/.gitkeep NOTICE \
