@@ -94,7 +94,11 @@ copy_if_missing .claude/skills/task/SKILL.md
 copy_if_missing .claude/skills/task/reference.md
 copy_if_missing .claude/skills/task/pair.md
 copy_if_missing .claude/skills/setup/SKILL.md
+copy_if_missing .claude/skills/setup/verify-template.md
 copy_if_missing .claude/skills/number-check/SKILL.md
+copy_if_missing .claude/skills/prove/SKILL.md
+copy_if_missing .claude/skills/debug/SKILL.md
+copy_if_missing .claude/skills/backtest-check/SKILL.md
 copy_if_missing .claude/agents/scout.md
 copy_if_missing .claude/agents/planner.md
 copy_if_missing .claude/agents/plan-critic.md
@@ -114,6 +118,7 @@ copy_if_missing scripts/task-statusline.sh
 copy_if_missing scripts/task-profile.sh
 copy_if_missing scripts/task-pair.sh
 copy_if_missing .pre-commit-config.yaml
+copy_if_missing NOTICE
 
 # --- Update stock mechanism files (opt-in) --------------------------------------
 # A file is replaced ONLY if its content matches some historical version of
@@ -149,7 +154,11 @@ stock_update .claude/skills/task/SKILL.md
 stock_update .claude/skills/task/reference.md
 stock_update .claude/skills/task/pair.md
 stock_update .claude/skills/setup/SKILL.md
+stock_update .claude/skills/setup/verify-template.md
 stock_update .claude/skills/number-check/SKILL.md
+stock_update .claude/skills/prove/SKILL.md
+stock_update .claude/skills/debug/SKILL.md
+stock_update .claude/skills/backtest-check/SKILL.md
 stock_update .claude/agents/scout.md
 stock_update .claude/agents/planner.md
 stock_update .claude/agents/plan-critic.md
@@ -168,6 +177,9 @@ stock_update scripts/task-statusline.sh
 stock_update scripts/task-profile.sh
 stock_update scripts/task-pair.sh
 stock_update .pre-commit-config.yaml
+# NOTICE is stock only while it carries the template's marker; a project's
+# own NOTICE is never replaced (it gets the append suggestion below).
+if grep -qF 'claude-starter third-party notices' "$TARGET/NOTICE" 2>/dev/null; then stock_update NOTICE; fi
 
 chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/scripts/*.sh 2>/dev/null || true
 
@@ -220,6 +232,12 @@ for f in start_project.sh bootstrap-machine.sh sync-project.sh MIGRATION.md \
     suggest+=("template leftover: $f — consider: git -C \"$TARGET\" rm -f $f")
   fi
 done
+
+# NOTICE carries the MIT notices for the third-party text adapted under
+# .claude/; a project that already had its own NOTICE got no copy.
+if [ -f "$TARGET/NOTICE" ] && ! grep -qF 'claude-starter third-party notices' "$TARGET/NOTICE"; then
+  suggest+=("NOTICE exists but lacks claude-starter's third-party notices — MIT requires them next to the adapted .claude/ files; append them: cat \"$SCRIPT_DIR/NOTICE\" >> \"$TARGET/NOTICE\"")
+fi
 
 if [ -f "$TARGET/CLAUDE.md" ] && ! grep -qi 'definition of done' "$TARGET/CLAUDE.md"; then
   suggest+=("CLAUDE.md has no 'Definition of done' section — copy one from templates/CLAUDE.md.<kind>")

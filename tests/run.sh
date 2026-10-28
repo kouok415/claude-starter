@@ -584,6 +584,37 @@ grep -qxF '.secrets/*' "$REPO/.gitignore" && grep -qxF '!.secrets/.gitkeep' "$RE
 grep -qxF '*.pem' "$REPO/.gitignore" && grep -qxF 'id_rsa*' "$REPO/.gitignore" && ok "key-material gitignored (closes the read-deny asymmetry)" || no "pem/id_rsa gitignore missing"
 [ -f "$REPO/.secrets/.gitkeep" ] && ok "seed ships .secrets/.gitkeep" || no "seed .secrets placeholder missing"
 
+echo "=== L1-24 · SOP skills, verify template, NOTICE (v4)"
+SK="$REPO/.claude/skills"
+# A model-invocable skill: frontmatter opens line 1, exact name, a
+# description inside the 1,536-char listing cut, and no invocation opt-out.
+skill_fm() { # $1 = file, $2 = name
+  local d; d="$(sed -n 's/^description: //p' "$1" 2>/dev/null | head -1)"
+  [ "$(sed -n 1p "$1" 2>/dev/null)" = '---' ] && grep -q "^name: $2\$" "$1" && [ -n "$d" ] \
+    && [ "${#d}" -le 1536 ] && ! grep -q 'disable-model-invocation' "$1"
+}
+f="$SK/prove/SKILL.md"
+skill_fm "$f" prove && ok "prove skill registers (model-invocable, description ≤1,536 chars)" || no "prove skill missing or its frontmatter is broken"
+{ grep -qF 'VERIFIED (L4|L5)' "$f" && grep -qF 'partly done' "$f" && grep -qF 'Watch it go red' "$f"; } && ok "prove: claim lines with levels, partly-done wording, observed red" || no "prove body lost its claim grammar, 'partly done' or 'Watch it go red'"
+f="$SK/debug/SKILL.md"
+skill_fm "$f" debug && ok "debug skill registers (model-invocable, description ≤1,536 chars)" || no "debug skill missing or its frontmatter is broken"
+{ grep -qF 'Two failed fixes' "$f" && grep -qF '</dev/null' "$f" && grep -qF 'fails before and passes' "$f"; } && ok "debug: two-fix premise rule, stdin trap, before/after repro" || no "debug body lost the two-fix rule, the </dev/null trap or the before/after repro"
+f="$SK/backtest-check/SKILL.md"
+skill_fm "$f" backtest-check && ok "backtest-check skill registers (model-invocable, description ≤1,536 chars)" || no "backtest-check skill missing or its frontmatter is broken"
+{ grep -q '^description: .*Only for backtests' "$f" && [ "$(grep -c '^[1-8]\. ' "$f")" = 8 ]; } && ok "backtest-check: scoped to backtests, exactly 8 numbered checks" || no "backtest-check lost its 'Only for backtests' scope or its 8 checks (got $(grep -c '^[1-8]\. ' "$f" 2>/dev/null))"
+f="$SK/setup/verify-template.md"
+{ [ -f "$f" ] && grep -q '^name: verify$' "$f" && ! grep -q 'disable-model-invocation' "$f" && grep -qF 'Proven:' "$f" && grep -qF 'before every commit' "$f"; } && ok "verify template: model-invocable 'verify' skill with a Proven: line" || no "setup/verify-template.md missing or not a model-invocable verify skill with Proven:"
+{ grep -qF 'claude-starter third-party notices' "$REPO/NOTICE" && grep -qF 'Superpowers' "$REPO/NOTICE" && grep -qF 'Compound Engineering' "$REPO/NOTICE" \
+  && grep -qF 'pstack' "$REPO/NOTICE" && grep -qF 'MIT' "$REPO/NOTICE"; } 2>/dev/null && ok "NOTICE carries the marker and the three MIT notices" || no "NOTICE missing, or lacks its marker or a project's MIT notice"
+miss=""
+for f in prove/SKILL.md debug/SKILL.md setup/verify-template.md; do
+  tail -1 "$SK/$f" 2>/dev/null | grep -q '^<!-- Source: adapted from .* see NOTICE\. -->$' || miss="$miss $f"
+done
+tail -1 "$SK/backtest-check/SKILL.md" 2>/dev/null | grep -q '^<!-- Rules from the claude-starter fleet failure taxonomy' || miss="$miss backtest-check/SKILL.md"
+[ -z "$miss" ] && ok "adapted skills end with a Source line citing NOTICE; backtest-check cites its own origin" || no "source line missing or wrong:$miss"
+f="$SK/number-check/SKILL.md"
+{ grep -q '^description: .*Eight questions' "$f" && grep -qF 'Does an outside source agree?' "$f" && grep -qF 'Is it possible' "$f"; } && ok "number-check: eight questions incl. hard range and outside-source cross-check" || no "number-check lost Eight questions, the Q3 range or the Q8 cross-check"
+
 echo "=== L1-7 · stop-gate PASS-cache (git-fingerprinted)"
 D="$WORK/l17"; mkdir -p "$D/.ai_context/tasks/demo"
 printf '# ok\n## Commands\n- Test: \`true\`\n' > "$D/CLAUDE.md"
@@ -1327,10 +1358,12 @@ else
 fi
 # sync-project.sh manifest completeness: every shipped mechanism file must
 # be named there, or spawned-then-synced projects silently miss additions
-# (exactly how the v3.12 scripts were first forgotten).
+# (exactly how the v3.12 scripts were first forgotten). Every skill file
+# counts (v4: setup/verify-template.md), and NOTICE ships with them; a
+# whole-line match, since a bare substring hits comments too.
 miss=""
-for f in $(cd "$REPO" && ls scripts/*.sh .claude/hooks/*.sh .claude/agents/*.md .claude/skills/*/SKILL.md .claude/skills/*/reference.md 2>/dev/null); do
-  grep -qF "$f" "$REPO/sync-project.sh" || miss="$miss $f"
+for f in $(cd "$REPO" && ls scripts/*.sh .claude/hooks/*.sh .claude/agents/*.md .claude/skills/*/*.md NOTICE .claude/gitleaks.toml 2>/dev/null); do
+  grep -qxF "copy_if_missing $f" "$REPO/sync-project.sh" || miss="$miss $f"
 done
 [ -z "$miss" ] && ok "sync-project.sh manifest covers every mechanism file" || no "sync-project.sh manifest missing:$miss"
 
