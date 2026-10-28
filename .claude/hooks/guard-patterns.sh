@@ -100,6 +100,11 @@ GUARD_PAIR_OVERESTIMATE='(^|[[:space:];&|(/])task-pair\.sh[[:space:]].*--over-es
 GUARD_LEDGER_PATH="\\.claude/evidence(/|[[:space:];&|)\"']|\$)|\\.claude/done-lanes\\.trust"
 GUARD_DONELOG_PATH='\.ai_context/tasks/[^[:space:]/;&|]+/donelog'
 GUARD_DONELOG_WRITE='>|(^|[[:space:]])(tee|sed|perl|awk|truncate|mv|cp|rm|ln|dd|install|python3?)([[:space:]]|$)'
+# A Bash-side write to a file the evidence chain trusts (the ones settings.json Edit-asks): a redirect, tee
+# or truncate onto it, sed/perl -i on it, rm/mv/unlink/shred of it, cp/install/ln/rsync with it as the last
+# word, dd of=it. Reading them (cat, grep, sed -n, bash scripts/evidence.sh …) stays silent.
+_G_CHAIN='[^[:space:];&|<>]*(scripts/(evidence|precommit-gitleaks|harness-report)\.sh|\.claude/hooks/(guard-patterns|stop-gate|spawn-log)\.sh|\.claude/settings\.json)(["'"'"'[:space:])]|$)'
+GUARD_CHAIN_WRITE=">[>|]?[[:space:]]*${_G_CHAIN}|(^|[[:space:]])(tee|truncate|rm|mv|unlink|shred)[[:space:]]([^;&|]*[[:space:]])?${_G_CHAIN}|(^|[[:space:]])(sed|perl)[[:space:]]([^;&|]*[[:space:]])?(-[[:alnum:]]*i|--in-place)[^;&|]*[[:space:]]${_G_CHAIN}|(^|[[:space:]])(cp|install|ln|rsync)[[:space:]]([^;&|]*[[:space:]])?${_G_CHAIN}[[:space:]]*\$|of=${_G_CHAIN}"
 # The whole command is ONE allowed evidence.sh call: no ; & | redirect,
 # backtick or $ in its arguments (the path may carry "$CLAUDE_PROJECT_DIR"/).
 GUARD_EVIDENCE_OK='^[[:space:]]*(bash[[:space:]]+)?[^[:space:];&|]*scripts/evidence\.sh[[:space:]]+(run|status|show|done|close|start|lint)([[:space:]][^;&|<>`$]*)?$'

@@ -26,7 +26,9 @@
 #       lane, a card, a checker verdict, a Codex result (v4); `run
 #       --escalated` past an ESCALATE; task-pair.sh --over-estimate
 #     - writes to the evidence ledger (.claude/evidence/, the trust file) by
-#       anything but an allowed evidence.sh call; writes to a task donelog
+#       anything but an allowed evidence.sh call; writes to a task donelog;
+#       writes to the scripts and settings the evidence chain trusts (the
+#       Bash-side twin of settings.json's Edit asks)
 #     - while a /task is active: git add -A / --all / . , git checkout --
 #       <path>, git checkout . / -f, git switch --discard-changes, git
 #       restore, git stash — the checker and the lanes read the main tree
@@ -209,6 +211,10 @@ fi
 # A donelog is tracked: git add, cat and grep on it stay silent — writes ask.
 if seg_any "$GUARD_DONELOG_PATH" '' "$GUARD_DONELOG_WRITE" && ! evidence_ok; then
   ask 'writes a task donelog, which only scripts/evidence.sh and the hooks append to — confirm only if you, the human, intend this'
+fi
+# The Bash-side twin of settings.json's Edit asks on the evidence chain (an older guard-patterns.sh lacks it).
+if [ -n "${GUARD_CHAIN_WRITE:-}" ] && seg_any "$GUARD_CHAIN_WRITE"; then
+  ask 'writes a script or setting the evidence chain trusts (evidence.sh, the gate, spawn-log, guard-patterns, the gitleaks wrapper, harness-report, settings.json) — confirm only if you, the human, intend this change'
 fi
 
 # While a /task is active (G1–G5): commands that throw uncommitted work away.

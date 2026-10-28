@@ -10,7 +10,7 @@
 # for data only (agent_id, the report), never for routing.
 #
 # Rows in the active task's donelog (donelog_row, 7 TAB fields):
-#   SPAWN  <[~] slice> <executor|checker> - <agent_id> start
+#   SPAWN  <[~] slice> <executor|checker> <checker: the unit's tree12 | -> <agent_id> start
 #   RETURN <[~] slice> <executor|checker> - <agent_id> returned | checked <id> <verdict>
 # Why (2026-07-22 v_trader): the plan said a milestone was in progress while
 # no executor had ever been spawned; after a compaction the two states look
@@ -66,8 +66,18 @@ except Exception:
 agent_id="$(printf '%s' "$agent_id" | tr -cd 'A-Za-z0-9._-')"
 agent_id="${agent_id:--}"
 
+tmo=()
+command -v timeout >/dev/null 2>&1 && tmo=(timeout 20)
 if [ "$phase" = start ]; then
-  donelog_row "$donelog" SPAWN "$slice" "$kind" - "$agent_id" start
+  # A checker's SPAWN row carries the tree it is about to read (the [~] slice's, or the whole tree for a
+  # final check); `evidence.sh check` voids its record when that content moved before the stop (review #17).
+  t=-
+  if [ "$kind" = checker ] && [ -f "$ROOT/scripts/evidence.sh" ]; then
+    u="$slice"; [ "$u" = - ] && u=final
+    t="$(${tmo[@]+"${tmo[@]}"} bash "$ROOT/scripts/evidence.sh" status --tree "$u" </dev/null 2>/dev/null | head -n 1)"
+    case "$t" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) t="${t:0:12}" ;; *) t=- ;; esac
+  fi
+  donelog_row "$donelog" SPAWN "$slice" "$kind" "$t" "$agent_id" start
   exit 0
 fi
 if [ "$kind" = executor ]; then
@@ -129,7 +139,6 @@ case "$src" in handback|last_message|transcript) ;; *) src=none ;; esac
 if [ ! -f "$ROOT/scripts/evidence.sh" ]; then
   res="check-skipped no-evidence.sh"
 else
-  tmo=()
   command -v timeout >/dev/null 2>&1 && tmo=(timeout 50)
   out="$(${tmo[@]+"${tmo[@]}"} bash "$ROOT/scripts/evidence.sh" check "$slice" --agent "$agent_id" --source "$src" < "$tf" 2>&1)"
   rc=$?
