@@ -2,8 +2,7 @@
 #
 # PreToolUse hook (Bash) — tripwire for catastrophic or sensitive commands.
 #
-# Two tiers, mirroring the stop-gate's forbidden-verify philosophy (tiny
-# list, absolute, logged):
+# Two tiers (tiny list, absolute, logged):
 #
 #   deny (exit 2, stderr fed back to Claude, logged):
 #     - force-push in any spelling (--force / --force-with-lease / -f)
@@ -23,6 +22,17 @@
 #       the full text.
 #     - commands touching .env files (H1) — .env.example/sample/template/dist
 #       are exempt
+#     - evidence.sh trust / approve / check / codex: the human's sign-off on a
+#       lane, a card, a checker verdict, a Codex result (v4); `run
+#       --escalated` past an ESCALATE; task-pair.sh --over-estimate
+#     - writes to the evidence ledger (.claude/evidence/, the trust file) by
+#       anything but an allowed evidence.sh call; writes to a task donelog
+#     - while a /task is active: git add -A / --all / . , git checkout --
+#       <path>, git checkout . / -f, git switch --discard-changes, git
+#       restore, git stash — the checker and the lanes read the main tree
+#
+# Hook asks are dropped under bypassPermissions; only the declarative asks
+# in settings.json (trust/approve/check) survive there.
 #
 # This is contains-matching on the command string: stronger than the
 # prefix-matched permission rules in settings.json (which it complements,
@@ -38,7 +48,7 @@ set -uo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-.}"
 
-# Shared destructive-op matchers — one source with stop-gate.sh (F8/F12).
+# Shared destructive-op matchers — one source with the other hooks (F8/F12).
 # Fallback: the v3.7–v3.9 built-ins, so a partially-synced project
 # degrades to the old tripwire, never to none.
 _GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
@@ -110,7 +120,7 @@ fi
 #   1. heredoc bodies are dropped — prose written into a memory file is not
 #      a command. 17 of the 48 subagent `.env` stalls in the fleet since
 #      2026-08-01 were a plan or state.md that mentioned `.env`; each parked
-#      a verifier for a median 10 minutes, hours overnight. The deny tier
+#      a subagent for a median 10 minutes, hours overnight. The deny tier
 #      above keeps the full text, so `bash <<EOF` smuggling a denied command
 #      is still caught. Python failure or an unterminated heredoc ⇒ the
 #      full command (fail towards asking). Boundary: a heredoc that is
@@ -154,12 +164,70 @@ if printf '%s' "$ask_probe" | grep -Eq '(^|[^[:alnum:]_])\.secrets/'; then
   ask 'touches .secrets/ (runtime-only credentials, H1) — confirm this should happen'
 fi
 
-# Checkpoint ack files record HUMAN sign-off on a `- checkpoint: human`
-# milestone (v3.14). The natural path is the human's own shell (`! touch
-# ...` bypasses hooks entirely); a model-issued write must surface this
-# confirmation — approving it IS the sign-off, one click, on the record.
-if printf '%s' "$ask_probe" | grep -Eq '\.ai_context/tasks/[^[:space:]/]+/ack-'; then
-  ask 'checkpoint sign-off: ack files record HUMAN approval — confirm only if you, the human, are signing off this checkpoint'
+# --- v4: the evidence ledger and a /task's working tree ------------------------
+# Needs the v4 matchers: with an older guard-patterns.sh (partial sync) this
+# degrades to the v3 guard above — an empty regex would ask on every command.
+[ "${GUARD_PATTERNS_V4:-}" = 1 ] || exit 0
+
+has() { printf '%s' "$ask_probe" | grep -Eq -- "$1"; }
+
+# Some segment (split on ; & | and newlines) matches $1, not $2, and also $3.
+seg_any() { # $1 = ERE to hit, $2 = ERE to exclude ('' = none), $3 = ERE also required ('' = none)
+  local seg
+  while IFS= read -r seg; do
+    printf '%s' "$seg" | grep -Eq -- "$1" || continue
+    [ -n "${2:-}" ] && printf '%s' "$seg" | grep -Eq -- "$2" && continue
+    [ -n "${3:-}" ] && ! printf '%s' "$seg" | grep -Eq -- "$3" && continue
+    return 0
+  done < <(printf '%s\n' "$ask_probe" | tr ';&|' '\n\n\n')
+  return 1
+}
+
+# The whole command is one allowed evidence.sh call (run/status/show/...).
+evidence_ok() {
+  case "$cmd" in *$'\n'*) return 1 ;; esac
+  printf '%s' "$cmd" | grep -Eq -- "$GUARD_EVIDENCE_OK"
+}
+
+# The ledger is guarded at any time, task or not (A1–A6).
+sub="$(printf '%s' "$ask_probe" | grep -Eo -- "$GUARD_EVIDENCE_HUMAN" | head -n 1 | sed -E 's/.*evidence\.sh[[:space:]]+([a-z]+).*/\1/')"
+case "$sub" in
+  trust) ask "evidence.sh trust — YOU approve this lane command as proof of done; confirm only after reading the lane's whole line and every @ line in .claude/done-lanes (the trust binds them and .claude/gitleaks.toml)" ;;
+  approve) ask 'evidence.sh approve — records YOUR approval of the task card; confirm only if you, the human, have read and approve this card' ;;
+  check) ask 'evidence.sh check — writes a checker record by hand (the SubagentStop hook normally writes it); confirm only if you, the human, attest this checker verdict' ;;
+  codex) ask 'evidence.sh codex — writes a Codex review record; scripts/task-pair.sh calls it itself (that call never passes this hook); confirm only if you, the human, are recording a Codex result by hand' ;;
+esac
+if has "$GUARD_PAIR_OVERESTIMATE"; then
+  ask 'task-pair.sh --over-estimate — runs Codex past the run count you approved with the card (it spends your Codex quota); confirm only if you, the human, want more Codex runs for this task'
+fi
+if has "$GUARD_EVIDENCE_OVERRIDE"; then
+  ask 'evidence.sh run past an ESCALATE (3 failed runs of this lane for this slice) — confirm only if you, the human, want another attempt'
+fi
+if has "$GUARD_LEDGER_PATH" && ! evidence_ok; then
+  ask 'touches .claude/evidence/ or .claude/done-lanes.trust, which only scripts/evidence.sh writes — read them with the Read tool or evidence.sh status/show; confirm only if you, the human, intend this'
+fi
+# A donelog is tracked: git add, cat and grep on it stay silent — writes ask.
+if seg_any "$GUARD_DONELOG_PATH" '' "$GUARD_DONELOG_WRITE" && ! evidence_ok; then
+  ask 'writes a task donelog, which only scripts/evidence.sh and the hooks append to — confirm only if you, the human, intend this'
+fi
+
+# While a /task is active (G1–G5): commands that throw uncommitted work away.
+# task_active may run git, so it is asked only after a matcher hits.
+g=""
+if has "$GUARD_GIT_ADD_ALL"; then g=add
+elif has "$GUARD_GIT_CHECKOUT_PATH"; then g=checkout
+elif has "$GUARD_GIT_RESTORE"; then g=restore
+elif seg_any "$GUARD_GIT_STASH" "$GUARD_GIT_STASH_READ"; then g=stash
+elif has "$GUARD_GIT_DISCARD"; then g=discard
+fi
+if [ -n "$g" ] && task_active "$ROOT"; then
+  case "$g" in
+    add) ask 'git add -A / --all / . while a /task is active — stage the slice files by name; confirm only if every changed file belongs in this commit' ;;
+    checkout) ask 'git checkout -- <path> / git checkout . overwrites uncommitted work while a /task is active — confirm nothing unsaved is lost' ;;
+    restore) ask 'git restore overwrites uncommitted work while a /task is active — confirm nothing unsaved is lost' ;;
+    stash) ask 'git stash moves uncommitted work out of the tree that lanes and the checker read while a /task is active — confirm (git stash list/show never ask)' ;;
+    discard) ask 'git checkout -f / git switch --discard-changes throws away uncommitted work while a /task is active — confirm nothing unsaved is lost' ;;
+  esac
 fi
 
 exit 0

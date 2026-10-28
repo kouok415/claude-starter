@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 #
-# guard-patterns.sh — the ONE source of the destructive-command matchers
-# shared by the two enforcement layers:
+# guard-patterns.sh — the ONE source of the matchers and task helpers shared
+# by the hooks (ADR-004):
 #
-#   stop-gate.sh   forbidden-verify denylist (sudo, git push, rm -rf on an
-#                  absolute path) — verifies execute unattended at turn end
-#   bash-guard.sh  PreToolUse tiers (deny: force-push / sudo / rm -rf on
-#                  the root; ask: rm -rf on other absolute paths)
+#   bash-guard.sh     PreToolUse tiers (deny: force-push / sudo / rm -rf on
+#                     the root; ask: rm -rf leaving the tree, the evidence
+#                     ledger, git commands that drop work during a /task)
+#   stop-gate.sh and  setup sentinel; task helpers (CURRENT, idle task,
+#   session-start.sh  pid locks)
+#   spawn-log.sh      task helpers, the donelog writer
+#
+# scripts/evidence.sh sources it too (static-command matcher, donelog writer).
 #
 # v3.9 shipped two hand-mirrored copies, and the stop-gate's literal
 # substrings let `rm -fr`, `rm -r -f` and double-space spellings execute
@@ -24,10 +28,6 @@
 # sudo as a standalone word.
 GUARD_SUDO='(^|[[:space:];&|(])sudo([[:space:]]|$)'
 
-# Any `git push`, whitespace-tolerant and word-bounded (the stop-gate
-# refuses ALL pushes in verifies, not just forced ones).
-GUARD_GIT_PUSH='(^|[[:space:];&|(])git[[:space:]]+push([[:space:];&|)]|$)'
-
 # Force-push in any spelling, scoped to the push's pipeline segment:
 # --force / --force-with-lease[=ref] / -f, plus the flagless `+refspec`
 # form (`git push origin +main`) — a force-push with no flag at all (F12).
@@ -44,8 +44,7 @@ _G_RF="(-[[:alnum:]]*([rR][[:alnum:]]*f|f[[:alnum:]]*[rR])[[:alnum:]]*|${_G_R}([
 _G_RM="(^|[[:space:];&|(])rm[[:space:]]+(${_G_FLAG}[[:space:]]+)*${_G_RF}([[:space:]]+${_G_FLAG})*[[:space:]]+[\"']?"
 
 # ...on a path that leaves the project tree: absolute, home-relative
-# (`~`, `$HOME`) or parent traversal (`..`) — stop-gate denylist,
-# bash-guard ask tier. `$VAR/...` forms stay the documented boundary
+# (`~`, `$HOME`) or parent traversal (`..`) — bash-guard ask tier. `$VAR/...` forms stay the documented boundary
 # (v3.14.3: with the settings.json rm rule gone these spellings had no
 # layer left; the CLI's critical-path breaker covers home itself, not
 # `~/projects/x`).
@@ -62,16 +61,15 @@ GUARD_RM_RF_ROOT="${_G_RM}/([[:space:]]|\*|[\"']|$)|(^|[[:space:];&|(])rm[[:spac
 # and trains the human to click through the tier that matters. Exactly
 # that shape; path characters only in the tail, so a `;rm -rf /etc`
 # chained after it survives the scrub; the sourcing hook drops the
-# exemption whenever the command contains `..`. bash-guard ONLY — the
-# stop-gate denylist keeps refusing them, verifies run unattended.
+# exemption whenever the command contains `..`. bash-guard ONLY.
 GUARD_SCRATCHPAD='/tmp/claude-[[:alnum:]_.-]+/[[:alnum:]_.-]+/[[:alnum:]_.-]+/scratchpad[[:alnum:]_./@+~-]*'
 
 # Anything one level below /tmp (v3.14.5, ADR-026): on a dev box /tmp is
 # disposable by definition, and every /tmp/<name> the fleet's subagents
 # ever deleted was their own temp dir. At least one real path character,
-# no glob — `rm -rf /tmp`, `/tmp/` and `/tmp/*` keep asking. bash-guard
-# ONLY, like GUARD_SCRATCHPAD. Known edge: the whole /tmp/claude-<uid>
-# tree passes under this rule; the CLI does not catch that either.
+# no glob — `rm -rf /tmp`, `/tmp/` and `/tmp/*` keep asking. Known edge:
+# the whole /tmp/claude-<uid> tree passes under this rule; the CLI does
+# not catch that either.
 GUARD_TMP_SUBDIR='/tmp/[[:alnum:]_.-]+[[:alnum:]_./@+~-]*'
 
 # Setup-gate sentinel (ADR-004): the newborn-project trigger shared by
@@ -81,13 +79,30 @@ GUARD_TMP_SUBDIR='/tmp/[[:alnum:]_.-]+[[:alnum:]_./@+~-]*'
 # projects spawned before the sentinel existed.
 GUARD_SETUP_SENTINEL='claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit'
 
-# The stop-gate's forbidden-verify test (three entries, absolute).
-guard_forbidden_verify() { # $1 = verify command -> rc 0 when forbidden
-  printf '%s' "$1" | grep -Eq "$GUARD_SUDO" && return 0
-  printf '%s' "$1" | grep -Eq "$GUARD_GIT_PUSH" && return 0
-  printf '%s' "$1" | grep -Eq "$GUARD_RM_RF_ABS" && return 0
-  return 1
-}
+# --- v4 bash-guard ask tier (claude-starter v4) ------------------------------
+# git commands that throw uncommitted work away, asked only while a /task is
+# active (the checker reads the main tree; lanes hash it). A git word, then any
+# global options (-C <dir>, -c <k=v>, --flags), then the subcommand.
+_G_GIT='(^|[[:space:];&|(])git([[:space:]]+(-[Cc][[:space:]]+[^[:space:];&|]+|--?[[:alnum:]][^[:space:];&|]*))*[[:space:]]+'
+_G_END='([[:space:];&|)]|$)'
+GUARD_GIT_ADD_ALL="${_G_GIT}add([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(-[[:alnum:]]*A[[:alnum:]]*|--all|\\.|\\./|:/)${_G_END}"
+GUARD_GIT_CHECKOUT_PATH="${_G_GIT}checkout([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(--[[:space:]]+[^[:space:];&|]|\\.${_G_END})"
+GUARD_GIT_RESTORE="${_G_GIT}restore${_G_END}"
+GUARD_GIT_STASH="${_G_GIT}stash${_G_END}"
+GUARD_GIT_STASH_READ="${_G_GIT}stash[[:space:]]+(list|show)${_G_END}"
+GUARD_GIT_DISCARD="${_G_GIT}(checkout|switch)([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(-[[:alnum:]]*f[[:alnum:]]*|--force|--discard-changes)${_G_END}"
+
+# The evidence ledger: only scripts/evidence.sh writes it. trust, approve and
+# check are the human's sign-off; codex is task-pair.sh's own call.
+GUARD_EVIDENCE_HUMAN='(^|[[:space:];&|(/])evidence\.sh[[:space:]]+(trust|approve|check|codex)([[:space:];&|)]|$)'
+GUARD_EVIDENCE_OVERRIDE='evidence\.sh[[:space:]]+run[[:space:]][^;&|]*--escalated'
+GUARD_PAIR_OVERESTIMATE='(^|[[:space:];&|(/])task-pair\.sh[[:space:]].*--over-estimate([[:space:];&|)]|$)'
+GUARD_LEDGER_PATH="\\.claude/evidence(/|[[:space:];&|)\"']|\$)|\\.claude/done-lanes\\.trust"
+GUARD_DONELOG_PATH='\.ai_context/tasks/[^[:space:]/;&|]+/donelog'
+GUARD_DONELOG_WRITE='>|(^|[[:space:]])(tee|sed|perl|awk|truncate|mv|cp|rm|ln|dd|install|python3?)([[:space:]]|$)'
+# The whole command is ONE allowed evidence.sh call: no ; & | redirect,
+# backtick or $ in its arguments (the path may carry "$CLAUDE_PROJECT_DIR"/).
+GUARD_EVIDENCE_OK='^[[:space:]]*(bash[[:space:]]+)?[^[:space:];&|]*scripts/evidence\.sh[[:space:]]+(run|status|show|done|close|start|lint)([[:space:]][^;&|<>`$]*)?$'
 
 # --- v4 task helpers (claude-starter v4) ------------------------------------
 # Shared with scripts/evidence.sh, which sources this file and refuses to run
@@ -112,7 +127,7 @@ static_only() { # $1 = command -> rc 0 when every segment is static
 # .ai_context/tasks/CURRENT -> slug; rc 1 when absent, empty, or a path.
 task_slug() { # $1 = project root
   local s
-  s="$(tr -d '[:space:]' < "$1/.ai_context/tasks/CURRENT" 2>/dev/null)" || return 1
+  s="$(tr -d '[:space:]' 2>/dev/null < "$1/.ai_context/tasks/CURRENT")" || return 1
   case "$s" in ''|*/*|*..*) return 1 ;; esac
   printf '%s\n' "$s"
 }
@@ -148,3 +163,48 @@ donelog_row() { # $1 = donelog, $2..$7 = TYPE slice lane|agent|class tree12 reco
   printf '%s\n' "$row" >> "$f" 2>/dev/null
   return 0
 }
+
+# Idle task (D6): card, donelog and the task/<slug> branch all untouched for a
+# week. An idle card is not injected and the Stop gate does not check it.
+TASK_IDLE_SECS=604800
+
+file_mtime() { # $1 = path -> epoch seconds; empty when absent
+  [ -e "$1" ] || return 0
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
+# Newest of card.md and donelog mtimes; only when both are a week old is the
+# last commit on task/<slug> asked for (one git call, and only then).
+task_last_active() { # $1 = root, $2 = slug -> epoch; empty when nothing is known
+  local d="$1/.ai_context/tasks/$2" t c
+  t="$(file_mtime "$d/card.md")"
+  c="$(file_mtime "$d/donelog")"
+  if [ -n "$c" ] && { [ -z "$t" ] || [ "$c" -gt "$t" ]; }; then t="$c"; fi
+  if [ -z "$t" ] || [ $(($(date +%s) - t)) -gt "$TASK_IDLE_SECS" ]; then
+    c="$(git -C "$1" log -1 --format=%ct "refs/heads/task/$2" 2>/dev/null)"
+    if [ -n "$c" ] && { [ -z "$t" ] || [ "$c" -gt "$t" ]; }; then t="$c"; fi
+  fi
+  printf '%s\n' "$t"
+}
+
+task_idle() { # $1 = root, $2 = slug -> rc 0 when idle; an unknown age is not idle
+  local t
+  t="$(task_last_active "$1" "$2")"
+  [ -n "$t" ] && [ $(($(date +%s) - t)) -gt "$TASK_IDLE_SECS" ]
+}
+
+task_idle_days() { # $1 = root, $2 = slug -> whole days since the last activity
+  local t
+  t="$(task_last_active "$1" "$2")"
+  [ -n "$t" ] && echo $((($(date +%s) - t) / 86400))
+}
+
+# A /task is active: CURRENT names a slug, its card exists, and it is not idle.
+# A v3 CURRENT (plan.md, no card.md) is no active task for the v4 hooks.
+task_active() { # $1 = root
+  local s
+  s="$(task_slug "$1")" && [ -f "$1/.ai_context/tasks/$s/card.md" ] && ! task_idle "$1" "$s"
+}
+
+# Set last: a hook that sees it knows every v4 matcher and helper above exists.
+GUARD_PATTERNS_V4=1

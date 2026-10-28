@@ -172,21 +172,28 @@ prefix; the ones you will meet:
 | You see | It means | Do |
 |---|---|---|
 | `SETUP GATE` | CLAUDE.md still carries the `UNCONFIGURED` sentinel | let `/setup` run — or say you decline; it yields once and re-arms next session |
-| `GATE FAILED (red block n of 2 …)` | the `[in_progress]` milestone's verify is red; the turn cannot end | let it fix the work; if the command is wrong, see the first bullet |
-| `NOTE — spawnlog has no executor row` | the milestone was armed but no executor ever started | nothing — it is told to spawn rung 1 instead of escalating |
-| `… is RED — blocked n stops in a row … yielding now` (`STUCK` row) | three red stops: the gate handed the milestone to you | read `gatelog` + `lessons.md`; fix the cause, change the verify (with a reason), or abandon |
-| `GATE INTEGRITY — the milestone gate cannot arm` | task state is broken (empty `CURRENT`, missing plan.md, zero or several `[in_progress]`, wrong branch); logged as `INTEGRITY` | fix the named state; a mid-intake pause is legitimate — say so |
-| `GATE REFUSED — … forbidden operation` | the verify contains a privileged command, git push or `rm -rf` on an absolute path; it was not run | rewrite that verify in plan.md |
-| `… executor in flight … verify deferred` (`WAITING` row) | an executor is still running (Claude Code lists it); every stop defers until it reports | wait — its completion wakes the session |
-| `MILESTONE COMPLETE …` | a green boundary; the model must say continue or pause | answer it if it asked you something |
-| `… is green; the run is paused at a milestone boundary` (`PAUSED` row) | the run stopped on green and is waiting | say continue, or redirect |
-| `… is a human checkpoint - run held; sign off with: touch …` | a `checkpoint: human` milestone passed | review its demo, then run the `touch` it names |
-| a confirmation prompt from `bash-guard` | `rm -rf` leaving the project tree, or a command touching `.env` | approve only what you meant |
+| `GATE BLOCKED (block n of 2 …)` … `is marked [x] without an evidence reference` | a slice is `[x]` but `evidence.sh done` never wrote it; the turn cannot end | let it set the line back to `[~]` and run `evidence.sh done S<n>`; never hand-edit `[x]` |
+| `… cites evidence that does not hold: …` | an `[x]` cites a record that is gone, red, another lane's, or not the one its `DONE` row names | re-run the lane, then `done` again |
+| `… the evidence is not fresh for the current content` | content changed after `close` wrote `Closed:` | re-run the lanes (and final Codex), then `close` again — or delete the `Closed:` line |
+| `claude-starter-gate: BLOCK` | the marker printed before every block | nothing — it keeps the CLI from dropping the block |
+| `… in flight; evidence check deferred until it reports` (`WAITING` row) | a lane run, a Codex send or a subagent is still running | wait — its end wakes the session |
+| `… is BLOCKED - n stops in a row on the same card and content …` `yielding now` (`STUCK` row) | two blocks on the same card and content: the run is yours | read `donelog`; fix, re-trust a wrong lane, or abandon |
+| `internal error` … `not blocking this stop` (`GATE-ERROR` row) | the gate itself failed; this stop was allowed | file a friction row; slices are not checked until it is fixed |
+| `TRUST REFUSED —` … `static-only command` | the lane only proves the source exists | make the lane run the product |
+| `TRUST REFUSED —` … `the canary passed` | the lane stays green on a known-bad input | fix the lane or its canary |
+| `RUN REFUSED —` … `changed since trust` | the lane's line, an `@` line or `.claude/gitleaks.toml` changed after trust | read the change, then `bash scripts/evidence.sh trust <lane>` again |
+| `ESCALATE —` … `failed 3 times in a row` | one lane failed three straight runs on one slice | stop and report (`/debug`); confirm `run --escalated` only if you want another try |
+| `expect not matched` | the run finished but a marker line is missing | open the log path it prints; the product did not do what the lane checks |
+| `executed=0` | nothing ran (zero tests, rows or requests) | unproven, not passed — fix the selection |
+| `secret or internal-IP rule` | the lane (or canary) log matched `.claude/gitleaks.toml`; the run failed | stop the output from printing it; never paste that log |
+| `lane files changed during the run` | edits landed while the lane ran; the record was voided | re-run once edits stop |
+| `NOT DONE —` / `NOT CLOSED —` … `Not proven this time` | `done` or `close` refused and lists what is missing (record, checker, Codex, approval, files outside lane paths, stale lanes) | supply the missing piece; read the "not proven" footer before saying done |
+| `card changed since approval` / `CARD LINT —` | the card was edited after your yes, or its format is broken | review the diff and approve again / fix what lint names |
+| a confirmation prompt from `bash-guard` | `rm -rf` leaving the project, `.env` access, or during a task: `git add -A`/`.`, `git checkout -- <path>`, `git checkout .`/`-f`, `git switch --discard-changes`/`-f`, `git restore`, `git stash`; any time: a command touching `.claude/evidence/`, the trust file or a donelog, `evidence.sh trust`/`approve`/`check`/`codex`, `run --escalated`, `task-pair.sh --over-estimate` | approve only what you meant; trust, approve and check are your sign-off. Under `bypassPermissions` only the `settings.json` asks (trust/approve/check) still appear |
 | `BASH GUARD — blocked (…)` | force-push, a privileged command or `rm -rf /`: never run unattended; logged to `private/bash-guard.log` | run it yourself if you really mean it |
 | a permission denial reading `.env*` / `.secrets/` | H1: Claude never reads secrets | keep them there; code reads them at runtime |
-| `WARNING: state.md last updated …` / `… is newer than state.md` | memory is stale, or the last session ended without `/wrap` | `/wrap` |
-| `WARNING: task … has [pending] milestones but none [in_progress]` | the gate is OFF | have it mark the next milestone `[in_progress]` |
-| `WARNING: … bytes (cap …)` | an injected file grew past its cap | distill it as the message says |
+| `WARNING: state.md last updated …` / `… is newer than state.md` / `WARNING: … bytes (cap …)` / `TRUNCATED: first 4096 of` | memory is stale or the last session skipped `/wrap`; or an injected file outgrew its cap (state.md 5120, card.md 4096 — truncated, notes.md 16384, CLAUDE.md 20480) | `/wrap`; distill or move detail to `notes.md` |
+| `has been idle` … `the Stop gate does not check it` / `a v3 plan.md task without card.md` | the task idled > 7 days / `tasks/CURRENT` names a v3 task, which v4 neither injects nor gates | `/task` to resume or delete `CURRENT` / finish it on a `v3-final` checkout, rewrite it as a card, or delete `CURRENT` |
 | `pair: judge no-verdict ×2 …` in `lessons.md` | the Codex judge gave no verdict twice; the Claude seat was used | look at the judge pane (exit 4 = a dialog there needs you) |
 | `harness-report.sh`: `verify changed after FAIL` | a gate moved after it failed | find the reason in `lessons.md`; none → ask why |
 | `harness-report.sh`: `verification depth gap` | a `risk: med/high` milestone finished without its verifier | re-check it, or accept the risk knowingly |

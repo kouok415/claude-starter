@@ -275,19 +275,24 @@ if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'gatelog' "$TARGET/.claud
   suggest+=("settings.json does not deny Edit/Write on tasks/*/gatelog (v3.7) — merge the deny entries from the template's .claude/settings.json")
 fi
 
-# v3.9: spawn evidence — SubagentStart wiring + spawnlog write-deny live in
-# settings.json; customized projects merge by hand.
-if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'spawn-log\.sh' "$TARGET/.claude/settings.json"; then
-  suggest+=("settings.json has no SubagentStart/spawn-log wiring (v3.9) — merge the \"SubagentStart\" hooks block from the template's .claude/settings.json")
-fi
+# v3.9 spawnlog write-deny: kept in v4 — it protects frozen v3 evidence.
 if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'spawnlog' "$TARGET/.claude/settings.json"; then
   suggest+=("settings.json does not deny Edit/Write on tasks/*/spawnlog (v3.9) — merge the deny entries from the template's .claude/settings.json")
 fi
-# Verifier spawns got their own spawnlog class (harness-report's verification
-# depth check); a customized settings.json still logs them as "other".
-if [ -f "$TARGET/.claude/settings.json" ] && grep -q 'spawn-log\.sh' "$TARGET/.claude/settings.json" \
-   && ! grep -q 'spawn-log\.sh\\" verifier' "$TARGET/.claude/settings.json"; then
-  suggest+=("settings.json logs verifier spawns as \"other\" — merge the \"verifier\" SubagentStart matcher from the template's .claude/settings.json and drop verifier from the crew matcher")
+
+# v4: SubagentStart/Stop write SPAWN/RETURN rows and the checker record; the
+# evidence ledger is Edit-denied; trust/approve/check ask even under bypass.
+if [ -f "$TARGET/.claude/settings.json" ] && ! grep -q 'SubagentStop' "$TARGET/.claude/settings.json"; then
+  suggest+=("settings.json has no SubagentStop wiring (v4) — replace its \"SubagentStart\" block with the template's \"SubagentStart\" + \"SubagentStop\" blocks (matchers executor, checker → spawn-log.sh); without them no checker record is written and evidence.sh done refuses every slice")
+fi
+if [ -f "$TARGET/.claude/settings.json" ] && { ! grep -qF '.claude/evidence/' "$TARGET/.claude/settings.json" || ! grep -qF '.claude/gitleaks.toml' "$TARGET/.claude/settings.json"; }; then
+  suggest+=("settings.json lacks the v4 evidence denies — add to permissions.deny: \"Edit(./.claude/evidence/**)\", \"Edit(./.claude/done-lanes.trust)\", \"Edit(./.ai_context/tasks/**/donelog)\", \"Edit(./.claude/gitleaks.toml)\" (keep the gatelog/spawnlog denies: they protect v3 evidence)")
+fi
+if [ -f "$TARGET/.claude/settings.json" ] && ! grep -qF 'evidence.sh trust' "$TARGET/.claude/settings.json"; then
+  suggest+=("settings.json lacks the v4 evidence.sh rules — add to permissions.ask: \"Bash(bash scripts/evidence.sh trust:*)\", \"Bash(bash scripts/evidence.sh approve:*)\", \"Bash(bash scripts/evidence.sh check:*)\" (declarative asks are the only ones that survive bypassPermissions), and to permissions.allow the same form for run, status, show, start, done, close and lint (unattended slices in the default mode)")
+fi
+if [ -f "$TARGET/.claude/settings.json" ] && grep -qE 'tasks/\*\*/ack-|scout\|planner|"matcher": "verifier"' "$TARGET/.claude/settings.json"; then
+  suggest+=("settings.json still carries v3 task wiring — remove the ack-* deny entry and the \"verifier\" and \"scout|planner|plan-critic|final-verifier|reframer\" SubagentStart matchers, and lower the Stop hook timeout to 30 (keep the gatelog/spawnlog denies)")
 fi
 
 if [ -f "$TARGET/.claude/hooks/session-start.sh" ] && ! grep -q 'tasks/CURRENT' "$TARGET/.claude/hooks/session-start.sh"; then

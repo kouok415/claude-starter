@@ -3,9 +3,11 @@
 # SessionStart hook — mechanizes the .ai_context reading protocol.
 #
 # stdout from a SessionStart hook is added to Claude's context, so this
-# injects INDEX.md + state.md on startup, resume, /clear, AND after
-# compaction — the protocol survives context loss without relying on
-# model discipline.
+# injects INDEX.md + state.md + the active task card (≤4096 B) and one
+# evidence-status line on startup, resume, /clear, AND after compaction —
+# the protocol survives context loss without relying on model discipline.
+# A task's notes.md is never injected (nor a v3 brief, lessons or spec):
+# the executor and the checker read the § the card points at.
 #
 # Also emits freshness (S3) and size (S7) warnings so stale memory is
 # flagged instead of silently trusted.
@@ -17,6 +19,7 @@ CTX="$ROOT/.ai_context"
 
 # Setup-sentinel pattern shared with stop-gate.sh (ADR-004: two layers of
 # one mechanism); helper absent (partial sync) = the same literal inline.
+# The same file provides the task helpers (task_slug, task_idle).
 _GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
 # shellcheck source=guard-patterns.sh
 [ -f "$_GP" ] && . "$_GP"
@@ -31,6 +34,15 @@ if [ -f "$ROOT/CLAUDE.md" ] && \
   printf 'SETUP REQUIRED: this project has not been set up (CLAUDE.md is still a template). In your FIRST reply, run the /setup protocol — interview, scaffold, draft CLAUDE.md/README/state.md for human review — before or alongside the current request. The Stop gate blocks the first turn-end until the draft lands.\n'
 fi
 
+# --- Size (CLAUDE.md): Claude Code loads it into every session and subagent.
+#     Before the .ai_context early-exit: it applies to any project.
+if [ -f "$ROOT/CLAUDE.md" ]; then
+  csize="$(wc -c < "$ROOT/CLAUDE.md" | tr -d ' ')"
+  if [ "$csize" -gt 20480 ]; then
+    printf 'WARNING: CLAUDE.md is %s bytes (cap 20480) — Claude Code loads it into every session and subagent; move detail into skills, .ai_context/knowledge/ or docs/ and keep commands, rules and the Definition of done.\n' "$csize"
+  fi
+fi
+
 [ -d "$CTX" ] || exit 0
 
 emit_file() {
@@ -38,27 +50,6 @@ emit_file() {
   printf '=== %s ===\n' "${1#"$ROOT"/}"
   cat "$1"
   printf '\n'
-}
-
-emit_plan() { # filtered plan view — the re-anchor needs the CURRENT milestone,
-  # not 20 milestones of design commentary (a 40 KB plan.md re-paid on every
-  # compaction was itself a compaction driver, and the armed milestone was
-  # 3.7% of the bytes). Full text only for the [in_progress] section; other
-  # milestones keep heading + verify/risk (the gate's contract, one line each).
-  [ -f "$1" ] || return 0
-  pv="$(awk '
-    BEGIN { inhdr = 1 }
-    /^## / { inhdr = 0; cur = ($0 ~ /\[in_progress\]/); print; next }
-    inhdr  { print; next }
-    cur    { print; next }
-    /^- (verify|risk):/ { print }
-  ' "$1")"
-  printf '=== %s (filtered view: full section only for [in_progress]; other milestones heading+verify/risk. Full file on disk) ===\n' "${1#"$ROOT"/}"
-  printf '%s\n\n' "$pv"
-  pvsize="$(printf '%s' "$pv" | wc -c | tr -d ' ')"
-  if [ "$pvsize" -gt 8192 ]; then
-    printf 'WARNING: even the filtered plan view is %s bytes (cap 8192) — the armed milestone section is bloated; move narrative into the task journal.\n' "$pvsize"
-  fi
 }
 
 emit_file "$CTX/INDEX.md"
@@ -74,67 +65,68 @@ if [ -f "$CTX/INDEX.md" ]; then
   fi
 fi
 
-# --- Active long-horizon task (/task harness): inject its spec + brief +
-#     plan + lessons so re-anchoring after /clear or compaction lands on the
-#     latest milestone checkpoint WITH its intent (spec carries the ACs and
-#     constraints — S tasks have no executor that would re-read it). This is
-#     the reason /task's resume step does NOT re-read these files.
+# --- Active /task: inject its card — goal, done-when, decisions, slice lines
+#     with their evidence ids — so re-anchoring after /clear or compaction
+#     lands on the current slice. ≤4096 B by design: past the cap only the
+#     first 4096 bytes (whole lines) are injected and evidence.sh lint
+#     refuses the card. One evidence-status line rides along; an idle card
+#     (D6) is not injected and the Stop gate does not check it.
 if [ -f "$CTX/tasks/CURRENT" ]; then
-  slug="$(tr -d '[:space:]' < "$CTX/tasks/CURRENT")"
-  tdir="$CTX/tasks/$slug"
-  if [ -z "$slug" ]; then
-    printf 'WARNING: .ai_context/tasks/CURRENT exists but is empty/corrupt — the milestone gate cannot arm; restore the slug or delete the file.\n'
-  elif [ ! -f "$tdir/plan.md" ]; then
-    printf 'WARNING: tasks/CURRENT names "%s" but its plan.md is missing (mid-intake pause, renamed dir, or stale CURRENT) — the milestone gate cannot arm until plan.md exists.\n' "$slug"
-    emit_file "$tdir/spec.md"
-    emit_file "$tdir/brief.md"
-    emit_file "$tdir/lessons.md"
+  if [ "${GUARD_PATTERNS_V4:-}" != 1 ]; then
+    printf 'WARNING: .claude/hooks/guard-patterns.sh is missing or predates v4 — the task card is not injected; re-sync the template.\n'
+  elif ! slug="$(task_slug "$ROOT")"; then
+    printf 'WARNING: .ai_context/tasks/CURRENT exists but is empty/corrupt — no task card is injected; restore the slug or delete the file.\n'
+  elif [ ! -f "$CTX/tasks/$slug/card.md" ]; then
+    if [ -f "$CTX/tasks/$slug/plan.md" ]; then
+      printf 'WARNING: tasks/CURRENT names "%s", a v3 plan.md task without card.md — v4 hooks do not drive it and its plan/spec/brief/lessons are no longer injected. Finish it on the v3-final template or rewrite it as a card (/task).\n' "$slug"
+    else
+      printf 'WARNING: tasks/CURRENT names "%s" but its card.md is missing (mid-intake, renamed dir, or stale CURRENT) — nothing is injected; write the card or delete CURRENT.\n' "$slug"
+    fi
+  elif task_idle "$ROOT" "$slug"; then
+    printf 'NOTE: task "%s" has been idle %s days (no card, donelog or task/%s commit activity) — its card is not injected and the Stop gate does not check it. Resume it with /task (any card edit or evidence run re-activates it), or /wrap it and delete tasks/CURRENT.\n' \
+      "$slug" "$(task_idle_days "$ROOT" "$slug")" "$slug"
   else
-    emit_file "$tdir/spec.md"
-    emit_file "$tdir/brief.md"
-    emit_plan "$tdir/plan.md"
-    emit_file "$tdir/lessons.md"
-
-    # Refresh the human's live view on resume (a view, never injected —
-    # spec/plan above already carry the model's copy of this state).
-    [ -f "$ROOT/scripts/task-status.sh" ] && \
-      bash "$ROOT/scripts/task-status.sh" "$tdir" >/dev/null 2>&1 || true
-
-    # Status corruption / resume nudge: [pending] milestones but none
-    # [in_progress] means the Stop gate is not armed (a typo'd status tag
-    # does exactly this). The stop-gate blocks the mid-flight case once per
-    # session; this warning also covers the legitimate states.
-    if grep -q '^## .*\[pending\]' "$tdir/plan.md" && \
-       ! grep -q '^## .*\[in_progress\]' "$tdir/plan.md"; then
-      printf 'WARNING: task %s has [pending] milestones but none [in_progress] — the milestone gate is OFF in this state. Mark the next milestone [in_progress] before working, and check for a status typo.\n' "$slug"
+    card="$CTX/tasks/$slug/card.md"
+    csz="$(wc -c < "$card" | tr -d ' ')"
+    if [ "$csz" -le 4096 ]; then
+      emit_file "$card"
+    else
+      printf '=== %s (TRUNCATED: first 4096 of %s bytes, cut at the last full line) ===\n' "${card#"$ROOT"/}" "$csz"
+      chunk="$(head -c 4096 "$card"; printf x)"
+      chunk="${chunk%x}"
+      case "$chunk" in
+        *$'\n') printf '%s' "$chunk" ;;
+        *) printf '%s\n' "$chunk" | sed '$d' ;;
+      esac
+      printf 'WARNING: card.md is %s bytes (cap 4096) — only the first 4096 bytes were injected; move detail into notes.md (never injected) and keep the card to goal, done-when, decisions and slice lines. evidence.sh lint refuses an oversized card.\n' "$csz"
     fi
 
-    # Size cap (S7 spirit) for the always-injected task files: past 4 KB
-    # they tax every session start and every subagent that reads them.
-    for tf in spec.md brief.md lessons.md; do
-      if [ -f "$tdir/$tf" ]; then
-        tsize="$(wc -c < "$tdir/$tf" | tr -d ' ')"
-        if [ "$tsize" -gt 4096 ]; then
-          printf 'WARNING: tasks/%s/%s is %s bytes (cap 4096) — distill it: one line per entry, narratives to journal/.\n' "$slug" "$tf" "$tsize"
-        fi
+    # notes.md is never injected, but every executor and checker pays for it.
+    if [ -f "$CTX/tasks/$slug/notes.md" ]; then
+      nsz="$(wc -c < "$CTX/tasks/$slug/notes.md" | tr -d ' ')"
+      if [ "$nsz" -gt 16384 ]; then
+        printf 'WARNING: tasks/%s/notes.md is %s bytes (cap 16384) — it is never injected, but every executor and checker that reads a § pays for it; keep only constraints, interfaces, edge cases, rulings verbatim and measured facts.\n' "$slug" "$nsz"
       fi
-    done
-
-    # Raw plan.md size (F23): the filtered view hides bloat from sessions,
-    # but the raw artifact is what full-file readers pay — the mechanism
-    # that exists because of a 40 KB plan keeps an eye on the actual file.
-    psz="$(wc -c < "$tdir/plan.md" | tr -d ' ')"
-    if [ "$psz" -gt 16384 ]; then
-      printf 'WARNING: raw plan.md is %s bytes (cap 16384) — sessions see the filtered view, but any full-file read pays this; move milestone narrative into the task journal.\n' "$psz"
     fi
 
-    # Finished-but-unclosed (F22): all-[done] with CURRENT still present is
-    # the normal window between finishing and /wrap — and the lasting state
-    # when wrap is skipped, silently re-paying the task attachment forever.
-    if grep -q '^## .*\[done\]' "$tdir/plan.md" && \
-       ! grep -q '^## .*\[pending\]' "$tdir/plan.md" && \
-       ! grep -q '^## .*\[in_progress\]' "$tdir/plan.md"; then
-      printf 'NOTE: task "%s" is all-[done] but tasks/CURRENT still points at it — run /wrap to write the scoreboard row and clear CURRENT; until then every session pays this task attachment.\n' "$slug"
+    if [ ! -f "$ROOT/scripts/evidence.sh" ]; then
+      printf 'WARNING: scripts/evidence.sh is missing — no slice can be marked done; re-sync the template (sync-project.sh --update-stock).\n'
+    else
+      tmo=()
+      command -v timeout >/dev/null 2>&1 && tmo=(timeout 10)
+      line="$(${tmo[@]+"${tmo[@]}"} bash "$ROOT/scripts/evidence.sh" status --line </dev/null 2>/dev/null)"
+      rc=$?
+      if [ "$rc" != 0 ]; then
+        printf 'WARNING: evidence.sh status --line failed (rc %s) — run bash scripts/evidence.sh status to see why.\n' "$rc"
+      elif [ -n "$line" ]; then
+        printf '=== evidence (scripts/evidence.sh status --line) ===\n%s\n\n' "$line"
+      fi
+    fi
+
+    # Closed but not wrapped: the window between `evidence.sh close` and
+    # /wrap — and the lasting state when wrap is skipped.
+    if grep -q '^Closed:[[:space:]]' "$card"; then
+      printf 'NOTE: task "%s" is Closed but tasks/CURRENT still points at it — run /wrap to write the scoreboard row and clear CURRENT; until then every session pays this card.\n' "$slug"
     fi
   fi
 fi

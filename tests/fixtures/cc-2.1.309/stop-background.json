@@ -1,0 +1,23 @@
+{
+ "session_id": "00000000-0000-4000-8000-000000000001",
+ "transcript_path": "/home/user/.claude/projects/-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+ "cwd": "/work/proj",
+ "prompt_id": "11111111-1111-4111-8111-000000000002",
+ "permission_mode": "default",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "Stop",
+ "stop_hook_active": false,
+ "last_assistant_message": "Two of the three steps worked. The `done.txt` step failed.\n\n1. **Checker:** Claim S1 passed. `hello.txt` contains `hello`.\n2. **Executor:** `done.txt` was not created. The Write call was denied because write permission for that path hasn't been granted, and the executor made no changes.\n3. **Background sleep:** `sleep 60` is running in the background (ID `b00000005`), and I'm ending my turn without waiting for it.\n\nIf you grant write permission for `done.txt`, I can retry step 2.",
+ "background_tasks": [
+  {
+   "id": "b00000005",
+   "type": "shell",
+   "status": "running",
+   "description": "Sleep in background",
+   "command": "sleep 60"
+  }
+ ],
+ "session_crons": []
+}

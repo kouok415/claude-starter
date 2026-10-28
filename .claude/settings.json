@@ -4,7 +4,16 @@
     "allow": [
       "Bash(git status:*)",
       "Bash(git diff:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(bash scripts/evidence.sh run:*)",
+      "Bash(bash scripts/evidence.sh status:*)",
+      "Bash(bash scripts/evidence.sh show:*)",
+      "Bash(bash scripts/evidence.sh start:*)",
+      "Bash(bash scripts/evidence.sh done:*)",
+      "Bash(bash scripts/evidence.sh close:*)",
+      "Bash(bash scripts/evidence.sh lint:*)",
+      "Bash(bash scripts/task-pair.sh check:*)",
+      "Bash(bash scripts/task-pair.sh wait:*)"
     ],
     "ask": [
       "Bash(git push:*)",
@@ -13,7 +22,17 @@
       "Bash(sudo:*)",
       "Bash(rm -rf ~/*)",
       "Bash(rm -rf $HOME/*)",
-      "Bash(rm -rf ../*)"
+      "Bash(rm -rf ../*)",
+      "Bash(bash scripts/evidence.sh trust:*)",
+      "Bash(bash scripts/evidence.sh approve:*)",
+      "Bash(bash scripts/evidence.sh check:*)",
+      "Edit(./scripts/evidence.sh)",
+      "Edit(./scripts/precommit-gitleaks.sh)",
+      "Edit(./scripts/harness-report.sh)",
+      "Edit(./.claude/hooks/guard-patterns.sh)",
+      "Edit(./.claude/hooks/stop-gate.sh)",
+      "Edit(./.claude/hooks/spawn-log.sh)",
+      "Edit(./.claude/settings.json)"
     ],
     "deny": [
       "Read(./.env)",
@@ -28,7 +47,10 @@
       "Bash(git push -f:*)",
       "Edit(./.ai_context/tasks/**/gatelog)",
       "Edit(./.ai_context/tasks/**/spawnlog)",
-      "Edit(./.ai_context/tasks/**/ack-*)"
+      "Edit(./.ai_context/tasks/**/donelog)",
+      "Edit(./.claude/evidence/**)",
+      "Edit(./.claude/done-lanes.trust)",
+      "Edit(./.claude/gitleaks.toml)"
     ]
   },
   "hooks": {
@@ -38,25 +60,37 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/spawn-log.sh\" executor"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/spawn-log.sh\" executor start"
           }
         ]
       },
       {
-        "matcher": "verifier",
+        "matcher": "checker",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/spawn-log.sh\" verifier"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/spawn-log.sh\" checker start"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "executor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/spawn-log.sh\" executor stop"
           }
         ]
       },
       {
-        "matcher": "scout|planner|plan-critic|final-verifier|reframer",
+        "matcher": "checker",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/spawn-log.sh\" other"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/spawn-log.sh\" checker stop",
+            "timeout": 60
           }
         ]
       }
@@ -99,7 +133,7 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-gate.sh\"",
-            "timeout": 600
+            "timeout": 30
           }
         ]
       }

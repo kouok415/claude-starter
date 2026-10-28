@@ -27,8 +27,8 @@ file):
 
 4. **Active `/task`** — if `.ai_context/tasks/CURRENT` exists, STOP: read
    `reference.md` (this directory) **§Task close-out** and follow it — the
-   mandatory `--sweep`, scoreboard row, and finished/abandoned/unfinished
-   procedures live there. Never improvise them from memory — skipping the
+   scoreboard row and the finished/abandoned/unfinished procedures live
+   there. Never improvise them from memory — skipping the
    reference loses the run's evidence.
 
 5. **Harness friction** — did a starter mechanism (hooks, `/task`

@@ -5,14 +5,9 @@ don't pay for it. Two sections; read the one your situation names.
 
 ## Task close-out (`.ai_context/tasks/CURRENT` exists)
 
-- **Task finished:** FIRST run `bash .claude/hooks/stop-gate.sh --sweep` —
-  it re-runs the current final `[done]` verify even after a prior PASS,
-  requires every done checkpoint to have its human ack, and records
-  `UNARMED` for earlier gates that never fired. Any nonzero exit means
-  the task is NOT finished; a yielded Stop cannot authorize wrap. Then write the
-  task's journal entry with the scoreboard numbers — profile, size,
-  milestones total, gate_failures = **count of `FAIL` rows in
-  `tasks/<slug>/gatelog`** (never from memory; note any `INTEGRITY` or
+- **Task finished:** write the task's journal entry with the scoreboard
+  numbers — profile, size, milestones total, gate_failures = **count of
+  `FAIL` rows in `tasks/<slug>/gatelog`** (never from memory; note any `INTEGRITY` or
   `UNARMED` rows separately — INTEGRITY is a caught dark-gate state,
   UNARMED a gate that never fired), highest escalation rung used, human
   interventions, duration_min = minutes between the first and last commit
@@ -25,11 +20,10 @@ don't pay for it. Two sections; read the one your situation names.
   `abandoned`. After the row lands, run `bash scripts/harness-report.sh`
   and include its summary in your wrap reply. Then delete `CURRENT` (keep
   the task directory).
-- **Task abandoned** (dropped or superseded): run the `--sweep` here too
-  (it records `UNARMED` evidence for whatever was claimed done), then the
-  same journal entry + scoreboard row with `outcome=abandoned` — failed
-  and dropped runs must reach the dataset too, or the A/B data is
-  survivor-biased. Then delete `CURRENT` (keep the directory).
+- **Task abandoned** (dropped or superseded): the same journal entry +
+  scoreboard row with `outcome=abandoned` — failed and dropped runs must
+  reach the dataset too, or the A/B data is survivor-biased. Then delete
+  `CURRENT` (keep the directory).
 - **Task unfinished:** leave `CURRENT` in place; make sure `state.md`'s
   Now/Next points at the `[in_progress]` milestone so the next session
   resumes cold from the checkpoint. If `lessons.md` or `brief.md` exceeds

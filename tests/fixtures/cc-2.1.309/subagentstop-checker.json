@@ -1,0 +1,18 @@
+{
+ "session_id": "00000000-0000-4000-8000-000000000001",
+ "transcript_path": "/home/user/.claude/projects/-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+ "cwd": "/work/proj",
+ "prompt_id": "11111111-1111-4111-8111-000000000002",
+ "permission_mode": "default",
+ "agent_id": "a0000000000000003",
+ "agent_type": "checker",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "SubagentStop",
+ "stop_hook_active": false,
+ "agent_transcript_path": "/home/user/.claude/projects/-work-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000003.jsonl",
+ "last_assistant_message": "I read `hello.txt` in the project directory. It contains exactly `hello` (6 bytes, so the word plus a trailing newline).\n\nVERIFIED (L4) the file hello.txt contains the word hello — I ran `cat hello.txt` in the project directory and the output was `hello`.\nchecker-verdict: S1 pass",
+ "background_tasks": [],
+ "session_crons": []
+}

@@ -1,135 +1,96 @@
 #!/usr/bin/env bash
 #
-# Stop hook — gates that make "done" claims mechanical.
+# Stop hook — the setup gate and the v4 evidence gate.
 #
-# Gate 1 (setup, once per session): a newborn project — CLAUDE.md still
-# carrying the UNCONFIGURED sentinel (or legacy template placeholders) —
-# blocks the first turn-end and instructs the /setup protocol. A session_id
-# marker bounds this to ONE block per session; it re-arms next session and
-# falls silent forever once the sentinel is gone.
+# Setup gate (once per session): a newborn project — CLAUDE.md still carrying
+# the UNCONFIGURED sentinel (or legacy template placeholders) — blocks the
+# first turn-end and instructs the /setup protocol. A session_id marker bounds
+# this to ONE block per session; it re-arms next session and falls silent
+# forever once the sentinel is gone.
 #
-# Gate 2 (milestone verify, every stop while a /task is active): runs the
-# [in_progress] milestone's `- verify:` command; on failure exits 2 with the
-# output on stderr so the turn cannot end red (first two attempts — see
-# Counted yields below). Every real run is appended to the task's gatelog so
-# scoreboards read a file, not model memory.
+# Evidence gate (while tasks/CURRENT names a card that is not idle). The gate
+# runs no lane and hashes no tree: `scripts/evidence.sh status --porcelain` is
+# its only evidence source. In order:
+#   - no CURRENT, a v3 task (plan.md, no card.md) or a card idle 7+ days -> pass
+#   - a lane run or Codex send holding a live pid lock, or a background
+#     subagent in the Stop payload's background_tasks -> defer with a WAITING
+#     row: its end re-wakes the session (D3, ADR-037)
+#   - an [x] slice without a ✓ reference (noref), one whose references do not
+#     hold (badref), or a Closed: line that is not fresh for the current
+#     content (closed) -> block
+#   - otherwise one status line, printed only when it changed this session
+# Counted blocks: the same (session, card + content) blocks at most twice; the
+# third stop yields — exit 0, one STUCK row, a systemMessage to the human.
+# stop_hook_active is honoured by the setup gate only.
 #
-# Gate-2 integrity (v3.4, log-always since v3.10): any state in which the
-# milestone gate would otherwise be silently OFF — empty/corrupt CURRENT,
-# missing or heading-less plan.md, work mid-flight ([done]+[pending]) with
-# no [in_progress], an [in_progress] milestone with no verify command, task
-# work sitting on main/master — appends an INTEGRITY row on EVERY detection
-# and interrupts once per session (the shared marker gates the interrupt
-# only). A quiet gatelog therefore provably means "clean run", never "the
-# gate was dark". All-[pending] (intake pause) and all-[done] (completion
-# wrap-up) stay legitimate states; completion verifies the final milestone.
-#
-# Forbidden verify ops: verify commands execute unattended at every turn
-# end, so catastrophic operations (sudo, git push, rm -rf on an absolute
-# path) are never run — always blocked, always logged, no once-per-session
-# yield.
-#
-# PASS-cache: an expensive verify is NOT re-run when the tree provably has
-# not changed since its last PASS (fingerprint = HEAD + tracked diff +
-# untracked file CONTENT hashes; untracked files over 1 MB fall back to
-# size+mtime so bulk data stays cheap). Any change invalidates the cache,
-# so the gate never gets weaker — only cheaper. Non-git trees never cache.
-# Skips are silent (no gatelog row) so scoreboard counts stay meaningful.
-#
-# Zero-stop sweep (v3.6): a task completed inside ONE turn never arms the
-# gate — the Stop hook first fires when plan.md is already all-[done], a
-# legitimate no-op, so the gatelog stays empty and "0 gate failures" is
-# vacuous. At the all-[done] state (and via an explicit `--sweep` call from
-# /wrap before CURRENT is deleted) every [done] milestone lacking a PASS row
-# is accounted for. The LAST milestone is checked against the current tree
-# and verify command even with a historical PASS; --sweep always runs it,
-# while repeated Stop calls may use the fingerprint cache. Earlier ones get
-# an UNARMED row (their verifies are point-in-time gates, not permanent
-# invariants — later milestones may legitimately supersede them, so honest
-# vacuity is recorded instead of fake evidence). A quiet gatelog again
-# means "clean run": no FAIL, no INTEGRITY, and no unrecorded dark gates.
-#
-# Counted yields (v3.9): a red verify blocks at most TWICE per milestone per
-# session; the third consecutive red stop YIELDS — exit 0 with a STUCK gatelog
-# row and a {"systemMessage"} to the human. ONE row per (session, milestone)
-# however many stops follow (v3.10) — a PASS re-arms both counter and row. Rationale: the 2026-07-22 v_trader
-# incident — the gate caught a skipped-executor milestone, blocked once, then
-# the old unconditional stop_hook_active pass-through let the red turn end
-# silently; the human found it by hand half a day later. Three failed attempts
-# = the three-strikes rule: stop resampling, hand off. Model-fixable block
-# states (status corruption, forbidden verify) keep blocking every attempt —
-# the platform's own consecutive-block cap (default 8) is the backstop.
-# stop_hook_active is honored only by Gate 1 (setup nudge); the milestone
-# gate does its own counting instead.
-#
-# Liveness (v3.14): three additions from the 2026-08-15 backtest_system
-# double-stall (journal: starter-dev 2026-08-13 + 2026-08-15).
-#   - Every block prints ONE fixed marker line on stdout first: the CLI's
-#     missing-hook heuristic (observed through 2.1.229) reclassifies an
-#     exit-2 Stop hook as "script missing" when stdout is empty and stderr
-#     happens to match /no such file|can't open/i — which a just-armed
-#     milestone's verify output does. Non-empty stdout breaks the
-#     conjunction, so blocks are honored regardless of verify text.
-#   - In-flight deferral: a background executor that Claude Code reports as
-#     running (Stop payload `background_tasks`) WILL re-wake the session
-#     when it finishes — a likely-red verify at that stop buys nothing.
-#     Every stop while one runs defers with a WAITING row. (It first read
-#     spawnlog freshness; the deferral block says why that failed.)
-#   - Green boundary: a PASS with [pending] milestones left used to allow a
-#     silent park. Now: one continuation prompt per (session, milestone) —
-#     continue or explicitly pause; the second stop passes with a PAUSED
-#     row. Milestones marked `- checkpoint: human` never get the prompt:
-#     they pause until a human ack file exists, and advancing past an
-#     un-acked checkpoint is an integrity block.
+# Fail-open (D5): the gate's own errors never block. This file runs twice —
+# the outer pass supervises the inner one and passes a block on only when the
+# inner exits 2 with the marker as its first stdout line; a bash syntax error
+# also exits 2, and no trap sees it. Anything else becomes a GATE-ERROR row in
+# the task donelog and a pass.
+# The marker `claude-starter-gate: BLOCK` is printed on stdout before every
+# block: the CLI's missing-hook heuristic (through 2.1.229) dropped exit-2
+# Stop hooks whose stdout was empty and whose stderr matched /no such file|
+# can't open/i (journal 2026-08-13).
 
 set -uo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-.}"
 TASKS="$ROOT/.ai_context/tasks"
 
-# Shared destructive-op matchers — one source with bash-guard.sh (F8).
-# Fallback: pre-v3.10 literals plus the proven-bypassing -fr spelling, so
-# a partially-synced project degrades to the old guard, never to none.
+# --- 0. Supervisor (outer pass; sources nothing, so nothing below can break it)
+if [ "${CLAUDE_STARTER_GATE_INNER:-}" != 1 ]; then
+  payload="$(cat 2>/dev/null || true)"
+  errf="$(mktemp "${TMPDIR:-/tmp}/claude-gate-err.XXXXXX" 2>/dev/null)" || errf=/dev/null
+  tmo=()
+  command -v timeout >/dev/null 2>&1 && tmo=(timeout 25)
+  out="$(printf '%s' "$payload" | CLAUDE_STARTER_GATE_INNER=1 ${tmo[@]+"${tmo[@]}"} bash "${BASH_SOURCE[0]}" 2>"$errf")"
+  rc=$?
+  if [ "$rc" = 0 ]; then
+    [ -z "$out" ] || printf '%s\n' "$out"
+  elif [ "$rc" = 2 ] && [ "${out%%$'\n'*}" = 'claude-starter-gate: BLOCK' ]; then
+    printf '%s\n' "$out"
+    cat "$errf" >&2
+  else
+    why="$(tail -n 1 "$errf" 2>/dev/null | tr -cd 'A-Za-z0-9 ._:/=()-' | cut -c1-160)"
+    [ "$rc" = 124 ] && why="${why:-timed out after 25 s}"
+    why="rc=$rc${why:+: $why}"
+    s="$(tr -d '[:space:]' 2>/dev/null < "$TASKS/CURRENT")"
+    case "$s" in
+      ''|*/*|*..*) ;;
+      *) [ ! -d "$TASKS/$s" ] || printf '%s\tGATE-ERROR\t-\tgate\t-\t-\t%s\n' \
+           "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$why" >> "$TASKS/$s/donelog" 2>/dev/null ;;
+    esac
+    printf '{"systemMessage":"claude-starter gate: internal error (%s) - not blocking this stop; logged to the task donelog. Check by hand: bash scripts/evidence.sh status"}\n' "$why"
+    rc=0
+  fi
+  [ "$errf" = /dev/null ] || rm -f "$errf"
+  exit "$rc"
+fi
+
+# --- 1. Setup gate (inner pass from here on) -----------------------------------
+# Sentinel + task helpers, one source with session-start.sh and bash-guard.sh
+# (ADR-004); the fallback keeps the setup gate armed on a partial sync.
 _GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
 # shellcheck source=guard-patterns.sh
 [ -f "$_GP" ] && . "$_GP"
-if ! command -v guard_forbidden_verify >/dev/null 2>&1; then
-  guard_forbidden_verify() { # $1 = verify command -> rc 0 when forbidden
-    case " $1 " in
-      *' sudo '*|*'git push'*|*'rm -rf /'*|*'rm -fr /'*) return 0 ;;
-      *) return 1 ;;
-    esac
-  }
-fi
 [ -n "${GUARD_SETUP_SENTINEL:-}" ] || GUARD_SETUP_SENTINEL='claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit'
 
-MODE=stop
-[ "${1:-}" = "--sweep" ] && MODE=sweep
-
-if [ "$MODE" = stop ]; then
-  payload="$(cat 2>/dev/null || true)"
-  stop_active=0
-  if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
-    stop_active=1
-  fi
-  sid="$(printf '%s' "$payload" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-else
-  sid=""
-  stop_active=0
+payload="$(cat 2>/dev/null || true)"
+stop_active=0
+if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+  stop_active=1
 fi
+sid="$(printf '%s' "$payload" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 # Filename-safe session id for this hook's own marker/counter files.
 sid_s="$(printf '%s' "${sid:-nosession}" | tr -cd 'A-Za-z0-9._-')"
 [ -n "$sid_s" ] || sid_s=nosession
 
-# Fixed stdout marker, printed before EVERY exit-2 block (see Liveness
-# header note). Regression: L1-21 exercises each block path for it.
+# Fixed stdout marker, printed before EVERY exit-2 block (see the header).
+# Regression: L1-21 exercises each block path for it.
 mark_block() { printf 'claude-starter-gate: BLOCK\n'; }
 
-# --- Gate 1: first-session setup -------------------------------------------
-# The trigger pattern is the shared GUARD_SETUP_SENTINEL constant — one
-# source with session-start.sh (ADR-004): the two layers of one mechanism
-# cannot drift apart. L1-5 proves every token arms both layers.
-if [ "$MODE" = stop ] && [ "$stop_active" = 0 ] && [ -f "$ROOT/CLAUDE.md" ] && \
+if [ "$stop_active" = 0 ] && [ -f "$ROOT/CLAUDE.md" ] && \
    grep -qE "$GUARD_SETUP_SENTINEL" "$ROOT/CLAUDE.md"; then
   marker="${TMPDIR:-/tmp}/claude-setup-nudge-${sid_s}"
   if [ ! -f "$marker" ]; then
@@ -145,74 +106,124 @@ if [ "$MODE" = stop ] && [ "$stop_active" = 0 ] && [ -f "$ROOT/CLAUDE.md" ] && \
   fi
 fi
 
-# --- Gate 2: milestone verify -----------------------------------------------
-[ -f "$TASKS/CURRENT" ] || exit 0
-slug="$(tr -d '[:space:]' < "$TASKS/CURRENT")"
-
-# --- Gate-2 integrity: no silent disarm --------------------------------------
-# Log-always, interrupt-once (F9): EVERY detection appends an INTEGRITY row
-# — the session marker gates only the stderr interrupt — so a second dark
-# state in the same session still reaches the audit trail and a quiet
-# gatelog provably means "clean run", never "the gate went dark quietly".
-# The interrupt marker is per (session, class) since v3.14: an intake-pause
-# interrupt no longer consumes the one shot a later status-typo state needs
-# (2026-08-15: the 01:11 intake interrupt silenced the 01:59 gate-OFF one).
-
-integrity_stop() { # $1 = milestone id or '?', $2 = reason,
-                   # $3 = class (marker scope; default generic),
-                   # $4 = repeating systemMessage once the one-shot is spent
-                   #      ('' = silent; fixed ASCII, no quotes — JSON string)
-  if [ -n "$slug" ] && [ -d "$TASKS/$slug" ]; then
-    printf '%s\t%s\tINTEGRITY\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$1" "$2" \
-      >> "$TASKS/$slug/gatelog" 2>/dev/null || true
+# --- 2. The task: none, v3 or idle -> pass --------------------------------------
+if [ "${GUARD_PATTERNS_V4:-}" != 1 ]; then
+  echo "guard-patterns.sh missing or predates v4 (no task helpers)" >&2
+  exit 3
+fi
+slug="$(task_slug "$ROOT")" || exit 0
+slug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
+card="$TASKS/$slug/card.md"
+donelog="$TASKS/$slug/donelog"
+if [ ! -f "$card" ]; then
+  v3m="${TMPDIR:-/tmp}/claude-gate-v3note-${sid_s}"
+  if [ -f "$TASKS/$slug/plan.md" ] && [ ! -f "$v3m" ]; then
+    : > "$v3m" 2>/dev/null || true
+    printf '{"systemMessage":"claude-starter gate: tasks/CURRENT names %s, a v3 plan.md task without card.md - the v4 gate does not check it. Finish it on the v3-final template or rewrite it as a card."}\n' "$slug_j"
   fi
-  icls="$(printf '%s' "${3:-generic}" | tr -cd 'A-Za-z0-9._-')"
-  imarker="${TMPDIR:-/tmp}/claude-gate-integrity-${sid_s}-${icls}"
-  if [ "$MODE" = stop ] && [ -f "$imarker" ]; then
-    [ -n "${4:-}" ] && printf '{"systemMessage":"%s"}\n' "$4"
-    exit 0
-  fi
-  : > "$imarker" 2>/dev/null || true
-  mark_block
-  {
-    printf 'GATE INTEGRITY — the milestone gate cannot arm: %s\n' "$2"
-    if [ "$MODE" = sweep ]; then
-      printf 'Fix the task state before wrapping — explicit --sweep never yields on integrity failures.\n'
-    else
-      printf 'Fix the task state before finishing. If this is a legitimate mid-intake pause\n'
-      printf 'awaiting the human, say so and finish — this interrupts once per session.\n'
-    fi
-  } >&2
-  exit 2
+  exit 0
+fi
+task_idle "$ROOT" "$slug" && exit 0
+
+# --- 3. Still running -> defer (D3; ADR-037 widened) ----------------------------
+# A block now buys nothing: the run's end re-wakes the session. Only live pid
+# locks and background subagents count — never a background shell command.
+fl=""
+for lk in "$ROOT"/.claude/evidence/locks/*.lock; do
+  [ -f "$lk" ] || continue
+  lock_alive "$(head -n 1 "$lk" 2>/dev/null | cut -f1)" || continue
+  n="${lk##*/}"
+  n="${n%.lock}"
+  fl="${fl:+$fl,}${n%%-*}:${n#*-}"
+done
+if printf '%s' "$payload" | grep -Eq '"type"[[:space:]]*:[[:space:]]*"subagent"|"agent_type"[[:space:]]*:[[:space:]]*"(executor|checker)"'; then
+  at="$(printf '%s' "$payload" | grep -oE '"agent_type"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/' | tr '\n' ',')"
+  at="${at%,}"
+  fl="${fl:+$fl,}subagent:${at:-?}"
+fi
+if [ -n "$fl" ]; then
+  fl="$(printf '%s' "$fl" | tr -cd 'A-Za-z0-9:,._?-')"
+  donelog_row "$donelog" WAITING "$(card_current_slice "$card")" "$fl" - - deferred
+  printf '{"systemMessage":"claude-starter gate: %s - %s in flight; evidence check deferred until it reports."}\n' "$slug_j" "$fl"
+  exit 0
+fi
+
+# --- 4-5. What the card claims: [x] references and Closed: ----------------------
+F_SL=""
+F_CL=""
+F_MSG=""
+finding() { # $1 = class, $2 = slice or -, $3 = stderr line
+  case ",$F_CL," in *",$1,"*) ;; *) F_CL="${F_CL:+$F_CL,}$1" ;; esac
+  [ "$2" = - ] || F_SL="${F_SL:+$F_SL,}$2"
+  F_MSG="$F_MSG  $3"$'\n'
 }
 
-[ -n "$slug" ] || integrity_stop '?' 'tasks/CURRENT exists but is empty/corrupt — restore the slug or delete the file' current
+hash_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256
+  else cksum
+  fi
+}
 
-# Task work sits on a task/* branch, never the default one (non-git /
-# detached HEAD: skip). Any other branch is also a dark state: the gate
-# would run the milestone verify against the wrong tree, logging junk FAIL
-# rows — block with a clear reason instead.
-branch="$(git -C "$ROOT" branch --show-current 2>/dev/null || true)"
-case "$branch" in
-  main|master)
-    integrity_stop '?' "active task '$slug' but the session is on '$branch' — task work belongs on a task/ branch" branch
-    ;;
-  ''|task/*) ;;
-  *)
-    integrity_stop '?' "active task '$slug' but the session is on branch '$branch' — task work belongs on task/<slug>; a verify here would run against the wrong tree" branch
-    ;;
-esac
+# An [x] line cites records after its first ` ✓ `: <name>@<hex id> or codex@waived.
+while IFS= read -r ln; do
+  r=""
+  case "$ln" in *' ✓ '*) r="${ln#* ✓ }" ;; esac
+  printf '%s\n' "$r" | grep -Eq '(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]+@([0-9a-f]{7,64}|waived)' ||
+    finding noref "$(printf '%s' "$ln" | cut -d' ' -f3)" "$(printf '%s' "$ln" | cut -d' ' -f3) is marked [x] without an evidence reference."
+done < <(grep -E '^- \[x\] S[0-9]+([[:space:]]|$)' "$card")
 
-plan="$TASKS/$slug/plan.md"
-gatelog="$TASKS/$slug/gatelog"
-spawnlog="$TASKS/$slug/spawnlog"
-[ -f "$plan" ] || integrity_stop '?' "tasks/CURRENT names '$slug' but its plan.md is missing — mid-intake pause, renamed dir, or stale CURRENT" intake
-grep -q '^## ' "$plan" || integrity_stop '?' 'plan.md has no milestone headings — malformed plan, the gate has nothing to check' planform
+tree=-
+if [ -n "$F_CL" ]; then
+  # noref needs no ledger; the content half of the key is HEAD + the changed
+  # files (the task's own .ai_context and the ledger left out).
+  content="$( { git -C "$ROOT" rev-parse HEAD
+                git -C "$ROOT" status --porcelain -- . ':(exclude).ai_context' ':(exclude).claude/evidence'
+              } 2>/dev/null | hash_stdin)"
+else
+  if [ ! -f "$ROOT/scripts/evidence.sh" ]; then
+    echo "scripts/evidence.sh missing" >&2
+    exit 3
+  fi
+  tmo=()
+  command -v timeout >/dev/null 2>&1 && tmo=(timeout "${CLAUDE_STARTER_GATE_STATUS_TIMEOUT:-20}")
+  st="$(${tmo[@]+"${tmo[@]}"} bash "$ROOT/scripts/evidence.sh" status --porcelain </dev/null 2>/dev/null)"
+  rc=$?
+  if [ "$rc" != 0 ]; then
+    echo "evidence.sh status --porcelain failed (rc $rc)" >&2
+    exit 3
+  fi
+  tree="$(printf '%s\n' "$st" | awk -F'\t' '$1 == "TREE" {print $2; exit}')"
+  closed="$(printf '%s\n' "$st" | awk -F'\t' '$1 == "CLOSED" {print $2 "\t" $3; exit}')"
+  line="$(printf '%s\n' "$st" | awk -F'\t' '$1 == "LINE" {print $2; exit}')"
+  if [ -z "$tree" ] || [ -z "$closed" ] || [ -z "$line" ]; then
+    echo "evidence.sh status --porcelain: unparseable output" >&2
+    exit 3
+  fi
+  while IFS=$'\t' read -r k s v d; do
+    [ "$k" = SLICE ] && [ "$v" = bad ] && finding badref "$s" "$s cites evidence that does not hold: $d"
+  done <<< "$st"
+  case "$closed" in
+    stale*) finding closed - "the card says Closed: but the evidence is not fresh for the current content: ${closed#*$'\t'}" ;;
+  esac
+  content="$tree"
+fi
 
-# --- Counted red blocks ------------------------------------------------------
-# Consecutive red *blocks* per (session, milestone), kept in a tmp counter.
-# Session-scoped on purpose: gatelog FAIL rows survive across sessions, so
-# counting those would carry yesterday's blocks into today's first attempt.
+# --- 6. Nothing wrong -> the status line, once per change per session -----------
+if [ -z "$F_CL" ]; then
+  line="$(printf '%s' "$line" | tr -d '"\\' | tr -d '\000-\037')"
+  lm="${TMPDIR:-/tmp}/claude-gate-line-${sid_s}-${slug_j}"
+  if [ "$(cat "$lm" 2>/dev/null)" != "$line" ]; then
+    printf '%s' "$line" > "$lm" 2>/dev/null || true
+    printf '{"systemMessage":"claude-starter gate: %s"}\n' "$line"
+  fi
+  exit 0
+fi
+
+# --- 7. Block, counted per (session, card + content) ----------------------------
+# Session-scoped on purpose: donelog BLOCK rows survive across sessions, so
+# counting those would carry yesterday's blocks into today's first stop. The
+# key holds the content, so a new card or new content starts a fresh count.
 red_file() { # $1 = key -> prints the counter path
   printf '%s/claude-gate-red-%s-%s' "${TMPDIR:-/tmp}" "$sid_s" \
     "$(printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '_')"
@@ -227,413 +238,39 @@ red_count() { # $1 = key -> increments and prints the new count
   printf '%s' "$n"
 }
 
-stuck_file() { # $1 = key -> prints the once-per-(session,milestone) marker path
+stuck_file() { # $1 = key -> prints the once-per-(session, key) STUCK marker path
   printf '%s/claude-gate-stuck-%s-%s' "${TMPDIR:-/tmp}" "$sid_s" \
     "$(printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '_')"
 }
 
-red_reset() { # $1 = key — a PASS also re-arms the STUCK row for a fresh streak
-  rm -f "$(red_file "$1")" "$(stuck_file "$1")" 2>/dev/null || true
-}
-
-# --- STATUS.md view refresh (v3.12) ------------------------------------------
-# The human-facing live view. Best-effort by design: a missing or failing
-# renderer must never affect the gate verdict. STATUS.md and .last-verify
-# are gitignored, so refreshing them cannot evict the PASS-cache.
-status_refresh() {
-  [ -f "$ROOT/scripts/task-status.sh" ] || return 0
-  bash "$ROOT/scripts/task-status.sh" "$TASKS/$slug" >/dev/null 2>&1 || true
-}
-
-arch_nag() { # PASS-time, once per (session, slug): green runs deserve a live view
-  [ "$MODE" = stop ] || return 0
-  grep -qF 'unwritten — orchestrator' "$TASKS/$slug/STATUS.md" 2>/dev/null || return 0
-  nm="${TMPDIR:-/tmp}/claude-status-nag-${sid_s}-$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
-  [ -f "$nm" ] && return 0
-  : > "$nm" 2>/dev/null || true
-  printf '{"systemMessage":"claude-starter: a milestone PASSed but STATUS.md §Architecture is still the stub — the human-facing view is starving. Describe what is being built (problem language) and keep it current."}\n'
-}
-
-# NOTE: $3 lands inside a JSON string — pass fixed ASCII without quotes only.
-# One STUCK row per (session, milestone) — the yield is one handoff event,
-# however many stops follow it (F10); the systemMessage keeps repeating so
-# the human signal survives, but the scoreboard count stays truthful.
-yield_stuck() { # $1 = milestone id, $2 = consecutive count, $3 = extra note ('' ok)
-  smk="$(stuck_file "${slug}-$1")"
+key="${slug_j}_$( { hash_stdin < "$card" | cut -c1-64; printf '%s\n' "$content"; } | hash_stdin | cut -c1-16)"
+rn="$(red_count "$key")"
+# Three stops on the same card and content: the run is the human's now. ONE
+# STUCK row per (session, key) — the yield is one handoff however many stops
+# follow (F10); the systemMessage repeats so the human signal survives.
+if [ "$rn" -ge 3 ]; then
+  smk="$(stuck_file "$key")"
   if [ ! -f "$smk" ]; then
     : > "$smk" 2>/dev/null || true
-    printf '%s\t%s\tSTUCK\tyielded to the human after %s consecutive red blocks%s\n' \
-      "$(date '+%Y-%m-%dT%H:%M:%S')" "$1" "$2" "${3:+ — $3}" \
-      >> "$gatelog" 2>/dev/null || true
+    donelog_row "$donelog" STUCK "${F_SL:--}" "$F_CL" "${tree:0:12}" - "yielded after $rn blocks on the same card and content"
   fi
-  slug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
-  ms_j="$(printf '%s' "$1" | tr -cd 'A-Za-z0-9._-')"
-  printf '{"systemMessage":"claude-starter gate: task %s / %s is RED — blocked %s stops in a row without a green verify, yielding now.%s A human needs to look: .ai_context/tasks/%s/gatelog"}\n' \
-    "$slug_j" "$ms_j" "$2" "${3:+ (${3})}" "$slug_j"
-  exit 0
-}
-
-gatecache="$TASKS/$slug/.gate-cache"
-
-# --- PASS-cache -------------------------------------------------------------
-# The cache file itself is gitignored (.ai_context/tasks/*/.gate-cache), so
-# it never feeds back into its own fingerprint.
-hash_stdin() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum
-  elif command -v shasum >/dev/null 2>&1; then shasum -a 256
-  else cksum
-  fi
-}
-
-fingerprint() {
-  git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1 || return 1
-  {
-    git -C "$ROOT" rev-parse HEAD
-    git -C "$ROOT" status --porcelain
-    git -C "$ROOT" diff HEAD
-    # Untracked files: content hash — a same-size edit must invalidate.
-    # Files over 1 MB fall back to size+mtime so bulk data stays cheap.
-    git -C "$ROOT" ls-files -o --exclude-standard | while IFS= read -r uf; do
-      p="$ROOT/$uf"
-      sz="$(wc -c < "$p" 2>/dev/null | tr -d ' ' || true)"
-      if [ -n "$sz" ] && [ "$sz" -le 1048576 ]; then
-        printf '%s %s\n' "$uf" "$(hash_stdin < "$p" | awk '{print $1}')"
-      else
-        printf '%s %s %s\n' "$uf" "${sz:-?}" \
-          "$(stat -c %Y "$p" 2>/dev/null || stat -f %m "$p" 2>/dev/null || echo '?')"
-      fi
-    done
-  } 2>/dev/null | hash_stdin | awk '{print $1}'
-}
-
-# --- Zero-stop sweep ---------------------------------------------------------
-# Shared by the all-[done] Stop state and the explicit --sweep mode (called
-# by /wrap before CURRENT is deleted, incl. on abandoned tasks).
-TAB="$(printf '\t')"
-
-verify_of() { # $1 = milestone id -> prints its `- verify:` command (may be empty)
-  awk -v want="## $1:" '
-    index($0, want) == 1 { take = 1; next }
-    /^## / { take = 0 }
-    take && /^- verify:/ {
-      sub(/^- verify:[[:space:]]*/, "")
-      gsub(/^`|`$/, "")
-      print
-      exit
-    }
-  ' "$plan"
-}
-
-run_cmd() { # $1 = command; bounded so a hung verify cannot wedge the session
-  cd "$ROOT" || return 1
-  if command -v timeout >/dev/null 2>&1; then
-    timeout 540 bash -c "$1"
-  else
-    bash -c "$1"
-  fi
-}
-
-warn_unbounded() { # F11: without GNU timeout the 540 s bound is silently OFF
-  command -v timeout >/dev/null 2>&1 && return 0
-  printf 'stop-gate WARNING: `timeout` not found — verify commands run UNBOUNDED by this hook (only the platform hook budget caps them). Install coreutils to restore the 540 s cap.\n' >&2
-}
-
-sweep_done_milestones() { # $1 = 1 when the plan is all-[done] (last verify runs)
-  run_last="$1"
-  last_id="$(grep '^## .*\[done\]' "$plan" | tail -1 | sed -n 's/^## \([^:]*\):.*/\1/p')"
-  grep '^## .*\[done\]' "$plan" | sed -n 's/^## \([^:]*\):.*/\1/p' | while IFS= read -r id; do
-    [ -n "$id" ] || continue
-    vcmd="$(verify_of "$id")"
-    vlog="$(printf '%s' "$vcmd" | tr '\t' ' ')"
-    if [ "$id" != "$last_id" ] || [ "$run_last" != 1 ]; then
-      # Historical milestones are point-in-time gates; do not re-run them.
-      grep -qF "${TAB}${id}${TAB}PASS" "$gatelog" 2>/dev/null && continue
-      grep -qF "${TAB}${id}${TAB}UNARMED" "$gatelog" 2>/dev/null && continue
-      printf '%s\t%s\tUNARMED\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" \
-        "${vlog:-(no verify command)}" >> "$gatelog" 2>/dev/null || true
-      continue
-    fi
-    # Completion must prove the CURRENT final command/tree, not a past PASS.
-    # Explicit /wrap --sweep always re-runs; repeated Stop calls may cache.
-    if [ -z "$vcmd" ] || guard_forbidden_verify "$vcmd"; then
-      reason="forbidden verify, not executed: $vlog"
-      [ -n "$vcmd" ] || reason='final milestone has no verify command'
-      rm -f "$gatecache" 2>/dev/null || true
-      printf '%s\t%s\tINTEGRITY\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$reason" >> "$gatelog" 2>/dev/null || true
-      printf 'GATE REFUSED — %s: %s. Fix the final verify before wrapping.\n' "$id" "$reason" >&2
-      echo BLOCK
-      continue
-    fi
-    vhash="$(printf '%s' "$vcmd" | hash_stdin | awk '{print $1}')"
-    fp="$(fingerprint || true)"
-    if [ "$MODE" = stop ] && [ -n "$fp" ] && \
-       [ "$(cat "$gatecache" 2>/dev/null)" = "sweep|$id|$vhash|$fp" ]; then
-      continue
-    fi
-    warn_unbounded
-    if out="$(run_cmd "$vcmd" 2>&1)"; then
-      printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
-      fp="$(fingerprint || true)"
-      [ -z "$fp" ] || printf 'sweep|%s|%s|%s' "$id" "$vhash" "$fp" > "$gatecache" 2>/dev/null || true
-    else
-      rm -f "$gatecache" 2>/dev/null || true
-      printf '%s\t%s\tFAIL\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$id" "$vlog" >> "$gatelog" 2>/dev/null || true
-      {
-        printf 'GATE SWEEP FAILED — %s is marked [done] but its verify fails NOW.\n' "$id"
-        printf '$ %s\n' "$vcmd"
-        printf '%s\n' "$out" | tail -n 50
-        printf 'The task cannot wrap red: fix it, or mark %s back to [in_progress] and re-enter the loop.\n' "$id"
-      } >&2
-      echo BLOCK
-    fi
-  done | grep -q BLOCK && return 1
-  return 0
-}
-
-# --- Checkpoint tripwire (v3.14) ---------------------------------------------
-# A milestone carrying `- checkpoint: human` in plan.md is a human gate: its
-# PASS pauses the run until `.ai_context/tasks/<slug>/ack-<id>` exists (the
-# ack path is Edit-denied and bash-guard-confirmed — same trust class as
-# gatelog: a tripwire against drift, not a sandbox). Work that advanced past
-# an un-acked checkpoint is a dark state: block once, then keep the human
-# signal repeating.
-ms_checkpoint() { # $1 = milestone id -> rc 0 when it is a human checkpoint
-  awk -v want="## $1:" '
-    index($0, want) == 1 { take = 1; next }
-    /^## / { take = 0 }
-    take && /^- checkpoint:[[:space:]]*human/ { f = 1 }
-    END { exit !f }
-  ' "$plan"
-}
-
-ms="$(grep -m1 '^## .*\[in_progress\]' "$plan" | sed -n 's/^## \([^:]*\):.*/\1/p')"
-
-ck_unacked="$(awk '
-  /^## / { take = 0; if ($0 ~ /\[done\]/) { id = $0; sub(/^## /, "", id); sub(/:.*/, "", id); take = 1 }; next }
-  take && /^- checkpoint:[[:space:]]*human/ { print id }
-' "$plan" | while IFS= read -r cid; do
-  [ -f "$TASKS/$slug/ack-$cid" ] || { printf '%s' "$cid"; break; }
-done)"
-if [ -n "$ck_unacked" ]; then
-  ck_j="$(printf '%s' "$ck_unacked" | tr -cd 'A-Za-z0-9._-')"
-  slugck_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
-  integrity_stop "${ms:-$ck_unacked}" "checkpoint $ck_unacked is [done] without human sign-off — the task cannot advance or wrap. Human: \`touch .ai_context/tasks/$slug/ack-$ck_unacked\` to sign off. Model: restore $ck_unacked to [in_progress] and later milestones to [pending], restate what needs sign-off, and pause" \
-    checkpoint \
-    "claude-starter gate: checkpoint ${ck_j} awaits human sign-off (touch .ai_context/tasks/${slugck_j}/ack-${ck_j}) - the run is held"
-fi
-
-if [ "$MODE" = sweep ]; then
-  n_done="$(grep -c '^## .*\[done\]' "$plan" || true)"
-  [ "${n_done:-0}" -gt 0 ] || exit 0
-  all_done=0
-  if ! grep -q '^## .*\[in_progress\]' "$plan" && ! grep -q '^## .*\[pending\]' "$plan"; then
-    all_done=1
-  fi
-  # Explicit /wrap sweep: strict, never yields — /wrap must not wrap red.
-  sweep_done_milestones "$all_done" || { mark_block; exit 2; }
-  status_refresh
+  printf '{"systemMessage":"claude-starter gate: task %s is BLOCKED - %s stops in a row on the same card and content (%s), yielding now. A human needs to look: .ai_context/tasks/%s/donelog"}\n' \
+    "$slug_j" "$rn" "$F_CL" "$slug_j"
   exit 0
 fi
-
-# Exactly one [in_progress] milestone is the contract — corrupted statuses
-# would poison the compaction anchor, so block until fixed. Anchor to
-# heading lines: plan.md's format comment also contains the literal string
-# "[in_progress]" and must not be counted.
-n_inprog="$(grep -c '^## .*\[in_progress\]' "$plan" || true)"
-if [ "${n_inprog:-0}" -gt 1 ]; then
-  mark_block
-  printf 'GATE FAILED — %s milestones are marked [in_progress] in plan.md; exactly one is allowed. Fix the statuses, then finish.\n' "$n_inprog" >&2
-  exit 2
-fi
-if [ "${n_inprog:-0}" -eq 0 ]; then
-  # All-[pending] (intake pause) and all-[done] (completion wrap-up) are
-  # legitimate. [done]+[pending] with no [in_progress] is a status typo —
-  # exactly the state in which the gate would silently stay OFF.
-  if grep -q '^## .*\[done\]' "$plan" && grep -q '^## .*\[pending\]' "$plan"; then
-    integrity_stop '?' 'milestones are [done] and [pending] but none [in_progress] — a status typo has the gate OFF; mark the next milestone [in_progress]' statusoff \
-      'claude-starter gate: milestones are done+pending with none in_progress - the gate is OFF; mark the next milestone in_progress'
-  fi
-  # All-[done] wrap-up: account for gates a zero-stop run never armed —
-  # verify the final milestone now, record UNARMED for earlier rowless ones.
-  # Red sweeps are counted like any red verify: two blocks, third yields.
-  if grep -q '^## .*\[done\]' "$plan"; then
-    if ! sweep_done_milestones 1; then
-      swn="$(red_count "${slug}-sweep")"
-      [ "$swn" -ge 3 ] && yield_stuck sweep "$swn" 'final-milestone verify red at wrap-up'
-      mark_block
-      exit 2
-    fi
-    red_reset "${slug}-sweep"
-    status_refresh
-  fi
-  exit 0
-fi
-
-# Extract the `- verify:` command of the [in_progress] milestone.
-# plan.md format (kept in sync with .claude/skills/task/SKILL.md):
-#   ## M3: <title> [in_progress]
-#   - verify: `<command>`
-cmd="$(awk '
-  /^## / { inprog = ($0 ~ /\[in_progress\]/); next }
-  inprog && /^- verify:/ {
-    sub(/^- verify:[[:space:]]*/, "")
-    gsub(/^`|`$/, "")
-    print
-    exit
-  }
-' "$plan")"
-[ -n "$cmd" ] || integrity_stop "${ms:-?}" 'the [in_progress] milestone has no `- verify:` command — the gate cannot arm on it' noverify
-
-# Gatelog rows carry the exact command that was enforced (tabs sanitized) —
-# a mid-run weakening of the verify is visible in the audit trail.
-cmd_log="$(printf '%s' "$cmd" | tr '\t' ' ')"
-
-# Catastrophic operations never run unattended — not even once. Matchers
-# are shared with bash-guard.sh (guard-patterns.sh) and spelling-tolerant:
-# -fr / split flags / multi-space variants are refused like the canonical
-# spelling (F8).
-if guard_forbidden_verify "$cmd"; then
-  printf '%s\t%s\tINTEGRITY\tforbidden verify, not executed: %s\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
-  mark_block
-  {
-    printf 'GATE REFUSED — the verify command contains a forbidden operation and was NOT run:\n'
-    printf '$ %s\n' "$cmd"
-    printf 'Verify commands execute unattended at every turn end: no sudo, no git push,\n'
-    printf 'no rm -rf on absolute paths. Rewrite this milestone verify in plan.md, then finish.\n'
-  } >&2
-  exit 2
-fi
-
-# --- In-flight executor deferral (v3.14; reads the Stop payload) -------------
-# A red block's only value is stopping a turn nothing would ever re-wake.
-# Claude Code lists its running/pending background tasks in the Stop payload
-# (`background_tasks`; subagents carry `agent_type`). A background executor
-# there WILL re-wake the session when it finishes, so running the (likely
-# red) verify now burns runtime and a red-counter strike. Every stop while
-# one runs defers. No executor listed — or no field at all (older CC, format
-# drift) — runs the verify: the failure direction is a visible red block,
-# never a dark stop. Spawnlog freshness (the first version) is not in-flight
-# evidence: every re-wake of a background executor logs another
-# SubagentStart row, so an executor that had already reported still left a
-# fresh row, the gate deferred, and nothing was left to wake the session
-# (codex_desktop 2026-10-19 and 10-21).
-if printf '%s' "${payload:-}" | grep -q '"agent_type"[[:space:]]*:[[:space:]]*"executor"'; then
-  printf '%s\t%s\tWAITING\texecutor in flight (background_tasks)\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" >> "$gatelog" 2>/dev/null || true
-  slug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
-  ms_j="$(printf '%s' "${ms:-?}" | tr -cd 'A-Za-z0-9._-')"
-  printf '{"systemMessage":"claude-starter gate: %s / %s - executor in flight; verify deferred until it reports."}\n' \
-    "$slug_j" "$ms_j"
-  status_refresh
-  exit 0
-fi
-
-# --- Green-boundary continuation (v3.14) -------------------------------------
-# A PASS used to allow a silent park even with [pending] milestones left —
-# the 2026-08-15 backtest_system 53-minute stall. The gate can never force
-# continuation (it is exit-2 text, and the second stop always passes); it
-# makes the boundary EXPLICIT instead: one continuation prompt per
-# (session, milestone) — symmetric by design, pausing is a first-class
-# answer, and an unanswered human question must be restated, never crossed.
-# The stop after the prompt records a PAUSED row, so a parked run is
-# legible ("waiting on you") instead of indistinguishable from a stall.
-# Checkpoint milestones skip the prompt entirely: they hold for the ack.
-green_boundary() { # $ms verified green (fresh PASS or cache hit) in stop mode
-  [ "$MODE" = stop ] || return 0
-  gslug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
-  gms_j="$(printf '%s' "${ms:-?}" | tr -cd 'A-Za-z0-9._-')"
-  if ms_checkpoint "${ms:-?}" && [ ! -f "$TASKS/$slug/ack-${ms:-?}" ]; then
-    if ! grep -qF "${TAB}${ms:-?}${TAB}PAUSED${TAB}checkpoint" "$gatelog" 2>/dev/null; then
-      printf '%s\t%s\tPAUSED\tcheckpoint — awaiting human ack (ack-%s)\n' \
-        "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "${ms:-?}" >> "$gatelog" 2>/dev/null || true
-    fi
-    printf '{"systemMessage":"claude-starter gate: %s / %s PASSED and is a human checkpoint - run held; sign off with: touch .ai_context/tasks/%s/ack-%s"}\n' \
-      "$gslug_j" "$gms_j" "$gslug_j" "$gms_j"
-    return 0
-  fi
-  grep -q '^## .*\[pending\]' "$plan" || return 0
-  gmk="${TMPDIR:-/tmp}/claude-gate-green-${sid_s}-$(printf '%s' "$slug-${ms:-?}" | tr -cs 'A-Za-z0-9._-' '_')"
-  if [ ! -f "$gmk" ]; then
-    : > "$gmk" 2>/dev/null || true
-    mark_block
-    {
-      printf 'MILESTONE COMPLETE — %s verify PASS is recorded, and [pending] milestones remain.\n' "${ms:-?}"
-      printf 'State your intent explicitly, then act on it:\n'
-      printf '  (a) continue — flip %s to [done], mark the next milestone [in_progress], spawn its executor;\n' "${ms:-?}"
-      printf '  (b) pause — waiting on the human, or stopping here: say so plainly and finish; the next stop passes quietly.\n'
-      printf 'If your last message asked the human a question, restate it and choose (b) — never proceed past an unanswered question.\n'
-      printf '(one-time prompt for this milestone; not an error)\n'
-    } >&2
-    exit 2
-  fi
-  if ! grep -qF "${TAB}${ms:-?}${TAB}PAUSED" "$gatelog" 2>/dev/null; then
-    printf '%s\t%s\tPAUSED\tgreen boundary — paused after the one-time continuation prompt\n' \
-      "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" >> "$gatelog" 2>/dev/null || true
-  fi
-  printf '{"systemMessage":"claude-starter gate: %s / %s is green; the run is paused at a milestone boundary (pause chosen or waiting on you)."}\n' \
-    "$gslug_j" "$gms_j"
-  return 0
-}
-
-fp="$(fingerprint || true)"
-if [ -n "$fp" ] && [ -f "$gatecache" ] && \
-   [ "$(cat "$gatecache" 2>/dev/null)" = "$ms|$fp" ]; then
-  green_boundary
-  arch_nag
-  exit 0
-fi
-
-warn_unbounded
-if out="$(run_cmd "$cmd" 2>&1)"; then
-  printf '%s\t%s\tPASS\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
-  red_reset "${slug}-${ms:-?}"
-  printf '%s\n' "$out" | tail -n 12 > "$TASKS/$slug/.last-verify" 2>/dev/null || true
-  status_refresh
-  # Fingerprint AFTER the run: verify itself may write artifacts; caching the
-  # post-run state lets the next no-op stop hit the cache.
-  fp="$(fingerprint || true)"
-  if [ -n "$fp" ]; then
-    printf '%s|%s' "$ms" "$fp" > "$gatecache" 2>/dev/null || true
-  fi
-  # Boundary first, nag after: an exit-2 stop discards stdout, so nagging
-  # before the continuation prompt would burn the once-per-session marker
-  # on a message nobody sees. The nag lands on the first PASSING green stop.
-  green_boundary
-  arch_nag
-  exit 0
-fi
-
-rm -f "$gatecache" 2>/dev/null || true
-printf '%s\t%s\tFAIL\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${ms:-?}" "$cmd_log" >> "$gatelog" 2>/dev/null || true
-printf '%s\n' "$out" | tail -n 12 > "$TASKS/$slug/.last-verify" 2>/dev/null || true
-status_refresh
-
-# No-spawn diagnosis: on M/L, a red milestone with NO executor spawn row means
-# §3.2 was skipped — the right move is rung 1, not the escalation ladder.
-# Claims are made only when spawnlog is non-empty (capability handshake: M/L
-# intake spawns scout/planner first, so any row proves the event fires here;
-# on Claude Code versions without SubagentStart the file stays absent and
-# this stays silent). Explicit size M/L only — S runs in-context by design.
-spawn_hint=''
-psize="$(sed -n 's/.*;[[:space:]]*size:[[:space:]]*\([SML]\).*/\1/p' "$plan" | head -n1)"
-if { [ "$psize" = M ] || [ "$psize" = L ]; } && [ -s "$spawnlog" ] && \
-   ! awk -F'\t' -v m="${ms:-?}" '$2==m && $3=="executor" {f=1} END {exit !f}' "$spawnlog"; then
-  spawn_hint='no executor spawn recorded for this milestone'
-fi
-
-rn="$(red_count "${slug}-${ms:-?}")"
-[ "$rn" -ge 3 ] && yield_stuck "${ms:-?}" "$rn" "$spawn_hint"
+donelog_row "$donelog" BLOCK "${F_SL:--}" "$F_CL" "${tree:0:12}" - "block $rn/2"
 mark_block
 {
-  printf 'GATE FAILED (red block %s of 2 — one more red stop hands off to the human) — the [in_progress] milestone did not pass verify; this turn cannot end.\n' "$rn"
-  printf '$ %s\n' "$cmd"
-  printf '%s\n' "$out" | tail -n 50
-  if [ -n "$spawn_hint" ]; then
-    printf 'NOTE — spawnlog has no executor row for %s: it looks like §3.2 (spawn the executor) was skipped.\n' "${ms:-?}"
-    printf 'Spawn the executor for this milestone (rung 1) before escalating; do not enter the ladder.\n'
-  else
-    printf 'Fix and re-verify, or record the failure in lessons.md and escalate per the /task ladder.\n'
-  fi
+  printf 'GATE BLOCKED (block %s of 2 — a third stop on the same card and content hands off to the human) — task %s:\n' "$rn" "$slug_j"
+  printf '%s' "$F_MSG"
+  case ",$F_CL," in
+    *,noref,*|*,badref,*)
+      printf 'Only `bash scripts/evidence.sh done <slice>` marks a slice [x]: set the line back to [~], get its lanes, checker (and Codex, when required) to passing records, then run it — or say plainly that you are pausing with the slice unverified.\n' ;;
+  esac
+  case ",$F_CL," in
+    *,closed,*)
+      printf 'Re-run the stale lanes with `bash scripts/evidence.sh run <lane>` (long lanes in the background), get the final review the detail names (checker final, or Codex final when pairing is on), then `bash scripts/evidence.sh close` — or delete the Closed: line and say the task is not closed.\n' ;;
+  esac
+  printf 'Full picture: bash scripts/evidence.sh status\n'
 } >&2
 exit 2

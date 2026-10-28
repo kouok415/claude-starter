@@ -5,9 +5,11 @@
 #   L1: mechanism level  — hooks and sync logic against fixtures
 #   L2: integration level — mechanisms inside a really-spawned project
 #
-# No model calls; safe for CI. Fixtures are spec-faithful (plan.md carries
-# the format comment header — the v3.2 P0 escaped precisely because a
-# fixture omitted it). Exit 0 = all green; SKIPs don't fail the run.
+# No model calls; safe for CI. Fixtures follow the v4 spec: card.md carries
+# its `<!-- card v4 … -->` header, lane records come only from evidence.sh
+# trust/run/check, and only the tampering, foreign-record and gate-error
+# assertions edit the ledger, card or donelog by hand or swap evidence.sh.
+# Exit 0 = all green; SKIPs don't fail the run.
 
 set -uo pipefail
 
@@ -25,7 +27,7 @@ skp()  { SKIP=$((SKIP+1)); echo "SKIP: $*"; }
 ck()   { local want="$1" got="$2"; shift 2; if [ "$want" = "$got" ]; then ok "$*"; else no "$* (want rc=$want got rc=$got)"; fi; }
 
 WORK="$(mktemp -d)"
-cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-integrity-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-stuck-tsuite-* "${TMPDIR:-/tmp}"/claude-status-nag-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-green-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
+cleanup() { rm -rf "$WORK" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-stuck-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-line-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-v3note-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
 trap cleanup EXIT
 
 # --- v4 evidence fixtures ------------------------------------------------------
@@ -86,34 +88,56 @@ ready() { # $1 = dir: smoke trusted, card S1 [~] S2 [ ], approved, S1 started, r
   ev "$1" approve >/dev/null; ev "$1" start S1 >/dev/null; ev "$1" run smoke >/dev/null
   rep S1 pass | ev "$1" check S1 --agent fx --source human >/dev/null; ev "$1" "done" S1 >/dev/null
 }
-mkfakes() { # a fake gitleaks (FAKE-LEAK-0123 fires rule fake-leak) and a PATH without gitleaks
+mkfakes() { # a fake gitleaks (FAKE-LEAK-0123 fires rule fake-leak), a PATH without gitleaks, evidence.sh stubs for the gate's fail-open paths
   mkdir -p "$WORK/fakebin" "$WORK/nogl-bin"
   printf '#!/usr/bin/env bash\n[ "$1" = help ] && exit 0\nf="$2"; [ "$1" = detect ] && f="$4"\ngrep -q FAKE-LEAK-0123 "$f" && { echo "RuleID:      fake-leak"; exit 1; }\nexit 0\n' > "$WORK/fakebin/gitleaks"
   chmod +x "$WORK/fakebin/gitleaks"
   for b in bash sh grep sed awk date tr cat rm mv mkdir wc head tail dirname env python3 sha256sum cut sort find stat touch ls kill ps timeout git mktemp chmod cmp cp sleep; do
     p="$(command -v "$b" 2>/dev/null)" && [ -n "$p" ] && ln -sf "$p" "$WORK/nogl-bin/$b" 2>/dev/null
   done
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$WORK/stub-ev-fail.sh"
+  printf '#!/usr/bin/env bash\necho hello\n' > "$WORK/stub-ev-garbage.sh"
+  printf '#!/usr/bin/env bash\nsleep 5\n' > "$WORK/stub-ev-slow.sh"
+  printf '#!/usr/bin/env bash\n[ "$1 $2" = "status --line" ] && exit 1\nexit 0\n' > "$WORK/stub-ev-line-fail.sh"
 }
 
-# Spec-faithful plan fixture: format header INCLUDED, one in_progress.
-write_plan() { # $1 = path, $2 = M2 verify command
-  cat > "$1" <<EOF
-# Plan: fixture
-<!-- profile: opus-tier | fable-tier | mixed ; size: S | M | L -->
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: groundwork [done]
-- verify: \`false\`
-- risk: low
-
-## M2: current [in_progress]
-- verify: \`$2\`
-- risk: low
-
-## M3: future [pending]
-- verify: \`false\`
-- risk: high
-EOF
+# --- v4 hook fixtures: the gate, spawn-log and recorded CC 2.1.309 payloads ----
+SL="$REPO/.claude/hooks/spawn-log.sh"
+FX="$REPO/tests/fixtures/cc-2.1.309"
+gt() { # $1 = project dir, $2 = session id, $3 = JSON tail -> the gate's rc; stdout/stderr in $WORK/g.out / g.err (GATE_BIN = a gate copy)
+  printf '{"session_id":"%s"%s}' "$2" "${3:-}" | CLAUDE_PROJECT_DIR="$1" bash "${GATE_BIN:-$GATE}" >"$WORK/g.out" 2>"$WORK/g.err"; echo $?
+}
+bgt() { # $1 = a recorded Stop payload -> its background_tasks as a JSON tail for gt
+  python3 -I -c 'import json,sys; print(",\"background_tasks\":" + json.dumps(json.load(open(sys.argv[1]))["background_tasks"]))' "$1"
+}
+mktr() { # $1 = out, $2 = report, $3 = recorded transcript (default agent-checker.jsonl): its last SubagentHandback message, else its last assistant text, becomes the report
+  python3 -I - "$FX/${3:-agent-checker.jsonl}" "$1" "$2" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+blocks = [b for r in rows if r["type"] == "assistant" for b in r["message"]["content"]]
+hb = [b["input"] for b in blocks if b["type"] == "tool_use" and b["name"] == "SubagentHandback"]
+if hb:
+    hb[-1]["message"] = sys.argv[3]
+else:
+    [b for b in blocks if b["type"] == "text"][-1]["text"] = sys.argv[3]
+open(sys.argv[2], "w").write("".join(json.dumps(r) + "\n" for r in rows))
+PY
+}
+mkstop() { # $1 = out, $2 = agent transcript ('-' = drop agent_transcript_path), $3 = nolast: drop last_assistant_message too
+  # transcript_path moves under $WORK/tr, so the derived agent transcript path
+  # (<transcript_path minus .jsonl>/subagents/agent-<agent_id>.jsonl) is writable.
+  python3 -I - "$FX/subagentstop-checker.json" "$1" "$2" "${3:-}" "$WORK/tr" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1]))
+p["transcript_path"] = "%s/%s.jsonl" % (sys.argv[5], p["session_id"])
+if sys.argv[3] == "-":
+    del p["agent_transcript_path"]
+else:
+    p["agent_transcript_path"] = sys.argv[3]
+if sys.argv[4] == "nolast":
+    del p["last_assistant_message"]
+json.dump(p, open(sys.argv[2], "w"))
+PY
 }
 
 echo "=== L1-1 · stop-gate: setup gate"
@@ -411,216 +435,241 @@ rc=$(rep card pass | ev "$Pb" check card --agent fx --source human); rc2=$(ev "$
 { [ "$rc" = 0 ] && awk -F'\t' -v d="$(cdig "$Pb" demo)" '$2 == "CHECK" && $3 == "card" && $5 == d && $7 == "pass"' "$Pb/.ai_context/tasks/demo/donelog" | grep -q . && [ ! -e "$Pb/.ai_context/defects.csv" ] && [ "$rc2" = 0 ]; } \
   && ok "a card-mode check records unit card at the card digest; approve does not need it" || no "card check wrong (rc=$rc approve=$rc2)"
 
-echo "=== L1-2 · stop-gate: milestone gate (spec-faithful plans)"
-D="$WORK/l12"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
-out=$(printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>"$WORK/l12.err"); rc=$?
-ck 2 $rc "green with [pending] left prompts the boundary once (v3.14)"
-grep -q "	M2	PASS" "$D/.ai_context/tasks/demo/gatelog" && ok "gatelog PASS row carries milestone id" || no "gatelog PASS row missing/wrong"
-echo "$out" | grep -q 'claude-starter-gate: BLOCK' && ok "boundary prompt carries the stdout marker" || no "stdout marker missing on green prompt"
-grep -q 'MILESTONE COMPLETE' "$WORK/l12.err" && ok "prompt reads as a continuation ask, not an error" || no "continuation prompt text missing"
-grep -q 'never proceed past an unanswered question' "$WORK/l12.err" && ok "prompt protects pending human questions" || no "question-guard line missing"
-out=$(printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "second green stop passes (one-shot consumed)"
-grep -q "	M2	PAUSED	" "$D/.ai_context/tasks/demo/gatelog" && ok "explicit PAUSED row makes the park legible" || no "PAUSED row missing"
-echo "$out" | grep -q 'paused at a milestone boundary' && ok "pause surfaces a systemMessage" || no "pause systemMessage missing"
-write_plan "$D/.ai_context/tasks/demo/plan.md" 'sh -c "echo boom; exit 1"'
-err=$(printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "red verify blocks"
-echo "$err" | grep -q "boom" && ok "failure output fed back" || no "failure output missing"
-grep -q "	M2	FAIL" "$D/.ai_context/tasks/demo/gatelog" && ok "gatelog FAIL row" || no "gatelog FAIL row missing"
-sed -i.bak 's/## M3: future \[pending\]/## M3: future [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
-err=$(printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "true double in_progress blocks"
-echo "$err" | grep -q '2 milestones' && ok "counts heading lines only (2, not 3)" || no "wrong in_progress count"
-rm -f "$D/.ai_context/tasks/CURRENT"
-printf '{"session_id": "tsuite-e"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "no active task => no-op"
+echo "=== L1-30 · stop-gate v4: evidence references, Closed:, in-flight deferral, fail-open"
+# The gate reads evidence only through `evidence.sh status --porcelain`. Fixture:
+# a ready project (S1 done: lane, checker and DONE row), then S2 started. Every
+# stop that should block gets its own session id, so the counted-block yield
+# (L1-2b) never interferes.
+P="$WORK/l130"; ready "$P"; ev "$P" start S2 >/dev/null
+mklanes "$P" "$LANE_SMOKE" 'probe | src/ | 1 | ^x$ | false | touch gate-ran'   # never trusted; the gate must never run it (#42)
+C="$P/.ai_context/tasks/demo/card.md"; DLG="$P/.ai_context/tasks/demo/donelog"
+cp "$C" "$WORK/c130"
+c30() { sed -E "$1" "$WORK/c130" > "$C"; }   # one edit on the saved card
+s1id="$(lastid "$P" smoke.jsonl)"; tok="$(sed -n 's/^- \[x\] S1 .* ✓ //p' "$C")"
+n0=$(wc -l < "$DLG"); mv "$P/.ai_context/tasks/CURRENT" "$WORK/cur130"; rc=$(gt "$P" tsuite-g1); mv "$WORK/cur130" "$P/.ai_context/tasks/CURRENT"
+{ [ "$rc" = 0 ] && [ "$(wc -l < "$DLG")" = "$n0" ]; } && ok "no CURRENT: the gate passes and writes no row" || no "no-task stop wrong (rc=$rc)"
+rc=$(gt "$P" tsuite-g2); ck 0 "$rc" "[x] S1 with holding references + [~] S2: the stop passes"
+grep -q '^{"systemMessage":"claude-starter gate: .*demo' "$WORK/g.out" && ok "a passing stop shows the status line once (systemMessage)" || no "status line missing: $(cat "$WORK/g.out")"
+rc=$(gt "$P" tsuite-g2); { [ "$rc" = 0 ] && [ ! -s "$WORK/g.out" ]; } && ok "same session, same status line: the next stop is silent" || no "status line repeated (rc=$rc): $(cat "$WORK/g.out")"
+[ "$(dl "$P" demo BLOCK)" = 0 ] && ok "passing stops write no BLOCK row" || no "BLOCK rows on passing stops: $(dl "$P" demo BLOCK)"
+c30 's/^- \[~\] S2 /- [x] S2 /'; rc=$(gt "$P" tsuite-g6); ck 2 "$rc" "an [x] with no ✓ reference blocks (noref)"
+{ grep -qF 'S2 is marked [x] without an evidence reference' "$WORK/g.err" && grep -qF 'bash scripts/evidence.sh done' "$WORK/g.err"; } && ok "noref block names the slice and the only way to [x]" || no "noref stderr: $(head -c 400 "$WORK/g.err")"
+awk -F'\t' '$2 == "BLOCK" {r = $0; n = NF} END {split(r, f, "\t"); exit !(n == 7 && f[3] == "S2" && f[4] == "noref")}' "$DLG" && ok "BLOCK row: 7 fields, slice S2, class noref" || no "BLOCK row wrong: $(grep BLOCK "$DLG" | tail -1)"
+c30 "s/smoke@$s1id/smoke@0000000/"; rc=$(gt "$P" tsuite-g9)
+{ [ "$rc" = 2 ] && grep -qF 'cites evidence that does not hold' "$WORK/g.err" && grep -qF 'not found' "$WORK/g.err"; } && ok "a cited id with no record blocks (badref, not found)" || no "unknown id (rc=$rc): $(head -c 400 "$WORK/g.err")"
+c30 "s/smoke@$s1id/fork@$s1id/"; rc=$(gt "$P" tsuite-g10); ck 2 "$rc" "a record cited under another lane's name blocks"
+echo broken > "$P/src/mode"; ev "$P" run smoke >/dev/null; fid="$(lastid "$P" smoke.jsonl)"; rm -f "$P/src/mode"
+c30 "s/smoke@$s1id/smoke@$fid/"; rc=$(gt "$P" tsuite-g11); ck 2 "$rc" "citing a failing run blocks"
+c30 "s/^- \[~\] S2 (.*)\$/- [x] S2 \1 ✓ $tok/"; rc=$(gt "$P" tsuite-g12); ck 2 "$rc" "S1's ids copied onto S2 block (no DONE row of S2 with these ids, P-4)"
+cp "$P/.claude/done-lanes" "$WORK/dl130"; echo '@pair codex' >> "$P/.claude/done-lanes"
+c30 's/pair: off/pair: codex/; s/^(- \[x\] S1 .*); codex: no/\1; codex: yes/'; rc=$(gt "$P" tsuite-g13)
+{ [ "$rc" = 2 ] && grep -qF 'codex@ missing' "$WORK/g.err"; } && ok "pair on + codex: yes without codex@ blocks" || no "missing codex@ (rc=$rc): $(head -c 400 "$WORK/g.err")"
+cp "$WORK/dl130" "$P/.claude/done-lanes"; cp "$WORK/c130" "$C"
+mv "$P/.claude/evidence" "$WORK/ev130"; rc=$(gt "$P" tsuite-g14); mv "$WORK/ev130" "$P/.claude/evidence"
+ck 0 "$rc" "ledger absent but the DONE row names the same ids: foreign, the stop passes (R3)"
+ev "$P" run smoke >/dev/null; rep S2 pass | ev "$P" check S2 --agent fx --source human >/dev/null; ev "$P" "done" S2 >/dev/null
+rep final pass | ev "$P" check final --agent fx --source human >/dev/null; rc0=$(ev "$P" close); rc=$(gt "$P" tsuite-g15)
+{ [ "$rc0" = 0 ] && [ "$rc" = 0 ]; } && ok "closed at the current content: the stop passes (R11)" || no "close rc=$rc0 ($(head -c 300 "$WORK/ev.out")), gate rc=$rc"
+cp "$C" "$WORK/c130c"
+echo b >> "$P/src/a.txt"; rc=$(gt "$P" tsuite-g16); echo a > "$P/src/a.txt"
+{ [ "$rc" = 2 ] && grep -qF 'not fresh' "$WORK/g.err" && grep -qF 'smoke' "$WORK/g.err"; } && ok "lane content changed after close: Closed: is stale and blocks" || no "stale close (rc=$rc): $(head -c 400 "$WORK/g.err")"
+echo r > "$P/README.md"; rc=$(gt "$P" tsuite-g17)
+{ [ "$rc" = 2 ] && grep -qF 'not fresh' "$WORK/g.err"; } && ok "a new file outside every lane also stales Closed: (checker final binds the whole tree)" || no "out-of-lane change after close (rc=$rc)"
+rm -f "$P/README.md"; rc=$(gt "$P" tsuite-g18); ck 0 "$rc" "content back to the closed tree: the stop passes"
+mv "$P/.claude/evidence" "$WORK/ev130"; rc=$(gt "$P" tsuite-g19); mv "$WORK/ev130" "$P/.claude/evidence"
+ck 0 "$rc" "ledger absent, CLOSE row at the current tree: foreign close passes"
+sed -E 's/^(- \[x\] S2 .*) ✓ .*$/\1/' "$WORK/c130c" > "$C"
+LK="$P/.claude/evidence/locks/run-smoke.lock"; mkdir -p "${LK%/*}"
+bash -c 'exec -a evidence.sh sleep 30' & lp=$!
+printf '%s\trun\tsmoke\tS2\t%s\n' "$lp" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$LK"
+rc=$(gt "$P" tsuite-g20); ck 0 "$rc" "a live evidence.sh run lock defers the stop (D3)"
+awk -F'\t' '$2 == "WAITING" && $4 ~ /run:smoke/' "$DLG" | grep -q . && ok "WAITING row names run:smoke" || no "WAITING row missing: $(grep WAITING "$DLG")"
+grep -qF 'in flight; evidence check deferred until it reports' "$WORK/g.out" && ok "deferral surfaces a systemMessage" || no "deferral message missing: $(cat "$WORK/g.out")"
+sleep 0 & dp=$!; wait "$dp"
+printf '%s\trun\tsmoke\tS2\t-\n' "$dp" > "$LK"; rc=$(gt "$P" tsuite-g23); ck 2 "$rc" "a lock whose pid has exited does not defer"
+sleep 30 & sp=$!
+printf '%s\trun\tsmoke\tS2\t-\n' "$sp" > "$LK"; rc=$(gt "$P" tsuite-g24); ck 2 "$rc" "a live pid that is not evidence.sh (pid reuse) does not defer"
+rm -f "$LK"; kill "$lp" "$sp" 2>/dev/null; wait "$lp" "$sp" 2>/dev/null
+rc=$(gt "$P" tsuite-g25 "$(bgt "$FX/stop-background-subagent.json")"); ck 0 "$rc" "a running background checker (recorded CC 2.1.309 payload) defers the stop"
+rc=$(gt "$P" tsuite-g26 ',"background_tasks":[{"id":"b1","type":"shell","status":"running","description":"grep \"type\":\"subagent\" log","command":"sleep 60"}]')
+ck 2 "$rc" "a background shell whose description quotes the subagent key (JSON-escaped) does not defer"
+cp "$WORK/c130c" "$C"; cp "$P/scripts/evidence.sh" "$WORK/ev130.sh"
+cp "$WORK/stub-ev-fail.sh" "$P/scripts/evidence.sh"; rc=$(gt "$P" tsuite-g27); ck 0 "$rc" "evidence.sh exits 1: the gate fails open (D5)"
+{ grep -qF 'internal error' "$WORK/g.out" && grep -qF 'not blocking this stop' "$WORK/g.out"; } && ok "fail-open says so in a systemMessage" || no "fail-open message: $(cat "$WORK/g.out")"
+[ "$(dl "$P" demo GATE-ERROR)" = 1 ] && ok "fail-open logs a GATE-ERROR row" || no "GATE-ERROR rows: $(dl "$P" demo GATE-ERROR)"
+cp "$WORK/stub-ev-garbage.sh" "$P/scripts/evidence.sh"; rc=$(gt "$P" tsuite-g30)
+{ [ "$rc" = 0 ] && [ "$(dl "$P" demo GATE-ERROR)" = 2 ]; } && ok "unparseable porcelain fails open (+1 GATE-ERROR)" || no "garbage porcelain (rc=$rc, rows $(dl "$P" demo GATE-ERROR))"
+cp "$WORK/stub-ev-slow.sh" "$P/scripts/evidence.sh"; rc=$(CLAUDE_STARTER_GATE_STATUS_TIMEOUT=1 gt "$P" tsuite-g31); cp "$WORK/ev130.sh" "$P/scripts/evidence.sh"
+{ [ "$rc" = 0 ] && [ "$(dl "$P" demo GATE-ERROR)" = 3 ]; } && ok "a hung evidence.sh times out and fails open (+1 GATE-ERROR)" || no "slow porcelain (rc=$rc, rows $(dl "$P" demo GATE-ERROR))"
+mkdir -p "$WORK/g31" "$WORK/g32"; cp "$REPO/.claude/hooks/guard-patterns.sh" "$WORK/g31/"; cp "$GATE" "$WORK/g32/"
+awk '/^# --- 1\. Setup gate/ {print "if ;; then"} {print}' "$GATE" > "$WORK/g31/stop-gate.sh"
+rc=$(GATE_BIN="$WORK/g31/stop-gate.sh" gt "$P" tsuite-g32)
+{ [ "$rc" = 0 ] && [ "$(dl "$P" demo GATE-ERROR)" = 4 ] && ! grep -qF 'claude-starter-gate: BLOCK' "$WORK/g.out"; } && ok "a bash syntax error in the gate (rc 2, no marker) fails open" || no "syntax error path (rc=$rc, rows $(dl "$P" demo GATE-ERROR)): $(cat "$WORK/g.out")"
+rc=$(GATE_BIN="$WORK/g32/stop-gate.sh" gt "$P" tsuite-g33)
+{ [ "$rc" = 0 ] && [ "$(dl "$P" demo GATE-ERROR)" = 5 ]; } && ok "guard-patterns.sh missing: the evidence gate fails open" || no "missing helpers (rc=$rc, rows $(dl "$P" demo GATE-ERROR))"
+cp "$P/CLAUDE.md" "$WORK/cl130"; printf '# t\n<!-- claude-starter: UNCONFIGURED -->\n' > "$P/CLAUDE.md"
+rc=$(GATE_BIN="$WORK/g32/stop-gate.sh" gt "$P" tsuite-g34); cp "$WORK/cl130" "$P/CLAUDE.md"
+{ [ "$rc" = 2 ] && grep -qF 'claude-starter-gate: BLOCK' "$WORK/g.out"; } && ok "guard-patterns.sh missing: the setup gate still blocks (fallback sentinel)" || no "fallback setup gate (rc=$rc)"
+# Idle (D6, R13): card, donelog and the task/<slug> branch all a week old.
+Pi="$WORK/l130i"; OLD=1 mkproj "$Pi"; mkcard "$Pi" demo off '- [x] S1 first — lanes: smoke ; codex: no'
+Ti="$Pi/.ai_context/tasks/demo"; touch -d '8 days ago' "$Ti/card.md" "$Ti/donelog"
+rc=$(gt "$Pi" tsuite-g35); ck 0 "$rc" "an idle task is not checked (card, donelog, task/demo 8 days old)"
+[ "$(dl "$Pi" demo BLOCK)" = 0 ] && ok "an idle task gets no BLOCK row" || no "idle task logged a BLOCK"
+touch "$Ti/card.md"; rc=$(gt "$Pi" tsuite-g37); ck 2 "$rc" "editing the card re-activates the task"
+touch -d '8 days ago' "$Ti/card.md" "$Ti/donelog"; echo n > "$Pi/src/n.txt"; git -C "$Pi" add src/n.txt; git -C "$Pi" commit -qm now
+rc=$(gt "$Pi" tsuite-g38); ck 2 "$rc" "a fresh commit on task/demo keeps an old card active"
+# v3 leftovers (R15): an empty CURRENT, a dir without card.md, a v3 plan.md task.
+CUR="$P/.ai_context/tasks/CURRENT"; cp "$CUR" "$WORK/cur130"
+: > "$CUR"; rc=$(gt "$P" tsuite-g39); ck 0 "$rc" "an empty CURRENT is no task"
+mkdir -p "$P/.ai_context/tasks/ghost"; echo ghost > "$CUR"; rc=$(gt "$P" tsuite-g40); ck 0 "$rc" "CURRENT naming a dir with neither card.md nor plan.md is no task"
+mkdir -p "$P/.ai_context/tasks/v3t"; printf '# Plan: v3\n## M1: x [in_progress]\n- verify: `false`\n' > "$P/.ai_context/tasks/v3t/plan.md"; echo v3t > "$CUR"
+rc=$(gt "$P" tsuite-g41); { [ "$rc" = 0 ] && grep -qF 'a v3 plan.md task without card.md' "$WORK/g.out"; } && ok "a v3 plan.md task passes with a one-line note (R15)" || no "v3 task (rc=$rc): $(cat "$WORK/g.out")"
+cp "$WORK/cur130" "$CUR"
+{ [ ! -e "$P/gate-ran" ] && [ ! -e gate-ran ]; } && ok "the gate never ran a lane (the untrusted probe lane least of all)" || no "the gate executed a lane command"
+grep -q 'no verdict' "$GATE" && no "stop-gate carries a Codex no-verdict block (R12: evidence.sh owns it)" || ok "no Codex no-verdict block in the gate (R12)"
 
-echo "=== L1-2b · stop-gate: counted red blocks — third stop yields to the human"
-D="$WORK/l12b"; mkdir -p "$D/.ai_context/tasks/demo"
+echo "=== L1-2b · stop-gate: counted blocks — third stop on the same card and content yields"
+# Hand-written card, no git: S2 is [x] with no ✓ reference (noref), so the
+# gate decides without evidence.sh. The count key is the card bytes + content.
+D="$WORK/l12b"; T="$D/.ai_context/tasks/demo"; mkdir -p "$T"
 printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
 echo demo > "$D/.ai_context/tasks/CURRENT"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
+{ echo '# Demo task'; echo '<!-- card v4 ; pair: off ; base: - ; estimate: 1h 50L -->'
+  echo 'Goal: count the blocks'; echo 'Done when: S2 cites evidence'; echo '## Slices'
+  echo '- [~] S1 first — lanes: smoke ; codex: no'; echo '- [x] S2 second — lanes: smoke ; codex: no'; } > "$T/card.md"
 printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "red block 1 still blocks"
+ck 2 $? "noref block 1 blocks"
 printf '{"stop_hook_active": true, "session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "red block 2 blocks despite stop_hook_active (gate counts for itself)"
+ck 2 $? "block 2 blocks despite stop_hook_active (the gate counts for itself)"
 out=$(printf '{"stop_hook_active": true, "session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "third consecutive red stop yields"
+ck 0 $rc "third stop on the same card and content yields"
 echo "$out" | grep -q '"systemMessage"' && ok "yield carries a systemMessage for the human" || no "yield lacks systemMessage"
-echo "$out" | grep -q 'demo / M2 is RED' && ok "systemMessage names task and milestone" || no "systemMessage vague"
-grep -q "	M2	STUCK	" "$D/.ai_context/tasks/demo/gatelog" && ok "gatelog STUCK row written" || no "STUCK row missing"
-n_fail=$(grep -c "	M2	FAIL" "$D/.ai_context/tasks/demo/gatelog")
-[ "$n_fail" = 3 ] && ok "each attempt logged a FAIL row (3)" || no "FAIL rows: want 3 got $n_fail"
+{ echo "$out" | grep -q 'task demo is BLOCKED' && echo "$out" | grep -q 'noref'; } && ok "systemMessage names the task and the finding class" || no "systemMessage vague: $out"
+[ "$(dl "$D" demo STUCK)" = 1 ] && ok "donelog STUCK row written" || no "STUCK row missing"
+[ "$(dl "$D" demo BLOCK)" = 2 ] && ok "each counted block logged a BLOCK row (2)" || no "BLOCK rows: want 2 got $(dl "$D" demo BLOCK)"
 # F10: the yield is ONE handoff event — stop 4 keeps yielding (and keeps
 # the human signal) but appends no second STUCK row.
 out=$(printf '{"stop_hook_active": true, "session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "fourth red stop still yields"
+ck 0 $rc "fourth stop still yields"
 echo "$out" | grep -q '"systemMessage"' && ok "repeat yield keeps pinging the human" || no "repeat yield lost the systemMessage"
-n_stuck=$(grep -c "	M2	STUCK	" "$D/.ai_context/tasks/demo/gatelog")
-[ "$n_stuck" = 1 ] && ok "exactly one STUCK row after four red stops (no over-count)" || no "STUCK rows: want 1 got $n_stuck"
-# PASS resets the streak: fix the verify, pass once, break it again — blocks anew
-write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+[ "$(dl "$D" demo STUCK)" = 1 ] && ok "exactly one STUCK row after four stops (no over-count)" || no "STUCK rows: want 1 got $(dl "$D" demo STUCK)"
+# A changed card is a new key: a fresh count, and a second handoff when it yields.
+sed -i 's/^Goal: count the blocks$/Goal: count the blocks again/' "$T/card.md"
 printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "green after yield prompts the boundary (PASS recorded, streak reset)"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
+ck 2 $? "an edited card starts a fresh count (blocks again)"
 printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "PASS reset the counter — new red streak blocks again"
-# ...and re-armed the STUCK row: a post-PASS streak that yields again is a
-# genuinely new handoff, so it logs a second row.
+ck 2 $? "new key: block 2"
 printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "second streak: red block 2"
-printf '{"session_id": "tsuite-red"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "second streak: third stop yields again"
-n_stuck=$(grep -c "	M2	STUCK	" "$D/.ai_context/tasks/demo/gatelog")
-[ "$n_stuck" = 2 ] && ok "a PASS re-armed the STUCK row (new handoff logged)" || no "post-PASS re-yield rows: want 2 got $n_stuck"
-# a fresh session also starts a fresh streak
+ck 0 $? "new key: third stop yields again"
+[ "$(dl "$D" demo STUCK)" = 2 ] && ok "the new key logged its own STUCK row" || no "STUCK rows: want 2 got $(dl "$D" demo STUCK)"
+[ "$(dl "$D" demo BLOCK)" = 4 ] && ok "BLOCK rows: 2 per key (4)" || no "BLOCK rows: want 4 got $(dl "$D" demo BLOCK)"
 printf '{"session_id": "tsuite-red2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
 ck 2 $? "new session counts from zero"
 
-echo "=== L1-2c · stop-gate: red wrap-up sweep counted; /wrap --sweep stays strict"
-D="$WORK/l12c"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
-# Plan: fixture
-<!-- profile: opus-tier ; size: S -->
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: only [done]
-- verify: `false`
-- risk: low
-PEOF
-printf '{"session_id": "tsuite-swp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "all-done red sweep blocks (1)"
-printf '{"session_id": "tsuite-swp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "all-done red sweep blocks (2)"
-out=$(printf '{"session_id": "tsuite-swp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "third red sweep yields"
-echo "$out" | grep -q '"systemMessage"' && ok "sweep yield pings the human" || no "sweep yield silent"
-grep -q "	sweep	STUCK	" "$D/.ai_context/tasks/demo/gatelog" && ok "sweep STUCK row" || no "sweep STUCK row missing"
-printf '{"session_id": "tsuite-swp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "fourth red sweep still yields"
-n_sw=$(grep -c "	sweep	STUCK	" "$D/.ai_context/tasks/demo/gatelog")
-[ "$n_sw" = 1 ] && ok "one sweep STUCK row after repeat stops (F10)" || no "sweep STUCK rows: want 1 got $n_sw"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-ck 2 $? "explicit /wrap --sweep never yields (still strict after counted yields)"
-
-echo "=== L1-2e · absent GNU timeout is loud (F11)"
-D="$WORK/l12e"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
-SH="$WORK/no-timeout-bin"; mkdir -p "$SH"
-for b in bash sh grep sed awk date tr cat rm mv mkdir wc head tail dirname env; do
-  p="$(command -v "$b" 2>/dev/null)" && [ -n "$p" ] && ln -sf "$p" "$SH/$b" 2>/dev/null
-done
-err=$(printf '{"session_id": "tsuite-tmo"}' | PATH="$SH" CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "green boundary prompt fires even without the timeout binary"
-echo "$err" | grep -q 'UNBOUNDED' && ok "missing timeout binary warned (no silent void)" || no "missing timeout stayed silent (F11)"
-printf '{"session_id": "tsuite-tmo"}' | PATH="$SH" CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "gate still passes the second green stop without the timeout binary"
-err=$(printf '{"session_id": "tsuite-tmo2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-echo "$err" | grep -q 'UNBOUNDED' && no "timeout present but warned anyway" || ok "no warning when timeout exists"
-
-echo "=== L1-2d · spawn-log + no-spawn diagnosis"
-SL="$REPO/.claude/hooks/spawn-log.sh"
-D="$WORK/l12d"; mkdir -p "$D/.ai_context/tasks/demo"
+echo "=== L1-2d · spawn-log: SPAWN rows, in-flight deferral, wiring (v4)"
+D="$WORK/l12d"; T="$D/.ai_context/tasks/demo"; mkdir -p "$T"
 printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
 # unit: no active task => no rows anywhere
-printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" executor
+printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" executor start
 ck 0 $? "spawn-log without CURRENT is a no-op"
-[ ! -e "$D/.ai_context/tasks/demo/spawnlog" ] && ok "no spawnlog created without a task" || no "stray spawnlog"
+[ ! -e "$T/donelog" ] && ok "no donelog created without a task" || no "stray donelog"
 echo demo > "$D/.ai_context/tasks/CURRENT"
-# intake state: scout spawned before any milestone arms -> ms '-'
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
-# Plan: fixture
-<!-- profile: opus-tier ; size: M -->
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: groundwork [pending]
-- verify: `false`
-- risk: low
-
-## M2: current [pending]
-- verify: `false`
-- risk: low
-PEOF
-printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" other
-grep -q "	-	other$" "$D/.ai_context/tasks/demo/spawnlog" && ok "intake spawn rows carry '-' (capability handshake)" || no "intake row wrong"
-# arm M2, spawn executor => attributed row
-sed -i.bak 's/## M2: current \[pending\]/## M2: current [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
-printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" executor
-grep -q "	M2	executor$" "$D/.ai_context/tasks/demo/spawnlog" && ok "executor row attributed to the armed milestone" || no "executor row wrong"
-# in-flight deferral reads the Stop payload: an executor Claude Code lists
-# as a running background task defers every stop (quiet, WAITING row) — its
-# completion notification is the wake signal. Payload shape as CC builds it.
-BT_EXEC='"background_tasks":[{"id":"a1","type":"subagent","status":"running","description":"Execute milestone M2","agent_type":"executor"}]'
-out=$(printf '{"session_id":"tsuite-sl1",%s}' "$BT_EXEC" | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "running background executor defers the verify (in-flight)"
-grep -q "	M2	WAITING	executor in flight" "$D/.ai_context/tasks/demo/gatelog" && ok "WAITING row records the deferral" || no "WAITING row missing"
-echo "$out" | grep -q 'executor in flight' && ok "deferral surfaces a systemMessage" || no "deferral systemMessage missing"
-printf '{"session_id":"tsuite-sl1",%s}' "$BT_EXEC" | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "still running at the next stop => deferred again (no per-spawn cap)"
-n_wait=$(grep -c "	M2	WAITING	" "$D/.ai_context/tasks/demo/gatelog")
-[ "$n_wait" = 2 ] && ok "one WAITING row per deferred stop" || no "WAITING rows: want 2 got $n_wait"
-# codex_desktop 2026-10-21 replay: a fresh executor row no stop has deferred
-# on, but the executor already reported (nothing listed) => the verify runs.
-# Spawnlog freshness never defers — background executors log a row per re-wake.
-printf '%s\tM2\texecutor\n' "$(date '+%Y-%m-%dT%H:%M:%S')" >> "$D/.ai_context/tasks/demo/spawnlog"
-grep -v "	M2	WAITING	" "$D/.ai_context/tasks/demo/gatelog" > "$D/.ai_context/tasks/demo/gatelog.new" && mv "$D/.ai_context/tasks/demo/gatelog.new" "$D/.ai_context/tasks/demo/gatelog"
-err=$(printf '%s' '{"session_id":"tsuite-sl1b","background_tasks":[]}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "finished executor + fresh spawn row => verify runs (no dark deferral)"
-echo "$err" | grep -q 'no executor spawn' && no "false no-spawn accusation despite executor row" || ok "executor row suppresses the hint"
-echo "$err" | grep -q 'escalate per the /task ladder' && ok "ladder guidance kept when spawn evidence exists" || no "ladder guidance missing"
-# only a verifier and a shell running (the shell's description quotes the
-# key, JSON-escaped) => not in flight
-printf '%s' '{"session_id":"tsuite-sl1c","background_tasks":[{"id":"a2","type":"subagent","status":"running","description":"Light-verify M2","agent_type":"verifier"},{"id":"b1","type":"shell","status":"running","description":"grep \"agent_type\":\"executor\" log","command":"sleep 60"}]}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "running verifier/shell does not defer"
-# no background_tasks field (older CC, format drift) => verify runs: loud, never dark
-printf '{"session_id": "tsuite-sl1d"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "payload without background_tasks runs the verify (fails loud)"
-# arm M1 instead (no executor row for it) => diagnosis fires
-sed -i.bak -e 's/## M2: current \[in_progress\]/## M2: current [pending]/' -e 's/## M1: groundwork \[pending\]/## M1: groundwork [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
-err=$(printf '{"session_id": "tsuite-sl2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
-echo "$err" | grep -q 'no executor row for M1' && ok "no-spawn diagnosis fires for the armed milestone" || no "no-spawn diagnosis missing"
-echo "$err" | grep -q 'rung 1' && ok "diagnosis redirects to rung 1, not the ladder" || no "redirect missing"
-# the third red carries the note into the human ping
-printf '{"session_id": "tsuite-sl2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-out=$(printf '{"session_id": "tsuite-sl2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "third red still yields with diagnosis active"
-echo "$out" | grep -q 'no executor spawn recorded' && ok "systemMessage carries the no-spawn note" || no "note missing from systemMessage"
-# empty spawnlog (event never fired) => silence, never accusation
-: > "$D/.ai_context/tasks/demo/spawnlog"
-err=$(printf '{"session_id": "tsuite-sl3"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
-echo "$err" | grep -q 'no executor' && no "accusation from an empty spawnlog" || ok "empty spawnlog stays silent (old-CC safety)"
-# missing spawnlog => same silence
-rm -f "$D/.ai_context/tasks/demo/spawnlog"
-err=$(printf '{"session_id": "tsuite-sl4"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
-echo "$err" | grep -q 'no executor' && no "accusation without spawnlog" || ok "missing spawnlog stays silent"
-# size S (in-context execution by design) => no accusation even with rows
-D="$WORK/l12ds"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
-printf '%s\t-\tother\n' "2026-07-22T00:00:00" > "$D/.ai_context/tasks/demo/spawnlog"
-err=$(printf '{"session_id": "tsuite-sl5"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null)
-echo "$err" | grep -q 'no executor' && no "S-size task accused of not spawning" || ok "S size suppresses the diagnosis"
-# wiring: settings.json routes SubagentStart and denies hand edits
-grep -q '"SubagentStart"' "$REPO/.claude/settings.json" && ok "settings routes SubagentStart" || no "SubagentStart missing from settings"
-grep -q 'spawn-log.sh\\" executor' "$REPO/.claude/settings.json" && ok "executor matcher wired" || no "executor matcher missing"
-grep -q 'spawn-log.sh\\" verifier' "$REPO/.claude/settings.json" && ok "verifier matcher wired (own class)" || no "verifier matcher missing"
-python3 - "$REPO/.claude/settings.json" <<'PY' && ok "verifier matcher is a plain name and the crew regex no longer lists it" || no "verifier routing ambiguous (would double-log or catch final-verifier)"
-import json, sys
-ms = [h["matcher"] for h in json.load(open(sys.argv[1]))["hooks"]["SubagentStart"]]
-sys.exit(0 if "verifier" in ms and not any("verifier" in m.split("|") for m in ms if m != "verifier") else 1)
+{ echo '# Demo task'; echo '<!-- card v4 ; pair: off ; base: - ; estimate: 1h 50L -->'; echo 'Goal: spawn rows'; echo '## Slices'
+  echo '- [ ] S1 first — lanes: smoke ; codex: no'; echo '- [ ] S2 second — lanes: smoke ; codex: no'; } > "$T/card.md"
+# nothing in progress yet -> slice '-'
+printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" executor start
+awk -F'\t' '$2 == "SPAWN" && $3 == "-" && $4 == "executor"' "$T/donelog" | grep -q . && ok "a spawn before any [~] slice carries '-'" || no "pre-slice SPAWN row wrong: $(cat "$T/donelog")"
+sed -i 's/^- \[ \] S2 /- [~] S2 /' "$T/card.md"
+printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" executor start
+[ "$(tail -n 1 "$T/donelog" | cut -f2-)" = "$(printf 'SPAWN\tS2\texecutor\t-\t-\tstart')" ] && ok "executor SPAWN row attributed to the [~] slice (7 fields)" || no "SPAWN row wrong: $(tail -n 1 "$T/donelog")"
+# in-flight deferral reads the Stop payload: an executor Claude Code lists as
+# a running background task defers every stop (WAITING row) — its completion
+# notification is the wake signal. S1 is a noref [x], so a stop that is not
+# deferred blocks.
+sed -i 's/^- \[ \] S1 /- [x] S1 /' "$T/card.md"
+BT_EXEC=',"background_tasks":[{"id":"a1","type":"subagent","status":"running","description":"Execute S2","agent_type":"executor"}]'
+rc=$(gt "$D" tsuite-sl1 "$BT_EXEC"); ck 0 "$rc" "running background executor defers the gate (in flight)"
+awk -F'\t' '$2 == "WAITING" && $4 ~ /subagent:executor/' "$T/donelog" | grep -q . && ok "WAITING row records the deferral" || no "WAITING row missing: $(cat "$T/donelog")"
+grep -qF 'in flight; evidence check deferred until it reports' "$WORK/g.out" && ok "deferral surfaces a systemMessage" || no "deferral systemMessage missing"
+rc=$(gt "$D" tsuite-sl1 "$BT_EXEC"); ck 0 "$rc" "still running at the next stop => deferred again (no per-spawn cap)"
+[ "$(dl "$D" demo WAITING)" = 2 ] && ok "one WAITING row per deferred stop" || no "WAITING rows: want 2 got $(dl "$D" demo WAITING)"
+# codex_desktop 2026-10-21 replay: a fresh SPAWN row but nothing listed => the
+# gate checks. Row freshness never defers — background agents log a row per re-wake.
+rc=$(gt "$D" tsuite-sl1b ',"background_tasks":[]'); ck 2 "$rc" "finished executor + fresh SPAWN row => the gate checks (no dark deferral)"
+rc=$(gt "$D" tsuite-sl1c "$(bgt "$FX/stop-background.json")"); ck 2 "$rc" "a running background shell (recorded CC 2.1.309 payload) does not defer (D3)"
+rc=$(gt "$D" tsuite-sl1d); ck 2 "$rc" "payload without background_tasks: the gate checks (fails loud, never dark)"
+# wiring: settings.json routes both events, by agent name, with the phase in argv
+{ grep -q '"SubagentStart"' "$REPO/.claude/settings.json" && grep -q '"SubagentStop"' "$REPO/.claude/settings.json"; } && ok "settings routes SubagentStart and SubagentStop" || no "Subagent events missing from settings"
+{ grep -q 'spawn-log.sh\\" executor start"' "$REPO/.claude/settings.json" && grep -q 'spawn-log.sh\\" executor stop"' "$REPO/.claude/settings.json"; } && ok "executor start/stop wired" || no "executor wiring missing"
+{ grep -q 'spawn-log.sh\\" checker start"' "$REPO/.claude/settings.json" && grep -q 'spawn-log.sh\\" checker stop"' "$REPO/.claude/settings.json"; } && ok "checker start/stop wired" || no "checker wiring missing"
+python3 - "$REPO/.claude/settings.json" <<'PY' && ok "each Subagent event matches exactly executor and checker (no retired agent)" || no "Subagent matchers wrong (retired agent or regex matcher)"
+import json, re, sys
+h = json.load(open(sys.argv[1]))["hooks"]
+gone = re.compile("scout|planner|plan-critic|verifier|reframer|final-verifier|other")
+ok = all(sorted(e["matcher"] for e in h[ev]) == ["checker", "executor"] and not any(gone.search(e["matcher"]) for e in h[ev])
+         for ev in ("SubagentStart", "SubagentStop"))
+sys.exit(0 if ok else 1)
 PY
-printf '{}' | CLAUDE_PROJECT_DIR="$D" bash "$SL" verifier
-grep -q "	M2	verifier$" "$D/.ai_context/tasks/demo/spawnlog" && ok "verifier class lands in the spawnlog" || no "verifier row wrong"
+CLAUDE_PROJECT_DIR="$D" bash "$SL" checker start < "$FX/subagentstart-checker.json"
+awk -F'\t' '$2 == "SPAWN" && $4 == "checker" && $6 == "a0000000000000003"' "$T/donelog" | grep -q . && ok "checker SPAWN row (agent_id from the recorded payload)" || no "checker SPAWN row wrong: $(tail -n 1 "$T/donelog")"
 grep -q 'Edit(./.ai_context/tasks/\*\*/spawnlog)' "$REPO/.claude/settings.json" && ok "spawnlog Edit-denied" || no "spawnlog not Edit-denied"
+
+echo "=== L1-29 · spawn-log: the checker's report becomes a checker record (SubagentStop)"
+# tests/fixtures/cc-2.1.309/ — Source: Claude Code 2.1.309, two `claude -p
+# --model sonnet` runs on 2026-10-28 (foreground and background checker),
+# recorded by hooks that saved stdin verbatim; ids, session paths and project
+# paths replaced with fixed fakes. agent-checker-handback.jsonl is synthetic:
+# same row shape as a real interactive-session subagent that handed back via
+# the SubagentHandback tool (input.message = report), built from
+# agent-checker.jsonl's report text.
+Ps="$WORK/l129s"; T="$Ps/.ai_context/tasks/demo"; mkdir -p "$T" "$Ps/scripts" "$WORK/tr"
+{ echo '# Demo task'; echo '<!-- card v4 ; pair: off ; base: - ; estimate: 1h 50L -->'; echo 'Goal: reports'; echo '## Slices'
+  echo '- [~] S1 first — lanes: smoke ; codex: no'; } > "$T/card.md"
+echo demo > "$Ps/.ai_context/tasks/CURRENT"
+cat > "$Ps/scripts/evidence.sh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "$WORK/stub.argv"; cat > "$WORK/stub.stdin"; echo 'check S1 pass deadbeef01'
+EOF
+sl() { CLAUDE_PROJECT_DIR="$1" bash "$SL" "$2" "$3" < "$4" >/dev/null 2>&1; }   # $1 project, $2 kind, $3 phase, $4 payload file
+mktr "$WORK/t1" "$(rep S1 pass)" agent-checker-handback.jsonl; mkstop "$WORK/p1" "$WORK/t1"
+sl "$Ps" checker stop "$WORK/p1"
+{ grep -qx 'checker-verdict: S1 pass' "$WORK/stub.stdin" && grep -q 'fixture claim' "$WORK/stub.stdin"; } && ok "the handed-back report reaches evidence.sh check on stdin" || no "report not passed: $(head -c 300 "$WORK/stub.stdin" 2>/dev/null)"
+a1="$(cat "$WORK/stub.argv" 2>/dev/null)"
+mktr "$WORK/t2" "$(rep S1 pass)"; mkstop "$WORK/p2" "$WORK/t2"; sl "$Ps" checker stop "$WORK/p2"
+want2="$(python3 -I -c 'import json,sys; print("last_message" if "checker-verdict:" in json.load(open(sys.argv[1]))["last_assistant_message"] else "transcript")' "$FX/subagentstop-checker.json")"
+{ [ "$a1" = 'check S1 --agent a0000000000000003 --source handback' ] && [ "$(cat "$WORK/stub.argv")" = "check S1 --agent a0000000000000003 --source $want2" ]; } && ok "argv: check <[~] slice> --agent <id> --source handback | $want2 (no handback)" || no "argv wrong: [$a1] [$(cat "$WORK/stub.argv")]"
+dv="$WORK/tr/$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["session_id"])' "$FX/subagentstop-checker.json")/subagents"
+mkdir -p "$dv"; mktr "$dv/agent-a0000000000000003.jsonl" "$(rep S1 pass 'VERIFIED (L4) derived path claim — cat x')" agent-checker-handback.jsonl
+mkstop "$WORK/p3" -; rm -f "$WORK/stub.stdin"; sl "$Ps" checker stop "$WORK/p3"
+grep -q 'derived path claim' "$WORK/stub.stdin" 2>/dev/null && ok "no agent_transcript_path: the derived <session>/subagents/agent-<id>.jsonl is read" || no "derived transcript path not used"
+rm -f "$dv/agent-a0000000000000003.jsonl"; mkstop "$WORK/p4" - nolast; sl "$Ps" checker stop "$WORK/p4"
+{ grep -q -- '--source none$' "$WORK/stub.argv" && [ ! -s "$WORK/stub.stdin" ]; } && ok "nothing captured: --source none with an empty report (done refuses it)" || no "uncaptured path: [$(cat "$WORK/stub.argv")]"
+echo 'not json{' | CLAUDE_PROJECT_DIR="$Ps" bash "$SL" checker stop >/dev/null 2>&1; ck 0 $? "a garbage payload never fails the hook"
+rm -f "$WORK/stub.argv"; n0=$(wc -l < "$T/donelog")
+sl "$Ps" executor stop "$FX/subagentstop-executor.json"
+{ [ "$(tail -n 1 "$T/donelog" | cut -f2,4,7)" = "$(printf 'RETURN\texecutor\treturned')" ] && [ ! -e "$WORK/stub.argv" ]; } && ok "executor stop: one RETURN row, evidence.sh not called" || no "executor stop wrong: $(tail -n 1 "$T/donelog")"
+n0=$(wc -l < "$T/donelog"); printf '{}' | CLAUDE_PROJECT_DIR="$Ps" bash "$SL" other start
+[ "$(wc -l < "$T/donelog")" = "$n0" ] && ok "an unknown kind writes nothing" || no "other start wrote a row"
+printf '{"agent_type":"executor"}' | CLAUDE_PROJECT_DIR="$Ps" bash "$SL" checker start
+[ "$(tail -n 1 "$T/donelog" | cut -f2,4)" = "$(printf 'SPAWN\tchecker')" ] && ok "the kind comes from argv, never the payload" || no "payload overrode argv: $(tail -n 1 "$T/donelog")"
+Pr="$WORK/l129r"; mkproj "$Pr"; mklanes "$Pr" "$LANE_SMOKE"; ev "$Pr" trust smoke >/dev/null
+mkcard "$Pr" demo off '- [~] S1 first — lanes: smoke ; codex: no'
+ev "$Pr" approve >/dev/null; ev "$Pr" start S1 >/dev/null; ev "$Pr" run smoke >/dev/null
+mktr "$WORK/t9" "$(rep S1 pass 'NOT VERIFIED (L2) a — b')" agent-checker-handback.jsonl; mkstop "$WORK/p9" "$WORK/t9"; sl "$Pr" checker stop "$WORK/p9"
+[ "$(awk -F'\t' '$2 == "CHECK" {v = $7} END {print v}' "$Pr/.ai_context/tasks/demo/donelog")" = fail ] && ok "a NOT VERIFIED claim records a failing check" || no "CHECK row: $(grep CHECK "$Pr/.ai_context/tasks/demo/donelog")"
+rc=$(ev "$Pr" "done" S1); ck 1 "$rc" "done refuses a slice whose latest check failed"
+mktr "$WORK/t11" "$(rep S1 pass)" agent-checker-handback.jsonl; mkstop "$WORK/p11" "$WORK/t11"; sl "$Pr" checker stop "$WORK/p11"
+[ "$(awk -F'\t' '$2 == "CHECK" {v = $7} END {print v}' "$Pr/.ai_context/tasks/demo/donelog")" = pass ] && ok "a VERIFIED report records a passing check" || no "CHECK row: $(grep CHECK "$Pr/.ai_context/tasks/demo/donelog" | tail -1)"
+ret="$(awk -F'\t' '$2 == "RETURN" {v = $7} END {print v}' "$Pr/.ai_context/tasks/demo/donelog")"
+rc=$(ev "$Pr" "done" S1); ck 0 "$rc" "done accepts the hook-recorded passing check"
+[ "$ret" = "checked $(lastid "$Pr" checker.jsonl) pass" ] && ok "RETURN row names the checker record and its verdict" || no "RETURN row: [$ret] want checked $(lastid "$Pr" checker.jsonl) pass"
+dl7 "$Pr" demo && ok "spawn-log + evidence.sh donelog: 7 fields, UTC ts on every row" || no "donelog rows malformed: $(head -c 400 "$Pr/.ai_context/tasks/demo/donelog")"
+n0=$(wc -l < "$T/donelog"); o=""
+for a in verifier executor 'verifier start'; do
+  # shellcheck disable=SC2086
+  o="$o$(printf '{}' | CLAUDE_PROJECT_DIR="$Ps" bash "$SL" $a 2>&1; echo "rc=$?;")"
+done
+{ [ "$o" = 'rc=0;rc=0;rc=0;' ] && [ "$(wc -l < "$T/donelog")" = "$n0" ]; } && ok "v3 one-argument calls and retired kinds: silent no-ops (R15)" || no "v3 argv not a no-op: $o"
 
 echo "=== L1-3 · session-start: injection + warnings"
 D="$WORK/l13"; mkdir -p "$D/.ai_context/tasks/demo"
@@ -628,18 +677,19 @@ printf '# n\n- **Dev:** `<command>`\n' > "$D/CLAUDE.md"
 printf 'Last updated: 2026-01-01\nbody\n' > "$D/.ai_context/state.md"
 printf 'idx\n' > "$D/.ai_context/INDEX.md"
 echo demo > "$D/.ai_context/tasks/CURRENT"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
+printf '# Demo task\n<!-- card v4 ; pair: off ; base: - ; estimate: 1h 50L -->\nGoal: CARD-MARKER goal\n## Slices\n- [~] S1 first — lanes: smoke ; codex: no\n' > "$D/.ai_context/tasks/demo/card.md"
 printf 'lesson-x\n' > "$D/.ai_context/tasks/demo/lessons.md"
 printf 'SPEC-MARKER goal line\n' > "$D/.ai_context/tasks/demo/spec.md"
+printf 'BRIEF-MARKER map\n' > "$D/.ai_context/tasks/demo/brief.md"
 git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm x
 out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
 echo "$out" | grep -q 'SETUP REQUIRED' && ok "newborn instruction emitted" || no "newborn instruction missing"
 echo "$out" | grep -q 'INDEX.md ===' && ok "INDEX injected" || no "INDEX missing"
-echo "$out" | grep -q 'lesson-x' && ok "active task plan+lessons injected" || no "task injection missing"
-echo "$out" | grep -q 'SPEC-MARKER' && ok "spec.md injected on active task (intent anchor)" || no "spec.md not injected"
+echo "$out" | grep -q 'CARD-MARKER' && ok "active task card injected" || no "card injection missing"
+echo "$out" | grep -qE 'SPEC-MARKER|lesson-x' && no "v3 spec.md/lessons.md still injected" || ok "spec.md and lessons.md are not injected (v4: the card is the anchor)"
+echo "$out" | grep -q 'BRIEF-MARKER' && no "brief.md injected" || ok "brief.md is not injected"
 echo "$out" | grep -q 'days ago' && ok "stale-state warning (S3)" || no "stale warning missing"
 echo "$out" | grep -q 'ended without /wrap' && ok "unwrapped-session warning" || no "unwrapped warning missing"
-echo "$out" | grep -q 'milestone gate is OFF' && no "false status warning while in_progress exists" || ok "no false status warning"
 D2="$WORK/l13b"; mkdir -p "$D2"
 printf '# n2\n- **Dev:** `<command>`\n' > "$D2/CLAUDE.md"
 out=$(CLAUDE_PROJECT_DIR="$D2" bash "$SS" </dev/null 2>&1)
@@ -651,91 +701,66 @@ printf 'idx\n' > "$D3/.ai_context/INDEX.md"
 echo ghost > "$D3/.ai_context/tasks/CURRENT"
 out=$(CLAUDE_PROJECT_DIR="$D3" bash "$SS" </dev/null 2>&1)
 echo "$out" | grep -q 'days ago' && no "body date shadowed the Last-updated line (anchoring broken)" || ok "freshness anchored to the Last-updated line"
-echo "$out" | grep -q 'plan.md is missing' && ok "dangling CURRENT warned" || no "dangling CURRENT not warned"
+echo "$out" | grep -q 'but its card.md is missing' && ok "dangling CURRENT warned" || no "dangling CURRENT not warned"
 
-echo "=== L1-3b · session-start: filtered plan view"
-D="$WORK/l13d"; mkdir -p "$D/.ai_context/tasks/demo"
+echo "=== L1-3c · task lifecycle warnings: Closed but not wrapped, notes.md size"
+D="$WORK/l13e"; T="$D/.ai_context/tasks/demo"; mkdir -p "$T"
 printf '# n\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
 printf '_Last updated: %s_\n' "$(date +%F)" > "$D/.ai_context/state.md"
 printf 'idx\n' > "$D/.ai_context/INDEX.md"
 echo demo > "$D/.ai_context/tasks/CURRENT"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
-# Plan: fixture
-<!-- profile: opus-tier ; size: L -->
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-HEADER-NOTE-KEEP
-
-## M1: groundwork [done]
-- verify: `true`
-- risk: low
-
-<!-- DONE-NOTE-HIDE: long retrospective commentary -->
-
-## M2: current [in_progress]
-- verify: `true`
-- risk: high
-
-<!-- CURRENT-NOTE-KEEP: exactly what the executor needs -->
-
-## M3: future [pending]
-- verify: `test -s artifact.md`
-- risk: med
-
-<!-- FUTURE-NOTE-HIDE: design ahead of its time -->
-PEOF
+printf '# Demo task\n<!-- card v4 ; pair: off ; base: - ; estimate: 1h 50L -->\nGoal: closed\n## Slices\n- [x] S1 first — lanes: smoke ; codex: no ✓ smoke@0123456789ab check@0123456789ac\nClosed: tree:0123456789ab 2026-10-28\n' > "$T/card.md"
+head -c 100 /dev/zero | tr '\0' n > "$T/notes.md"
 out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
-echo "$out" | grep -q '(filtered view' && ok "filtered view self-declares" || no "no filter declaration"
-echo "$out" | grep -q 'HEADER-NOTE-KEEP' && ok "plan header block kept" || no "header block lost"
-echo "$out" | grep -q 'CURRENT-NOTE-KEEP' && ok "armed milestone keeps its full section" || no "armed section truncated"
-echo "$out" | grep -q 'DONE-NOTE-HIDE' && no "done-milestone commentary leaked" || ok "done-milestone commentary filtered"
-echo "$out" | grep -q 'FUTURE-NOTE-HIDE' && no "future-milestone commentary leaked" || ok "future-milestone commentary filtered"
-echo "$out" | grep -q '## M3: future \[pending\]' && ok "all milestone headings survive" || no "heading lost"
-echo "$out" | grep -c 'test -s artifact.md' >/dev/null && ok "non-current verify lines survive (gate contract visible)" || no "verify line lost"
-# oversized armed section still warns
-python3 - "$D/.ai_context/tasks/demo/plan.md" <<'PY'
+echo "$out" | grep -q 'is Closed but tasks/CURRENT still points at it' && ok "Closed card + CURRENT nudges /wrap" || no "closed-but-unwrapped state got no nudge"
+echo "$out" | grep -q 'notes.md is' && no "small notes.md falsely size-warned" || ok "small notes.md stays quiet"
+sed -i '/^Closed:/d' "$T/card.md"
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -q 'is Closed but' && no "open task falsely nudged to wrap" || ok "a card without Closed: gets no wrap nudge"
+head -c 17000 /dev/zero | tr '\0' n > "$T/notes.md"
+out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
+echo "$out" | grep -qF 'WARNING: tasks/demo/notes.md is 17000 bytes (cap 16384)' && ok "oversized notes.md warned (D13)" || no "17 KB notes.md went unseen"
+
+echo "=== L1-31 · session-start v4: card cap, idle, evidence line, CLAUDE.md size"
+D="$WORK/l131"; mkproj "$D"; mklanes "$D" "$LANE_SMOKE"
+printf '_Last updated: %s_\n' "$(date +%F)" > "$D/.ai_context/state.md"; printf 'idx\n' > "$D/.ai_context/INDEX.md"
+mkcard "$D" demo off '- [~] S1 first — lanes: smoke ; codex: no'; C="$D/.ai_context/tasks/demo/card.md"; cp "$C" "$WORK/c131"
+printf 'NOTES-MARKER\n' > "$D/.ai_context/tasks/demo/notes.md"
+ss() { CLAUDE_PROJECT_DIR="$1" bash "$SS" </dev/null > "$WORK/ss.out" 2>&1; }
+ss "$D"
+grep -q 'NOTES-MARKER' "$WORK/ss.out" && no "notes.md injected" || ok "notes.md is never injected"
+grep -qF '=== evidence (scripts/evidence.sh status --line) ===' "$WORK/ss.out" && ok "one evidence status line rides along" || no "evidence line missing: $(tail -n 5 "$WORK/ss.out")"
+python3 -I -c 'import sys; open(sys.argv[1], "w").write("".join(("CARD-HEAD" if i == 0 else "CARD-TAIL" if i == 90 else "- filler %03d" % i).ljust(49, ".") + "\n" for i in range(100)))' "$C"
+ss "$D"
+{ grep -q 'CARD-HEAD' "$WORK/ss.out" && ! grep -q 'CARD-TAIL' "$WORK/ss.out"; } && ok "a 5000 B card is injected up to the cap (head in, byte-4500 tail out)" || no "oversized card injection wrong"
+{ grep -qF 'TRUNCATED: first 4096 of 5000 bytes' "$WORK/ss.out" && grep -qF 'WARNING: card.md is 5000 bytes (cap 4096)' "$WORK/ss.out"; } && ok "truncation is announced (header + WARNING)" || no "truncation not announced"
+python3 -I - "$WORK/ss.out" "$C" <<'PY' && ok "the injected part is <= 4096 B of whole card lines" || no "truncated injection is not a whole-line prefix <= 4096 B"
 import sys
-p = sys.argv[1]
-s = open(p).read()
-s = s.replace('<!-- CURRENT-NOTE-KEEP: exactly what the executor needs -->',
-              '<!-- CURRENT-NOTE-KEEP ' + 'x' * 9000 + ' -->')
-open(p, 'w').write(s)
+out, card = open(sys.argv[1], "rb").read(), open(sys.argv[2], "rb").read()
+s = out.index(b"\n", out.index(b"(TRUNCATED: first 4096")) + 1
+body = out[s:out.index(b"WARNING: card.md is", s)]
+sys.exit(0 if len(body) <= 4096 and body.endswith(b"\n") and card.startswith(body) else 1)
 PY
-out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
-echo "$out" | grep -q 'filtered plan view is' && ok "oversized filtered view warns" || no "no size warning on bloated armed section"
-
-echo "=== L1-3c · task lifecycle warnings (F22, F23)"
-D="$WORK/l13e"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# n\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-printf '_Last updated: %s_\n' "$(date +%F)" > "$D/.ai_context/state.md"
-printf 'idx\n' > "$D/.ai_context/INDEX.md"
+cp "$WORK/c131" "$C"
+Di="$WORK/l131i"; OLD=1 mkproj "$Di"; mkcard "$Di" demo off '- [~] S1 first — lanes: smoke ; codex: no'
+touch -d '8 days ago' "$Di/.ai_context/tasks/demo/card.md" "$Di/.ai_context/tasks/demo/donelog"
+ss "$Di"
+grep -q 'CARD-MARKER' "$WORK/ss.out" && no "an idle card was injected" || ok "an idle card (card, donelog, task/demo 8 days old) is not injected"
+grep -q 'has been idle 8 days' "$WORK/ss.out" && ok "the idle task gets a one-line NOTE" || no "idle NOTE missing: $(cat "$WORK/ss.out")"
+touch "$Di/.ai_context/tasks/demo/card.md"; ss "$Di"
+grep -q 'CARD-MARKER' "$WORK/ss.out" && ok "editing the card re-activates injection" || no "touched card still idle"
+cp "$D/CLAUDE.md" "$WORK/cl131"; { cat "$WORK/cl131"; head -c $((21000 - $(wc -c < "$WORK/cl131"))) /dev/zero | tr '\0' x; } > "$D/CLAUDE.md"
+ss "$D"
+grep -qF 'WARNING: CLAUDE.md is 21000 bytes (cap 20480)' "$WORK/ss.out" && ok "CLAUDE.md over 20480 B warned" || no "21000 B CLAUDE.md not warned"
+mkdir -p "$WORK/l131n"; cp "$D/CLAUDE.md" "$WORK/l131n/"; ss "$WORK/l131n"
+grep -qF 'WARNING: CLAUDE.md is 21000 bytes (cap 20480)' "$WORK/ss.out" && ok "the CLAUDE.md warning needs no .ai_context" || no "CLAUDE.md warning gated on .ai_context"
+cp "$WORK/cl131" "$D/CLAUDE.md"; mv "$D/scripts/evidence.sh" "$WORK/ev131.sh"; ss "$D"
+{ grep -qF 'WARNING: scripts/evidence.sh is missing' "$WORK/ss.out" && grep -q 'CARD-MARKER' "$WORK/ss.out"; } && ok "missing evidence.sh warned, card still injected" || no "missing evidence.sh path wrong"
+cp "$WORK/stub-ev-line-fail.sh" "$D/scripts/evidence.sh"; ss "$D"; mv "$WORK/ev131.sh" "$D/scripts/evidence.sh"
+grep -qF 'WARNING: evidence.sh status --line failed (rc 1)' "$WORK/ss.out" && ok "a failing status --line is a WARNING, not silence" || no "status --line failure unseen"
+mkdir -p "$D/.ai_context/tasks/v3t"; printf '# Plan: v3\n## M1: x [in_progress]\n' > "$D/.ai_context/tasks/v3t/plan.md"; echo v3t > "$D/.ai_context/tasks/CURRENT"; ss "$D"
+{ grep -q 'a v3 plan.md task without card.md' "$WORK/ss.out" && ! grep -q 'CARD-MARKER' "$WORK/ss.out"; } && ok "a v3 plan.md CURRENT is named, nothing injected (R15)" || no "v3 CURRENT path wrong"
 echo demo > "$D/.ai_context/tasks/CURRENT"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
-# Plan: fixture
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: a [done]
-- verify: `true`
-- risk: low
-
-## M2: b [done]
-- verify: `true`
-- risk: low
-PEOF
-out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
-echo "$out" | grep -q 'run /wrap to write the scoreboard row' && ok "all-done + CURRENT nudges close-out (F22)" || no "finished-but-unclosed state got no nudge"
-echo "$out" | grep -q 'raw plan.md is' && no "small plan falsely size-warned" || ok "small raw plan stays quiet"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
-out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
-echo "$out" | grep -q 'run /wrap to write the scoreboard row' && no "in-flight task falsely nudged to close" || ok "in-flight task gets no close-out nudge"
-python3 - "$D/.ai_context/tasks/demo/plan.md" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-open(p,'w').write(s + '\n<!-- pad ' + 'x'*17000 + ' -->\n')
-PY
-out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
-echo "$out" | grep -q 'raw plan.md is' && ok "oversized raw plan.md warned (F23)" || no "40 KB-class raw plan went unseen"
-echo "$out" | grep -q 'filtered plan view is' && no "pad leaked into the filtered view" || ok "filtered view stays small (pad filtered out)"
 
 echo "=== L1-4 · sync: --update-stock + --adopt"
 if [ ! -f "$REPO/sync-project.sh" ]; then
@@ -783,6 +808,16 @@ if [ -f "$REPO/sync-project.sh" ]; then
     grep -q "^copy_if_missing $f\$" "$REPO/sync-project.sh" || unpaired="$unpaired $f"
   done < <(grep -o '^stock_update [^ ]*' "$REPO/sync-project.sh" | awk '{print $2}')
   [ -z "$unpaired" ] && ok "every stock_update file is installable when absent (copy_if_missing pair)" || no "stock_update without copy_if_missing pair:$unpaired"
+  # sync-project.sh manifest completeness: every shipped mechanism file must
+  # be named there, or spawned-then-synced projects silently miss additions
+  # (exactly how the v3.12 scripts were first forgotten). Every skill file
+  # counts (v4: setup/verify-template.md), and NOTICE ships with them; a
+  # whole-line match, since a bare substring hits comments too.
+  miss=""
+  for f in $(cd "$REPO" && ls scripts/*.sh .claude/hooks/*.sh .claude/agents/*.md .claude/skills/*/*.md NOTICE .claude/gitleaks.toml 2>/dev/null); do
+    grep -qxF "copy_if_missing $f" "$REPO/sync-project.sh" || miss="$miss $f"
+  done
+  [ -z "$miss" ] && ok "sync-project.sh manifest covers every mechanism file" || no "sync-project.sh manifest missing:$miss"
   D="$WORK/l14a/existing"; mkdir -p "$D/src"; echo 'x=1' > "$D/src/m.py"
   "$REPO/sync-project.sh" "$D" >/dev/null 2>&1 && no "non-starter accepted without --adopt" || ok "non-starter rejected without --adopt"
   out=$("$REPO/sync-project.sh" --adopt "$D" 2>&1)
@@ -806,10 +841,10 @@ if [ -f "$REPO/sync-project.sh" ]; then
   printf '# p\n\n## Definition of done\n\n- Every reported number passed `/number-check`.\n' > "$D8/CLAUDE.md"
   out3=$("$REPO/sync-project.sh" "$D8" 2>&1)
   echo "$out3" | grep -q 'new skill /number-check installed' && no "number-check suggested to a CLAUDE.md that already names it" || ok "no number-check suggestion when CLAUDE.md already names it"
-  echo "$out3" | grep -q 'logs verifier spawns as' && no "verifier-class suggestion on a stock settings.json" || ok "stock settings.json carries the verifier class (no suggestion)"
-  sed -i.bak -e 's/"matcher": "verifier"/"matcher": "verifier-old"/' -e 's/spawn-log.sh\\" verifier/spawn-log.sh\\" other/' "$D8/.claude/settings.json" && rm -f "$D8/.claude/settings.json.bak"
+  echo "$out3" | grep -qE 'has no SubagentStop wiring|lacks the v4 evidence (denies|\.sh rules)|still carries v3 task wiring' && no "settings suggestion on a stock v4 settings.json" || ok "stock v4 settings.json gets no settings suggestion (S2-S4)"
+  sed -i.bak 's/"matcher": "checker"/"matcher": "verifier"/' "$D8/.claude/settings.json" && rm -f "$D8/.claude/settings.json.bak"
   out4=$("$REPO/sync-project.sh" "$D8" 2>&1)
-  echo "$out4" | grep -q 'logs verifier spawns as "other"' && ok "customized pre-class settings.json gets the verifier-matcher suggestion" || no "verifier-matcher suggestion missing for a customized settings.json"
+  echo "$out4" | grep -q 'settings.json still carries v3 task wiring' && ok "a settings.json with a v3 verifier matcher gets the v3-wiring suggestion (S4)" || no "v3-wiring suggestion missing for a verifier matcher"
 else
   skp "sync pairing + adopt tests (spawned project — template-repo only)"
 fi
@@ -843,37 +878,6 @@ fb_gp=$(grep -o "GUARD_SETUP_SENTINEL='[^']*'" "$REPO/.claude/hooks/guard-patter
 fb_ss=$(grep -o "GUARD_SETUP_SENTINEL='[^']*'" "$SS" | head -1)
 fb_sg=$(grep -o "GUARD_SETUP_SENTINEL='[^']*'" "$GATE" | head -1)
 { [ -n "$fb_gp" ] && [ "$fb_ss" = "$fb_gp" ] && [ "$fb_sg" = "$fb_gp" ]; } && ok "sentinel pattern identical: helper + both hook fallbacks (F13)" || no "sentinel pattern drift between the two layers (ADR-004)"
-
-printf '# ok\n## Commands\n- Test: \`true\`\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'EOF'
-# Plan: fixture
-<!-- profile: opus-tier ; size: S -->
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: a [done]
-- verify: `true`
-- risk: low
-
-## M2: b [pending]
-- verify: `true`
-- risk: low
-EOF
-out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
-echo "$out" | grep -q 'milestone gate is OFF' && ok "pending-without-in_progress warned (typo net)" || no "status-corruption warning missing"
-printf '{"session_id": "tsuite-s2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "status typo (done+pending, no in_progress) blocks first stop (integrity)"
-printf '{"session_id": "tsuite-s2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "status-typo integrity yields on second stop (marker)"
-grep -q 'INTEGRITY' "$D/.ai_context/tasks/demo/gatelog" && ok "INTEGRITY row logged for dark-gate state" || no "INTEGRITY row missing"
-
-printf 'BRIEF-CONTENT-MARKER\n' > "$D/.ai_context/tasks/demo/brief.md"
-python3 - "$D/.ai_context/tasks/demo/lessons.md" <<'PY'
-import sys; open(sys.argv[1],'w').write('lesson line\n'*500)
-PY
-out=$(CLAUDE_PROJECT_DIR="$D" bash "$SS" </dev/null 2>&1)
-echo "$out" | grep -q 'BRIEF-CONTENT-MARKER' && ok "brief.md injected on active task" || no "brief.md not injected"
-echo "$out" | grep -q 'cap 4096' && ok "oversized lessons.md warned" || no "lessons cap warning missing"
 
 mkdir -p "$D/.claude/hooks"
 cp "$REPO/.claude/hooks/post-edit.sh" "$D/.claude/hooks/"
@@ -925,7 +929,7 @@ grep -q '^| 2 | fresh `executor` | .*premise' "$REPO/.claude/skills/task/SKILL.m
 grep -q 'exit 0 = vacuous' "$REPO/.claude/agents/plan-critic.md" && grep -q '126/127' "$REPO/.claude/agents/plan-critic.md" && ok "plan-critic observes fails-today (runs risk:low verifies)" || no "plan-critic lost the observed-red check"
 grep -qF 'Read(./**/.env)' "$REPO/.claude/settings.json" && ok "nested .env read-deny present" || no "nested .env deny missing"
 grep -qxF '**/.env' "$REPO/.gitignore" && ok "nested .env gitignored" || no "nested .env gitignore missing"
-grep -q 'gate-cache' "$REPO/.gitignore" && ok "gate-cache gitignored (fingerprint-safe)" || no "gate-cache ignore missing"
+grep -qF '.ai_context/tasks/*/pair/.fp-*' "$REPO/.gitignore" && ok "pair/.fp-* gitignored (in-flight fingerprints never memory)" || no "pair/.fp-* ignore missing"
 grep -qF 'Read(./.secrets/**)' "$REPO/.claude/settings.json" && grep -qF 'Read(./**/.secrets/**)' "$REPO/.claude/settings.json" && ok "secrets-dir read-deny present (root + nested)" || no "secrets-dir read-deny missing"
 grep -qxF '.secrets/*' "$REPO/.gitignore" && grep -qxF '!.secrets/.gitkeep' "$REPO/.gitignore" && ok "secrets-dir gitignored, placeholder excepted (contents-form)" || no "secrets-dir gitignore block wrong"
 grep -qxF '*.pem' "$REPO/.gitignore" && grep -qxF 'id_rsa*' "$REPO/.gitignore" && ok "key-material gitignored (closes the read-deny asymmetry)" || no "pem/id_rsa gitignore missing"
@@ -961,155 +965,6 @@ tail -1 "$SK/backtest-check/SKILL.md" 2>/dev/null | grep -q '^<!-- Rules from th
 [ -z "$miss" ] && ok "adapted skills end with a Source line citing NOTICE; backtest-check cites its own origin" || no "source line missing or wrong:$miss"
 f="$SK/number-check/SKILL.md"
 { grep -q '^description: .*Eight questions' "$f" && grep -qF 'Does an outside source agree?' "$f" && grep -qF 'Is it possible' "$f"; } && ok "number-check: eight questions incl. hard range and outside-source cross-check" || no "number-check lost Eight questions, the Q3 range or the Q8 cross-check"
-
-echo "=== L1-7 · stop-gate PASS-cache (git-fingerprinted)"
-D="$WORK/l17"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: \`true\`\n' > "$D/CLAUDE.md"
-printf '.ai_context/tasks/*/.gate-cache\n' > "$D/.gitignore"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
-git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm base
-git -C "$D" checkout -qb task/demo
-printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "green run 1 prompts the boundary (verify ran, cache written)"
-printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "green verify passes (run 2, unchanged tree)"
-n=$(grep -c 'PASS' "$D/.ai_context/tasks/demo/gatelog")
-[ "$n" -eq 1 ] && ok "unchanged tree hit PASS-cache (1 gatelog row, not 2)" || no "PASS-cache missed ($n rows)"
-echo change > "$D/newfile.txt"
-printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-n=$(grep -c 'PASS' "$D/.ai_context/tasks/demo/gatelog")
-[ "$n" -eq 2 ] && ok "tree change invalidated the cache (re-ran verify)" || no "cache not invalidated ($n rows)"
-printf 'chAnge\n' > "$D/newfile.txt"
-printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-n=$(grep -c 'PASS' "$D/.ai_context/tasks/demo/gatelog")
-[ "$n" -eq 3 ] && ok "same-size untracked edit invalidated the cache (content hash)" || no "same-size edit missed ($n rows)"
-grep -q "	M2	PASS	true" "$D/.ai_context/tasks/demo/gatelog" && ok "gatelog rows carry the verify command" || no "gatelog command column missing"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "false"
-printf '{"session_id": "tsuite-c1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "red verify still blocks after prior caching"
-[ ! -f "$D/.ai_context/tasks/demo/.gate-cache" ] && ok "FAIL clears the cache" || no "stale cache survives a FAIL"
-
-echo "=== L1-10 · gate integrity: no silent disarm"
-D="$WORK/l110"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-: > "$D/.ai_context/tasks/CURRENT"
-printf '{"session_id": "tsuite-i1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "empty CURRENT blocks (integrity)"
-printf '{"session_id": "tsuite-i1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "empty-CURRENT integrity yields on second stop (marker)"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-err=$(printf '{"session_id": "tsuite-i2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "CURRENT without plan.md blocks (integrity)"
-echo "$err" | grep -q 'mid-intake' && ok "missing-plan message names the legitimate pause" || no "missing-plan message unhelpful"
-grep -q 'INTEGRITY' "$D/.ai_context/tasks/demo/gatelog" && ok "INTEGRITY row written to gatelog" || no "INTEGRITY row missing"
-printf 'not a plan\n' > "$D/.ai_context/tasks/demo/plan.md"
-printf '{"session_id": "tsuite-i3"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "heading-less plan.md blocks (integrity)"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'EOF'
-# Plan: fixture
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: only [in_progress]
-- risk: low
-EOF
-printf '{"session_id": "tsuite-i4"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "[in_progress] without a verify command blocks (integrity)"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'EOF'
-# Plan: fixture
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: a [pending]
-- verify: `true`
-- risk: low
-
-## M2: b [pending]
-- verify: `true`
-- risk: low
-EOF
-printf '{"session_id": "tsuite-i5"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "all-pending intake pause passes (no false block)"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'EOF'
-# Plan: fixture
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: a [done]
-- verify: `true`
-- risk: low
-EOF
-printf '{"session_id": "tsuite-i6"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "all-done wrap-up passes (no false block)"
-write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned && git push origin main'
-err=$(printf '{"session_id": "tsuite-i7"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "forbidden verify (git push) blocks"
-[ ! -f "$D/pwned" ] && ok "forbidden verify was NOT executed" || no "forbidden verify RAN"
-echo "$err" | grep -q 'NOT run' && ok "refusal message explains the denylist" || no "refusal message missing"
-printf '{"session_id": "tsuite-i7"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "forbidden verify keeps blocking (no once-per-session yield)"
-grep -q 'forbidden verify' "$D/.ai_context/tasks/demo/gatelog" && ok "forbidden verify logged (INTEGRITY row)" || no "forbidden-verify row missing"
-# Denylist regression net (F8/F21): every entry plus the near-miss spellings
-# that bypassed the v3.9 substring matcher. The pwned probe proves refusal
-# happened BEFORE execution; the rm target is a nonexistent path so a missed
-# match stays harmless while still leaving the probe file as evidence.
-write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-sudo && sudo true'
-printf '{"session_id": "tsuite-f1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "forbidden verify (sudo) blocks"
-[ ! -f "$D/pwned-sudo" ] && ok "sudo verify was NOT executed" || no "sudo verify RAN"
-write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-rm && rm -rf /nonexistent-starter-probe'
-printf '{"session_id": "tsuite-f2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "forbidden verify (rm -rf abs) blocks"
-[ ! -f "$D/pwned-rm" ] && ok "rm -rf verify was NOT executed" || no "rm -rf verify RAN"
-write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-fr && rm -fr /nonexistent-starter-probe'
-printf '{"session_id": "tsuite-f3"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "near-miss spelling rm -fr blocks (F8 bypass closed)"
-[ ! -f "$D/pwned-fr" ] && ok "rm -fr verify was NOT executed" || no "rm -fr verify RAN (F8 regressed)"
-write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-split && rm -r -f /nonexistent-starter-probe'
-printf '{"session_id": "tsuite-f4"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "near-miss spelling rm -r -f blocks"
-[ ! -f "$D/pwned-split" ] && ok "split-flag rm verify was NOT executed" || no "split-flag rm verify RAN"
-write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-dsp && rm  -rf /nonexistent-starter-probe'
-printf '{"session_id": "tsuite-f5"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "near-miss spelling rm<double-space>-rf blocks"
-[ ! -f "$D/pwned-dsp" ] && ok "double-space rm verify was NOT executed" || no "double-space rm verify RAN"
-write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-gp && git  push origin main'
-printf '{"session_id": "tsuite-f6"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "near-miss spelling git<double-space>push blocks"
-[ ! -f "$D/pwned-gp" ] && ok "double-space push verify was NOT executed" || no "double-space push verify RAN"
-# Negative control: relative-path rm is legitimate cleanup, never refused.
-# (The green boundary prompt is rc 2 too, so distinguish via stderr text.)
-write_plan "$D/.ai_context/tasks/demo/plan.md" 'mkdir -p scratch-dir && rm -rf scratch-dir'
-err=$(printf '{"session_id": "tsuite-f7"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "relative rm -rf verify runs green (boundary prompt, not a refusal)"
-echo "$err" | grep -q 'GATE REFUSED' && no "relative rm -rf falsely refused (matcher false positive)" || ok "no forbidden-verify false positive"
-echo "$err" | grep -q 'MILESTONE COMPLETE' && ok "verify actually ran and passed" || no "green boundary prompt missing"
-
-# F9: log-always / interrupt-once — a second distinct dark state in the
-# SAME session still reaches the audit trail (one interrupt, two rows).
-D="$WORK/l110f9"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-printf '{"session_id": "tsuite-f9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "dark state 1 (missing plan) interrupts"
-printf 'not a plan\n' > "$D/.ai_context/tasks/demo/plan.md"
-printf '{"session_id": "tsuite-f9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "dark state 2 (heading-less plan) gets its OWN interrupt (per-class, v3.14)"
-printf '{"session_id": "tsuite-f9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "same dark-state class yields on repeat (marker spent)"
-n_int=$(grep -c "	INTEGRITY	" "$D/.ai_context/tasks/demo/gatelog")
-[ "$n_int" = 3 ] && ok "every dark-state stop left an INTEGRITY row (log-always)" || no "INTEGRITY rows: want 3 got $n_int — a dark state went unrecorded"
-
-D="$WORK/l110b"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
-git -C "$D" init -q -b main 2>/dev/null || { git -C "$D" init -q && git -C "$D" checkout -qb main; }
-git -C "$D" add -A && git -C "$D" commit -qm base
-printf '{"session_id": "tsuite-i8"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "active task on main blocks (integrity)"
-git -C "$D" checkout -qb task/demo
-err=$(printf '{"session_id": "tsuite-i9"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "task branch arms the gate (boundary prompt, not an integrity block)"
-grep -q "	M2	PASS" "$D/.ai_context/tasks/demo/gatelog" && ok "verify ran and passed on the task/ branch" || no "no PASS row on task/ branch"
 
 echo "=== L1-11 · harness-report.sh (scoring is computed, never recalled)"
 D="$WORK/l111"; mkdir -p "$D/.ai_context/tasks/t1" "$D/.ai_context/tasks/live"
@@ -1158,103 +1013,6 @@ if [ -f "$REPO/sync-project.sh" ]; then
 else
   skp "sync ships harness-report.sh (spawned project — template-repo only)"
 fi
-
-echo "=== L1-12 · zero-stop sweep: no vacuous gatelogs"
-D="$WORK/l112"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'EOF'
-# Plan: fixture
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: earlier [done]
-- verify: `false`
-- risk: low
-
-## M2: final [done]
-- verify: `true`
-- risk: low
-EOF
-printf '{"session_id": "tsuite-z1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "all-done zero-stop wrap-up passes when the final verify is green"
-grep -q "	M2	PASS" "$D/.ai_context/tasks/demo/gatelog" && ok "final [done] milestone verified at wrap (PASS row)" || no "final milestone not swept"
-grep -q "	M1	UNARMED" "$D/.ai_context/tasks/demo/gatelog" && ok "earlier rowless [done] recorded UNARMED (verify NOT re-run — point-in-time gate)" || no "UNARMED row missing"
-zn=$(grep -c '' "$D/.ai_context/tasks/demo/gatelog")
-printf '{"session_id": "tsuite-z1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-[ "$(grep -c '' "$D/.ai_context/tasks/demo/gatelog")" -eq "$((zn + 1))" ] && ok "non-git final verify re-runs; earlier UNARMED is not duplicated" || no "non-git sweep evidence incorrect"
-sed -i.bak 's/## M2: final \[done\]/## M3: red [done]/; s/- verify: `true`/- verify: `false`/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
-printf '{"session_id": "tsuite-z1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "red final [done] verify blocks the wrap-up turn"
-printf '{"session_id": "tsuite-z1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "red sweep keeps blocking (no once-per-session yield)"
-grep -q "	M3	FAIL" "$D/.ai_context/tasks/demo/gatelog" && ok "sweep FAIL row logged with the enforced command" || no "sweep FAIL row missing"
-D2="$WORK/l112b"; mkdir -p "$D2/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D2/CLAUDE.md"
-echo demo > "$D2/.ai_context/tasks/CURRENT"
-write_plan "$D2/.ai_context/tasks/demo/plan.md" "true"
-CLAUDE_PROJECT_DIR="$D2" bash "$GATE" --sweep >/dev/null 2>&1
-ck 0 $? "--sweep exits 0 mid-task (what /wrap calls before deleting CURRENT)"
-grep -q "	M1	UNARMED" "$D2/.ai_context/tasks/demo/gatelog" && ok "--sweep records UNARMED for the rowless earlier [done]" || no "--sweep UNARMED missing"
-grep -q "	M2	" "$D2/.ai_context/tasks/demo/gatelog" && no "--sweep touched a non-[done] milestone" || ok "--sweep leaves [in_progress]/[pending] milestones alone"
-D3="$WORK/l112c"; mkdir -p "$D3/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D3/CLAUDE.md"
-echo demo > "$D3/.ai_context/tasks/CURRENT"
-printf '# Plan: f\n<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->\n\n## M1: only [done]\n- verify: `touch pwned && git push origin main`\n- risk: low\n' > "$D3/.ai_context/tasks/demo/plan.md"
-CLAUDE_PROJECT_DIR="$D3" bash "$GATE" --sweep >/dev/null 2>&1
-ck 2 $? "--sweep refuses a forbidden final verify"
-[ ! -f "$D3/pwned" ] && ok "--sweep forbidden verify was NOT executed" || no "--sweep ran a forbidden verify"
-grep -q 'forbidden verify' "$D3/.ai_context/tasks/demo/gatelog" && ok "--sweep forbidden logged as INTEGRITY" || no "--sweep forbidden row missing"
-
-
-echo "=== L1-12b · completion verifies the current tree and command"
-D="$WORK/l112d"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# configured\n' > "$D/CLAUDE.md"
-printf '.ai_context/tasks/*/.gate-cache\n' > "$D/.gitignore"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-printf 'good\n' > "$D/payload.txt"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
-# Plan: final freshness
-## M1: final [in_progress]
-- verify: `test "$(cat payload.txt)" = good`
-- risk: low
-PEOF
-git -C "$D" init -q && git -C "$D" add -A && git -C "$D" commit -qm base
-git -C "$D" checkout -qb task/demo
-printf '{"session_id":"tsuite-final-fp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "final fixture records a real in-progress PASS"
-sed -i 's/\[in_progress\]/[done]/' "$D/.ai_context/tasks/demo/plan.md"
-printf 'evil\n' > "$D/payload.txt"
-printf '{"session_id":"tsuite-final-fp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "all-done Stop rejects changed code despite historical PASS"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-ck 2 $? "explicit sweep rejects changed code despite historical PASS"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-ck 2 $? "explicit sweep stays red on repeat"
-[ ! -f "$D/.ai_context/tasks/demo/.gate-cache" ] && ok "final failure clears PASS-cache" || no "final failure left stale cache"
-printf 'good\n' > "$D/payload.txt"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-ck 0 $? "repaired final verify passes"
-final_n=$(grep -c PASS "$D/.ai_context/tasks/demo/gatelog")
-printf '{"session_id":"tsuite-final-fp"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "unchanged all-done Stop passes"
-[ "$(grep -c PASS "$D/.ai_context/tasks/demo/gatelog")" -eq "$final_n" ] && ok "unchanged final tree uses fingerprint cache" || no "final cache missed"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-ck 0 $? "explicit sweep revalidates a cached final PASS"
-[ "$(grep -c PASS "$D/.ai_context/tasks/demo/gatelog")" -eq "$((final_n + 1))" ] && ok "explicit sweep executes verify even when cached" || no "explicit sweep trusted cached PASS"
-# Even an ignored plan must not hide a changed verify command from the cache.
-git -C "$D" rm --cached -q .ai_context/tasks/demo/plan.md
-printf '.ai_context/tasks/*/plan.md\n' >> "$D/.gitignore"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-sed -i 's/^- verify:.*/- verify: `false`/' "$D/.ai_context/tasks/demo/plan.md"
-printf '{"session_id":"tsuite-final-command"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "same milestone with changed ignored verify cannot use old PASS"
-sed -i 's/^- verify:.*/- verify: `touch forbidden-ran \&\& git push origin main`/' "$D/.ai_context/tasks/demo/plan.md"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-ck 2 $? "prior PASS cannot hide a forbidden final verify"
-[ ! -f "$D/forbidden-ran" ] && ok "forbidden final verify was never executed" || no "forbidden final verify ran"
-sed -i '/^- verify:/d' "$D/.ai_context/tasks/demo/plan.md"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-ck 2 $? "removing final verify cannot turn a historical PASS into completion"
 
 echo "=== L1-13 · bash-guard: catastrophic-op tripwire (PreToolUse)"
 BG="$REPO/.claude/hooks/bash-guard.sh"
@@ -1305,7 +1063,6 @@ out=$(bgp 'rm -rf ../sibling' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null);
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "parent-traversal rm -rf (..) asks (v3.14.3)" || no ".. rm -rf passes silently (guard hole)"
 out=$(bgp 'rm -rf ./build' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "dot-relative rm -rf still passes silently" || no "./ rm -rf flagged (false positive)"
-( . "$REPO/.claude/hooks/guard-patterns.sh"; guard_forbidden_verify "rm -rf ~/x" ) && ok "stop-gate refuses a ~/ rm -rf verify (shared matcher, v3.14.3)" || no "stop-gate lets a ~/ rm -rf verify through"
 # v3.14.4: the ask tier reads a probe — heredoc bodies dropped, the project's own
 # tree scrubbed like the scratchpad. The deny tier still reads the full text.
 # The fixture dir lives under /tmp, which v3.14.5 exempts wholesale below one
@@ -1370,7 +1127,6 @@ out=$(bgp 'rm -rf /tmp/foo /var/x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/n
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "second target outside /tmp beside a /tmp/<name> still asks" || no "/tmp scrub swallowed a second target"
 out=$(bgp 'rm -rf /tmp/claude-1000' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "the whole /tmp/claude-<uid> tree passes (documented edge, ADR-026)" || no "/tmp/claude-<uid> handling changed — update the edge note"
-( . "$REPO/.claude/hooks/guard-patterns.sh"; guard_forbidden_verify "rm -rf /tmp/foo" ) && ok "stop-gate still refuses a /tmp/<name> rm -rf verify (exemption not shared)" || no "stop-gate inherited the /tmp exemption"
 out=$(bgp 'cat .env' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok ".env access downgraded to ask (H1)" || no ".env access not asked"
 out=$(bgp 'cat .env.example' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
@@ -1385,9 +1141,6 @@ out=$(bgp 'ls foo.secrets/x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); 
 # ships it — the drift the two hand-mirrored v3.9 copies allowed is closed.
 [ -f "$REPO/.claude/hooks/guard-patterns.sh" ] && ok "guard-patterns.sh exists (shared matcher source)" || no "guard-patterns.sh missing"
 grep -q 'guard-patterns\.sh' "$REPO/.claude/hooks/stop-gate.sh" && grep -q 'guard-patterns\.sh' "$REPO/.claude/hooks/bash-guard.sh" && ok "both hooks source the shared matchers" || no "a hook does not source guard-patterns.sh (drift risk)"
-# The scratchpad exemption is bash-guard-only: verifies execute unattended at
-# turn end, so the stop-gate denylist keeps refusing scratchpad deletes.
-( . "$REPO/.claude/hooks/guard-patterns.sh"; guard_forbidden_verify "rm -rf $SP/build" ) && ok "stop-gate still refuses a scratchpad rm -rf verify (exemption not shared)" || no "stop-gate inherited the scratchpad exemption"
 if [ -f "$REPO/sync-project.sh" ]; then
   grep -q '^copy_if_missing \.claude/hooks/guard-patterns\.sh$' "$REPO/sync-project.sh" && grep -q '^stock_update \.claude/hooks/guard-patterns\.sh$' "$REPO/sync-project.sh" && ok "sync ships guard-patterns.sh (add + stock-update)" || no "sync does not ship guard-patterns.sh"
 else
@@ -1400,6 +1153,92 @@ grep -qF '"Bash(git push --force:*)"' "$REPO/.claude/settings.json" && ok "decla
 grep -qF '"ask"' "$REPO/.claude/settings.json" && grep -qF '"Bash(git push:*)"' "$REPO/.claude/settings.json" && ok "ask tier present (push/reset/clean/sudo)" || no "ask tier missing"
 for r in 'Bash(rm -rf ~/*)' 'Bash(rm -rf $HOME/*)' 'Bash(rm -rf ../*)'; do grep -qF "\"$r\"" "$REPO/.claude/settings.json" && ok "declarative ask rule present: $r (v3.14.3 — prompts even under bypass, where hook asks are dropped)" || no "declarative ask rule missing: $r"; done
 grep -qF '"Bash(rm -rf:*)"' "$REPO/.claude/settings.json" && no "rm -rf ask rule back in settings.json — declarative ask rules prompt in every mode incl. bypass, per subcommand, and no hook exemption reaches them (v3.14.2)" || ok "no declarative rm -rf ask rule: bash-guard is the single rm tier (v3.14.2)"
+
+echo "=== L1-32 · bash-guard, settings and guard-patterns (v4)"
+# ask = rc 0 + a permissionDecision ask; silent = rc 0 + empty stdout.
+bgo() { bgp "$2" | CLAUDE_PROJECT_DIR="$1" bash "${BG_BIN:-$BG}" > "$WORK/bg.out" 2>/dev/null; echo $?; }
+ask_is() { [ "$(bgo "$1" "$2")" = 0 ] && grep -q '"permissionDecision":"ask"' "$WORK/bg.out"; }
+silent() { [ "$(bgo "$1" "$2")" = 0 ] && [ ! -s "$WORK/bg.out" ]; }
+D="$WORK/l132"; mkproj "$D"; mkcard "$D" demo off '- [~] S1 first — lanes: smoke ; codex: no'
+Dn="$WORK/l132n"; mkdir -p "$Dn/.ai_context/tasks"
+Dc="$WORK/l132c"; mkdir -p "$Dc/.ai_context/tasks/demo"; echo demo > "$Dc/.ai_context/tasks/CURRENT"
+Di="$WORK/l132i"; OLD=1 mkproj "$Di"; mkcard "$Di" demo off '- [~] S1 first — lanes: smoke ; codex: no'
+touch -d '8 days ago' "$Di/.ai_context/tasks/demo/card.md" "$Di/.ai_context/tasks/demo/donelog"
+for c in 'git add -A' 'git add --all' 'git add .' 'git -C sub add -A' 'cd x && git add .' 'git checkout -- src/a.txt' 'git checkout HEAD~1 -- a b' 'git checkout .' \
+         'git restore src/a.txt' 'git stash' 'git stash pop' 'git stash list; git stash pop' 'git checkout -f' 'git switch --discard-changes main' 'git switch -f main'; do
+  ask_is "$D" "$c" && ok "task active: '$c' asks" || no "task active: '$c' not asked ($(cat "$WORK/bg.out"))"
+done
+for c in 'git add src/a.txt' 'git add -p' 'git checkout main' 'git checkout -b task/x' 'git stash list' 'git stash show -p' 'git switch main' 'git commit -a -m x'; do
+  silent "$D" "$c" && ok "task active: '$c' stays silent" || no "task active: '$c' flagged ($(cat "$WORK/bg.out"))"
+done
+silent "$Dn" 'git add -A' && ok "no CURRENT: git add -A stays silent" || no "git add -A asked without a task"
+silent "$Dc" 'git add -A' && ok "CURRENT without a card: git add -A stays silent" || no "git add -A asked without a card"
+silent "$Di" 'git stash' && ok "idle task: git stash stays silent" || no "git stash asked on an idle task"
+for c in 'cat .claude/evidence/smoke.jsonl' 'echo x >> .claude/evidence/smoke.jsonl' 'rm .claude/done-lanes.trust' 'bash scripts/evidence.sh show smoke > .claude/evidence/x'; do
+  ask_is "$Dn" "$c" && ok "ledger, no task: '$c' asks" || no "ledger: '$c' not asked ($(cat "$WORK/bg.out"))"
+done
+for s in 'run smoke' 'status --line' 'show smoke' 'done S1' 'close' 'lint' 'start S2'; do
+  silent "$D" "bash scripts/evidence.sh $s" && ok "evidence.sh $s stays silent" || no "evidence.sh $s flagged ($(cat "$WORK/bg.out"))"
+done
+{ ask_is "$D" 'bash scripts/evidence.sh trust smoke' && grep -q 'YOU approve this lane command' "$WORK/bg.out"; } && ok "evidence.sh trust asks: the human signs the lane" || no "trust not asked: $(cat "$WORK/bg.out")"
+ask_is "$D" 'bash scripts/evidence.sh approve' && ok "evidence.sh approve asks" || no "approve not asked"
+ask_is "$D" 'bash scripts/evidence.sh check S1 --agent fx --source human' && ok "evidence.sh check by hand asks" || no "check not asked"
+ask_is "$D" 'bash scripts/evidence.sh run smoke --escalated' && ok "run --escalated asks (past an ESCALATE)" || no "--escalated not asked"
+ask_is "$D" 'bash scripts/evidence.sh run smoke; rm .claude/evidence/smoke.jsonl' && ok "an allowed call chained with a ledger write asks" || no "chained ledger write not asked"
+{ ask_is "$D" 'bash scripts/evidence.sh codex p r completed ok' && grep -q 'writes a Codex review record' "$WORK/bg.out"; } && ok "evidence.sh codex by hand asks (A3b)" || no "codex not asked: $(cat "$WORK/bg.out")"
+ask_is "$D" 'bash scripts/task-pair.sh check slice S2 --over-estimate' && ok "task-pair.sh --over-estimate asks (Codex quota past the approval)" || no "--over-estimate not asked"
+ask_is "$D" 'echo x >> .ai_context/tasks/demo/donelog' && ok "appending to a donelog asks" || no "donelog append not asked"
+ask_is "$D" 'sed -i 1d .ai_context/tasks/demo/donelog' && ok "editing a donelog in place asks" || no "donelog sed not asked"
+silent "$D" 'git add .ai_context/tasks/demo/donelog' && ok "staging a donelog stays silent" || no "git add donelog flagged"
+silent "$D" 'grep RUN .ai_context/tasks/demo/donelog' && ok "reading a donelog stays silent" || no "grep donelog flagged"
+mkdir -p "$WORK/bg132"; cp "$BG" "$WORK/bg132/"
+BG_BIN="$WORK/bg132/bash-guard.sh" silent "$D" 'git add -A' && ok "no guard-patterns.sh: the v4 tier is off (degrades to v3, never asks on everything)" || no "degraded guard asked: $(cat "$WORK/bg.out")"
+rc=$(BG_BIN="$WORK/bg132/bash-guard.sh" bgo "$D" 'sudo ls'); ck 2 "$rc" "no guard-patterns.sh: the built-in deny tier still holds"
+for r in 'Edit(./.claude/evidence/**)' 'Edit(./.ai_context/tasks/**/donelog)' 'Edit(./.claude/done-lanes.trust)' 'Edit(./.claude/gitleaks.toml)'; do
+  grep -qF "\"$r\"" "$REPO/.claude/settings.json" && ok "settings denies $r" || no "deny missing: $r"
+done
+grep -q 'ack-' "$REPO/.claude/settings.json" && no "settings still carries v3 ack- rules" || ok "no v3 ack- rules in settings"
+python3 - "$REPO/.claude/settings.json" <<'PY' > "$WORK/st132"
+import json, re, sys
+s = json.load(open(sys.argv[1])); h = s["hooks"]; p = s["permissions"]
+cmd = lambda ev, end: [k for e in h[ev] for k in e["hooks"] if k["command"].endswith(end)]
+ev = [re.fullmatch(r"Bash\(bash scripts/evidence\.sh (\w+):\*\)", a) for a in p["allow"]]
+print("stop30", h["Stop"][0]["hooks"][0].get("timeout") == 30)
+print("checker60", [k.get("timeout") for k in cmd("SubagentStop", "checker stop")] == [60])
+print("ask3", all("Bash(bash scripts/evidence.sh %s:*)" % x in p["ask"] for x in ("trust", "approve", "check")))
+print("allow0", not any("evidence.sh" in a and re.search("trust|approve|check", a) for a in p["allow"]))
+print("allow7", sorted(m.group(1) for m in ev if m) == sorted("run status show start done close lint".split()))
+print("pair", "Bash(bash scripts/task-pair.sh check:*)" in p["allow"] and "Bash(bash scripts/task-pair.sh wait:*)" in p["allow"])
+print("nostatus", "statusLine" not in s)
+print("editask", all("Edit(./%s)" % f in p["ask"] for f in ("scripts/evidence.sh", "scripts/precommit-gitleaks.sh", "scripts/harness-report.sh", ".claude/hooks/guard-patterns.sh", ".claude/hooks/stop-gate.sh", ".claude/hooks/spawn-log.sh", ".claude/settings.json")))
+PY
+for k in stop30 checker60 ask3 allow0 allow7 pair nostatus editask; do
+  case "$k" in
+    stop30) m='Stop hook timeout is 30 s' ;; checker60) m='checker stop hook timeout is 60 s' ;;
+    ask3) m='declarative asks for evidence.sh trust/approve/check (survive bypassPermissions)' ;;
+    allow0) m='no allow rule for evidence.sh trust/approve/check' ;; allow7) m='allow covers exactly evidence.sh run status show start done close lint' ;;
+    pair) m='allow covers task-pair.sh check and wait' ;; nostatus) m='no statusLine key (R21)' ;;
+    editask) m='edits to the scripts the evidence chain trusts ask (evidence.sh, the gate, spawn-log, guard-patterns, gitleaks wrapper, harness-report, settings.json)' ;;
+  esac
+  grep -qx "$k True" "$WORK/st132" && ok "settings: $m" || no "settings: $m"
+done
+( . "$REPO/.claude/hooks/guard-patterns.sh"; for f in task_slug task_idle task_active lock_alive donelog_row card_current_slice static_only; do declare -F "$f" >/dev/null || exit 1; done
+  ! declare -F guard_forbidden_verify >/dev/null && [ -z "${GUARD_GIT_PUSH+x}" ] ) && ok "guard-patterns.sh defines the v4 helpers, none of the v3 verify denylist" || no "guard-patterns.sh helpers wrong"
+idle() { ( . "$REPO/.claude/hooks/guard-patterns.sh"; task_idle "$Di" demo ); echo $?; }
+touch -d '6 days ago' "$Di/.ai_context/tasks/demo/card.md" "$Di/.ai_context/tasks/demo/donelog"
+ck 1 "$(idle)" "task_idle: card and donelog 6 days old -> active"
+touch -d '8 days ago' "$Di/.ai_context/tasks/demo/card.md" "$Di/.ai_context/tasks/demo/donelog"
+ck 0 "$(idle)" "task_idle: card, donelog and task/demo 8 days old -> idle"
+echo n > "$Di/src/n.txt"; git -C "$Di" add src/n.txt; git -C "$Di" commit -qm now
+ck 1 "$(idle)" "task_idle: a fresh task/demo commit keeps it active"
+la() { ( . "$REPO/.claude/hooks/guard-patterns.sh"; lock_alive "$1" ); echo $?; }
+bash -c 'exec -a evidence.sh sleep 5' & lp=$!
+ck 0 "$(la "$lp")" "lock_alive: a live evidence.sh pid"; kill "$lp" 2>/dev/null; wait "$lp" 2>/dev/null
+ck 1 "$(la "$lp")" "lock_alive: a reaped pid"
+ck 1 "$(la abc)" "lock_alive: a non-numeric pid"
+mkdir -p "$WORK/l132d"; ( . "$REPO/.claude/hooks/guard-patterns.sh"; donelog_row "$WORK/l132d/donelog" CHECK S1 checker - abc "a$(printf '\t')b
+c" )
+{ [ "$(wc -l < "$WORK/l132d/donelog" | tr -d ' ')" = 1 ] && awk -F'\t' 'NF != 7 {exit 1}' "$WORK/l132d/donelog" && cut -f1 "$WORK/l132d/donelog" | grep -Eq "$TS_RE"; } && ok "donelog_row: TAB/newline in a field -> one 7-field row, UTC ts" || no "donelog_row row: $(cat -A "$WORK/l132d/donelog")"
 
 echo "=== L1-14 · pre-commit guards: append-only + S2 bulk"
 D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$D/.ai_context/knowledge"
@@ -1458,23 +1297,6 @@ git -C "$D" add -A
 ck 0 $? "big files outside .ai_context are not the bulk guard's business"
 grep -q 'ai-context-append-only' "$REPO/.pre-commit-config.yaml" && grep -q 'ai-context-bulk' "$REPO/.pre-commit-config.yaml" && ok "both guards wired in .pre-commit-config.yaml" || no "pre-commit wiring missing"
 grep -qF 'tasks/.+/(gatelog|spawnlog)' "$REPO/.pre-commit-config.yaml" && ok "pre-commit files regex covers spawnlog (F18)" || no "pre-commit files regex misses spawnlog"
-
-echo "=== L1-15 · gate integrity: wrong-branch task work"
-D="$WORK/l115"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
-git -C "$D" init -q && git -C "$D" checkout -qb wip && git -C "$D" add -A && git -C "$D" commit -qm base
-printf '{"session_id": "tsuite-w1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "task on a non-task branch blocks (integrity)"
-grep -q "branch 'wip'" "$D/.ai_context/tasks/demo/gatelog" && ok "wrong-branch INTEGRITY row names the branch" || no "wrong-branch row missing"
-grep -q "	FAIL	" "$D/.ai_context/tasks/demo/gatelog" && no "wrong branch polluted the gatelog with a junk FAIL" || ok "no junk FAIL row from the wrong-branch stop"
-printf '{"session_id": "tsuite-w1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 0 $? "wrong-branch integrity yields on second stop (marker)"
-git -C "$D" checkout -qb task/demo
-err=$(printf '{"session_id": "tsuite-w2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "task/ branch arms the gate (boundary prompt, fresh session)"
-grep -q "	M2	PASS" "$D/.ai_context/tasks/demo/gatelog" && ok "verify ran and passed on the task/ branch" || no "no PASS row on task/ branch"
 
 echo "=== L1-16 · session-start: INDEX size warning"
 D="$WORK/l116"; mkdir -p "$D/.ai_context"
@@ -1651,21 +1473,8 @@ bash "$TS" "$D/.ai_context/tasks/lg"
 grep -qF 'ARCH-KEEP line' "$ST" && ok "model-owned tail survives regeneration" || no "regeneration ate the model section"
 grep -q 'M3 (3/3)' "$ST" && ok "machine region tracks the transition" || no "machine region stale after transition"
 grep -qF 'unwritten — orchestrator' "$ST" && no "stub resurrected over model content" || ok "stub gone once the model wrote"
-# stop-gate integration: PASS captures .last-verify, refreshes the view, nags once
+# M2 back in progress: the statusline below reports position 2/3
 sed -i.bak 's/## M2: current \[done\]/## M2: current [in_progress]/; s/## M3: future \[in_progress\]/## M3: future [pending]/' "$D/.ai_context/tasks/lg/plan.md" && rm -f "$D/.ai_context/tasks/lg/plan.md.bak"
-cp "$TS" "$D/scripts/task-status.sh"
-rm -f "$ST"
-printf '{"session_id": "tsuite-lg"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1; rc=$?
-ck 2 $rc "green verify prompts the boundary with the renderer installed"
-[ -f "$D/.ai_context/tasks/lg/.last-verify" ] && ok "PASS captured .last-verify" || no ".last-verify missing"
-[ -f "$ST" ] && ok "PASS regenerated STATUS.md" || no "gate did not refresh the view"
-# The nag waits for the first PASSING green stop — an exit-2 stop discards
-# stdout, so nagging there would burn the marker on an unseen message.
-out=$(printf '{"session_id": "tsuite-lg"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "second green stop passes with the renderer installed"
-echo "$out" | grep -q 'Architecture is still the stub' && ok "stub nag fired on the passing stop (systemMessage)" || no "stub nag missing"
-out=$(printf '{"session_id": "tsuite-lg"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null)
-echo "$out" | grep -q 'Architecture is still the stub' && no "stub nag repeated in-session" || ok "stub nag is once per session"
 # statusline: position line when a task is armed, silence otherwise
 sl=$(printf '{"current_dir":"%s"}' "$D" | bash "$TSL")
 echo "$sl" | grep -q 'lg ▶ 2/3' && ok "statusline shows slug + position ($sl)" || no "statusline wrong: '$sl'"
@@ -1674,14 +1483,12 @@ sl=$(printf '{}' | CLAUDE_PROJECT_DIR="$WORK" bash "$TSL")
 # the view never enters git or the fingerprint (gate-cache precedent)
 grep -qF '.ai_context/tasks/*/STATUS.md' "$REPO/.gitignore" && ok "STATUS.md gitignored (fingerprint-safe)" || no "STATUS.md ignore missing"
 grep -qF '.ai_context/tasks/*/.last-verify' "$REPO/.gitignore" && ok ".last-verify gitignored" || no ".last-verify ignore missing"
-grep -qF '.ai_context/tasks/*/pair/.fp-*' "$REPO/.gitignore" && ok "pair/.fp-* gitignored (in-flight fingerprints never memory)" || no "pair/.fp-* ignore missing"
 # prose ↔ mechanism links (README §Prose → mechanism discipline)
 grep -qF -- '- demo:' "$REPO/.claude/skills/task/SKILL.md" && ok "SKILL.md carries the demo-line plan contract" || no "SKILL.md lost the demo line"
 grep -qF 'STATUS.md' "$REPO/.claude/skills/task/SKILL.md" && ok "SKILL.md names the STATUS.md duty" || no "SKILL.md lost STATUS.md"
 grep -qF 'Kickoff brief' "$REPO/.claude/skills/task/reference.md" && ok "reference.md carries the kickoff-brief format" || no "kickoff-brief section missing"
 grep -qF -- '- demo:' "$REPO/.claude/agents/executor.md" && ok "executor contract demands the demo" || no "executor lost the demo duty"
 grep -qF 'ASSUMED' "$REPO/.claude/agents/verifier.md" && ok "verifier drift mode audits the ASSUMED ledger" || no "verifier lost the intent lens"
-grep -qF 'task-status.sh' "$REPO/.claude/hooks/session-start.sh" && ok "session-start refreshes the view on resume" || no "session-start refresh missing"
 # CJK titles must truncate on character boundaries — a byte-based cut
 # leaves invalid UTF-8 inside mermaid labels (found live on stock_AGI).
 mkdir -p "$D/.ai_context/tasks/cjk"
@@ -1703,16 +1510,6 @@ if command -v iconv >/dev/null 2>&1; then
 else
   skp "iconv absent — CJK truncation validity unchecked"
 fi
-# sync-project.sh manifest completeness: every shipped mechanism file must
-# be named there, or spawned-then-synced projects silently miss additions
-# (exactly how the v3.12 scripts were first forgotten). Every skill file
-# counts (v4: setup/verify-template.md), and NOTICE ships with them; a
-# whole-line match, since a bare substring hits comments too.
-miss=""
-for f in $(cd "$REPO" && ls scripts/*.sh .claude/hooks/*.sh .claude/agents/*.md .claude/skills/*/*.md NOTICE .claude/gitleaks.toml 2>/dev/null); do
-  grep -qxF "copy_if_missing $f" "$REPO/sync-project.sh" || miss="$miss $f"
-done
-[ -z "$miss" ] && ok "sync-project.sh manifest covers every mechanism file" || no "sync-project.sh manifest missing:$miss"
 
 echo "=== L1-20 · mixed-judge profile: task-profile.sh (v3.13)"
 D="$WORK/l120"; mkdir -p "$D/.claude/agents" "$D/scripts" "$D/.ai_context/tasks/pdemo"
@@ -1768,8 +1565,7 @@ echo "=== L1-21 · every exit-2 block prints the stdout marker (CLI heuristic, v
 # The missing-hook heuristic (exit 2 + EMPTY stdout + stderr matching
 # /no such file|can't open/i) silently drops legitimate blocks — journal
 # 2026-08-13. Non-empty stdout breaks the conjunction; every block path
-# must print the marker, INCLUDING when verify output carries the fatal
-# strings. mk() runs the gate and asserts rc=2 + marker on stdout.
+# must print the marker. mk() runs the gate and asserts rc=2 + marker on stdout.
 MARK='claude-starter-gate: BLOCK'
 mk() { # $1 = label, $2 = session id, $3 = project dir, $4... = extra gate args
   local label="$1" sidq="$2" dir="$3"; shift 3
@@ -1784,115 +1580,32 @@ mk "setup gate" tsuite-mk1 "$D"
 D="$WORK/l121b"; mkdir -p "$D/.ai_context/tasks/demo"
 printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
 echo demo > "$D/.ai_context/tasks/CURRENT"
-mk "integrity (missing plan)" tsuite-mk2 "$D"
-# the heuristic's exact bait: verify output contains "can't open file"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "python3 no-such-script-xyz.py"
-mk "red verify whose output matches the heuristic regex" tsuite-mk3 "$D"
-write_plan "$D/.ai_context/tasks/demo/plan.md" 'touch pwned-mk && git push origin main'
-mk "forbidden verify" tsuite-mk4 "$D"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
-sed -i.bak 's/## M3: future \[pending\]/## M3: future [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
-mk "double in_progress" tsuite-mk5 "$D"
-write_plan "$D/.ai_context/tasks/demo/plan.md" "true"
-mk "green boundary prompt" tsuite-mk6 "$D"
-# red wrap-up sweep (stop mode) and strict /wrap sweep
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
-# Plan: fixture
-<!-- profile: opus-tier ; size: S -->
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
-
-## M1: only [done]
-- verify: `false`
-- risk: low
-PEOF
-rm -f "$D/.ai_context/tasks/demo/gatelog"
-mk "red wrap-up sweep" tsuite-mk7 "$D"
-rm -f "$D/.ai_context/tasks/demo/gatelog"
-o=$(CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep 2>/dev/null); rc=$?
-if [ "$rc" = 2 ] && printf '%s' "$o" | grep -qF "$MARK"; then ok "marker: strict /wrap --sweep"
-else no "marker: strict /wrap --sweep (rc=$rc)"; fi
-# static net: no exit-2 path exists that the runtime cases above miss
+printf '# Demo task\n<!-- card v4 ; pair: off ; base: - ; estimate: 1h 50L -->\nGoal: marker\n## Slices\n- [x] S1 first — lanes: smoke ; codex: no\n' > "$D/.ai_context/tasks/demo/card.md"
+mk "noref" tsuite-mk2 "$D"
+# a closed task whose lane content changed after close; one failing smoke
+# record on the way, for the badref case below
+Pm="$WORK/l121c"; ready "$Pm"; ev "$Pm" start S2 >/dev/null
+echo broken > "$Pm/src/mode"; ev "$Pm" run smoke >/dev/null; fid="$(lastid "$Pm" smoke.jsonl)"; rm -f "$Pm/src/mode"
+ev "$Pm" run smoke >/dev/null; rep S2 pass | ev "$Pm" check S2 --agent fx --source human >/dev/null; ev "$Pm" "done" S2 >/dev/null
+rep final pass | ev "$Pm" check final --agent fx --source human >/dev/null; ev "$Pm" close >/dev/null
+echo b >> "$Pm/src/a.txt"; mk "Closed: stale" tsuite-mk3 "$Pm"; echo a > "$Pm/src/a.txt"
+# static net: no exit-2 path exists that the runtime cases miss
 n_exit2=$(grep -c 'exit 2' "$GATE")
 n_mark=$(grep -c 'mark_block$\|mark_block;' "$GATE")
-[ "$n_mark" -ge 7 ] && ok "mark_block wired across block paths ($n_mark call sites, $n_exit2 exit-2 lines)" || no "mark_block call sites: want >=7 got $n_mark"
+[ "$n_mark" -ge 2 ] && ok "mark_block wired across block paths ($n_mark call sites, $n_exit2 exit-2 lines)" || no "mark_block call sites: want >=2 got $n_mark"
+C="$Pm/.ai_context/tasks/demo/card.md"; sed -i '/^Closed:/d' "$C"; cp "$C" "$WORK/c121"
+sed -E 's/^(- \[x\] S1 .*) ✓ .*$/\1 ✓ smoke@0000000 check@0000000/' "$WORK/c121" > "$C"
+mk "badref: id not found" tsuite-mk4 "$Pm"
+sed -E "s/^(- \[x\] S1 .* ✓ )smoke@[0-9a-f]+/\1smoke@$fid/" "$WORK/c121" > "$C"
+mk "badref: failing record" tsuite-mk5 "$Pm"
 
-echo "=== L1-22 · checkpoint milestones: hold for the human, never advance past (v3.14)"
-D="$WORK/l122"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# ok\n## Commands\n- Test: `true`\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
-# Plan: fixture
-<!-- profile: opus-tier ; size: M -->
-<!-- statuses: [pending] [in_progress] [done]; exactly one in_progress -->
+echo "=== L1-22 · a human checkpoint slice [o]: the gate passes and shows it (v4)"
+D="$WORK/l122"; mkproj "$D"; mklanes "$D" "$LANE_SMOKE"
+mkcard "$D" demo off '- [o] S1 gated deploy — lanes: smoke ; codex: no' '- [ ] S2 aftermath — lanes: smoke ; codex: no'
+rc=$(gt "$D" tsuite-ck1); ck 0 "$rc" "an [o] checkpoint slice holds without a block"
+grep -qF 'claude-starter gate: evidence[demo]: slice -' "$WORK/g.out" && ok "the status line shows no slice in progress while [o] waits" || no "status line: $(cat "$WORK/g.out")"
+rc=$(gt "$D" tsuite-ck1); ck 0 "$rc" "the next stop still passes (the checkpoint is the human's, not the gate's)"
 
-## M1: gated deploy [in_progress]
-- verify: `true`
-- checkpoint: human
-- risk: high
-
-## M2: aftermath [pending]
-- verify: `false`
-- risk: low
-PEOF
-out=$(printf '{"session_id": "tsuite-ck1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "checkpoint PASS holds quietly (no continuation prompt)"
-echo "$out" | grep -q 'human checkpoint' && ok "hold surfaces the sign-off systemMessage" || no "checkpoint systemMessage missing"
-grep -q "	M1	PAUSED	checkpoint" "$D/.ai_context/tasks/demo/gatelog" && ok "checkpoint hold recorded (PAUSED row)" || no "checkpoint PAUSED row missing"
-# work advanced past the un-acked checkpoint => integrity block, then a
-# repeating systemMessage — the human signal must not die with the one-shot
-sed -i.bak 's/## M1: gated deploy \[in_progress\]/## M1: gated deploy [done]/; s/## M2: aftermath \[pending\]/## M2: aftermath [in_progress]/' "$D/.ai_context/tasks/demo/plan.md" && rm -f "$D/.ai_context/tasks/demo/plan.md.bak"
-err=$(printf '{"session_id": "tsuite-ck1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>&1 >/dev/null); rc=$?
-ck 2 $rc "advancing past an un-acked checkpoint blocks (integrity)"
-echo "$err" | grep -q 'sign-off' && ok "block names the missing sign-off" || no "block message unhelpful"
-out=$(printf '{"session_id": "tsuite-ck1"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "checkpoint integrity yields on repeat (one-shot spent)"
-echo "$out" | grep -q 'awaits human sign-off' && ok "repeat stop keeps pinging the human" || no "repeat signal lost"
-# the ack releases everything: hold gone, gate arms M2 normally (red)
-touch "$D/.ai_context/tasks/demo/ack-M1"
-printf '{"session_id": "tsuite-ck2"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" >/dev/null 2>&1
-ck 2 $? "acked checkpoint releases the run (M2 arms, red verify blocks normally)"
-# wiring: ack files are Edit-denied and bash-guard confirms model-side writes
-grep -q 'Edit(./.ai_context/tasks/\*\*/ack-\*)' "$REPO/.claude/settings.json" && ok "ack files Edit-denied" || no "ack Edit-deny missing"
-bgout=$(printf '{"tool_input":{"command":"touch .ai_context/tasks/demo/ack-M1"}}' | CLAUDE_PROJECT_DIR="$D" bash "$REPO/.claude/hooks/bash-guard.sh" 2>/dev/null)
-echo "$bgout" | grep -q '"permissionDecision":"ask"' && ok "bash-guard asks on model-side ack writes (sign-off stays human)" || no "bash-guard ack confirmation missing"
-
-
-echo "=== L1-22b · terminal checkpoints hold through Stop and strict wrap"
-D="$WORK/l122final"; mkdir -p "$D/.ai_context/tasks/demo"
-printf '# configured\n' > "$D/CLAUDE.md"
-echo demo > "$D/.ai_context/tasks/CURRENT"
-cat > "$D/.ai_context/tasks/demo/plan.md" <<'PEOF'
-# Plan: terminal checkpoint
-## M1: final [in_progress]
-- verify: `true`
-- checkpoint: human
-PEOF
-out=$(printf '{"session_id":"tsuite-ck-final"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "final in-progress checkpoint allows a human pause"
-echo "$out" | grep -q 'human checkpoint' && ok "final checkpoint holds even without pending milestones" || no "terminal checkpoint hold missing"
-sed -i 's/\[in_progress\]/[done]/' "$D/.ai_context/tasks/demo/plan.md"
-out=$(printf '{"session_id":"tsuite-ck-final"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 2 $rc "all-done task cannot skip final human ack"
-echo "$out" | grep -q 'claude-starter-gate: BLOCK' && ok "terminal checkpoint block has CLI marker" || no "terminal checkpoint marker missing"
-out=$(printf '{"session_id":"tsuite-ck-final"}' | CLAUDE_PROJECT_DIR="$D" bash "$GATE" 2>/dev/null); rc=$?
-ck 0 $rc "repeated Stop yields for human sign-off"
-echo "$out" | grep -q 'awaits human sign-off' && ok "all-done pause keeps the missing ack visible" || no "all-done checkpoint silently passed"
-for ck_try in 1 2; do
-  out=$(CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep 2>/dev/null); rc=$?
-  ck 2 $rc "explicit sweep refuses unacked final checkpoint (attempt $ck_try)"
-  echo "$out" | grep -q 'claude-starter-gate: BLOCK' && ok "checkpoint sweep block carries marker ($ck_try)" || no "checkpoint sweep marker missing ($ck_try)"
-done
-touch "$D/.ai_context/tasks/demo/ack-M1"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-ck 0 $? "human ack releases final wrap"
-# An earlier checkpoint must also be checked when every milestone is done.
-sed -i 's/## M1:/## M0:/' "$D/.ai_context/tasks/demo/plan.md"
-printf '\n## M2: later [done]\n- verify: `true`\n' >> "$D/.ai_context/tasks/demo/plan.md"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-ck 2 $? "all-done sweep also checks earlier unacked checkpoints"
-touch "$D/.ai_context/tasks/demo/ack-M0"
-CLAUDE_PROJECT_DIR="$D" bash "$GATE" --sweep >/dev/null 2>&1
-ck 0 $? "all acknowledged checkpoints allow completion"
 
 echo "=== L1-23 · pair-codex transport: task-pair.sh over a fake herdr (ADR-028)"
 # Every scenario asserts the same invariant from two sides: a run that did
@@ -2275,33 +1988,15 @@ PY
   out=$(CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/session-start.sh" </dev/null 2>&1)
   echo "$out" | grep -q 'SETUP REQUIRED' && ok "newborn spawn gets setup instruction" || no "setup instruction missing in spawn"
   mkdir -p "$P/.ai_context/tasks/demo"; echo demo > "$P/.ai_context/tasks/CURRENT"
-  write_plan "$P/.ai_context/tasks/demo/plan.md" "true"
   printf '# lab\n## Commands\n- Test: `true`\n' > "$P/CLAUDE.md"
   git -C "$P" checkout -qb task/demo 2>/dev/null || true
+  printf '# Demo task\n<!-- card v4 ; pair: off ; base: - ; estimate: 1h 50L -->\nGoal: hook chain\n## Slices\n- [~] S1 first — lanes: smoke ; codex: no\n' > "$P/.ai_context/tasks/demo/card.md"
   printf '{"session_id": "tsuite-l2"}' | CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
-  ck 2 $? "project gate: green boundary prompts (v3.14: PASS with [pending] left ⇒ one-time exit 2)"
-  write_plan "$P/.ai_context/tasks/demo/plan.md" "false"
+  ck 0 $? "project gate: a slice in progress passes"
+  sed -i 's/^- \[~\] S1 /- [x] S1 /' "$P/.ai_context/tasks/demo/card.md"
   printf '{"session_id": "tsuite-l2"}' | CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
-  ck 2 $? "project gate: red blocks"
-  grep -qc "	M2	" "$P/.ai_context/tasks/demo/gatelog" >/dev/null && ok "project gatelog written" || no "project gatelog missing"
-
-  echo "=== L2-3b · completion and profile fixes ship through git archive"
-  mkdir -p "$P/.ai_context/tasks/finalfix"; echo finalfix > "$P/.ai_context/tasks/CURRENT"
-  printf '# Plan: shipped fixes\n<!-- profile: mixed-judge ; size: S -->\n## M1: final [done]\n- verify: `true`\n' > "$P/.ai_context/tasks/finalfix/plan.md"
-  CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" --sweep >/dev/null 2>&1
-  ck 0 $? "spawned final verify records PASS"
-  sed -i 's/- verify: `true`/- verify: `false`/' "$P/.ai_context/tasks/finalfix/plan.md"
-  CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" --sweep >/dev/null 2>&1
-  ck 2 $? "spawned sweep rejects stale final PASS"
-  sed -i 's/- verify: `false`/- verify: `true`/' "$P/.ai_context/tasks/finalfix/plan.md"
-  printf '%s\n' '- checkpoint: human' >> "$P/.ai_context/tasks/finalfix/plan.md"
-  CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" --sweep >/dev/null 2>&1
-  ck 2 $? "spawned sweep refuses missing final ack"
-  touch "$P/.ai_context/tasks/finalfix/ack-M1"
-  CLAUDE_PROJECT_DIR="$P" bash "$P/.claude/hooks/stop-gate.sh" --sweep >/dev/null 2>&1
-  ck 0 $? "spawned sweep accepts acknowledged green completion"
-  tp_warn=$(bash "$P/scripts/task-profile.sh" mixed 2>&1 >/dev/null)
-  echo "$tp_warn" | grep -q 'PROFILE SWITCH' && ok "spawned direct profile warns on mismatch" || no "spawned profile alias missed warning"
+  ck 2 $? "project gate: an [x] without evidence blocks"
+  grep -q '	BLOCK	' "$P/.ai_context/tasks/demo/donelog" 2>/dev/null && ok "project donelog BLOCK row written" || no "project donelog BLOCK row missing"
   rm -f "$P/.ai_context/tasks/CURRENT"
 
   echo "=== L2-5 · no-op latency"
@@ -2348,15 +2043,18 @@ else
   grep -q 'research project' "$R/CLAUDE.md" && ok "research CLAUDE.md in place" || no "research template wrong"
   grep -q '## Long-horizon tasks' "$R/CLAUDE.md" && ok "research template carries /task section" || no "research /task section missing"
   grep -q "What we don't know" "$R/CLAUDE.md" && grep -q 'An empty search is a finding' "$R/CLAUDE.md" && ok "research DoD requires a What-we-don't-know section + empty-search records" || no "research epistemics lines missing from the spawned CLAUDE.md"
-  mkdir -p "$R/.ai_context/tasks/demo"; echo demo > "$R/.ai_context/tasks/CURRENT"
-  printf '# r\n## Commands\n- Test: `true`\n' > "$R/CLAUDE.md"
-  write_plan "$R/.ai_context/tasks/demo/plan.md" "test -s reports/x.md"
-  git -C "$R" checkout -qb task/demo 2>/dev/null || true
-  printf '{"session_id": "tsuite-r"}' | CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
-  ck 2 $? "artifact gate blocks while deliverable absent"
+  # A research lane proves the deliverable exists and prints its own work
+  # marker (U8: executed=0 is unproven); trust reads only the top command.
+  printf '#!/usr/bin/env bash\nsleep 1\ntest -s reports/x.md || exit 1\necho "report: $(grep -c . reports/x.md) lines checked"\n' > "$R/scripts/check-report.sh"
+  printf '#!/usr/bin/env bash\necho "report: 0 lines checked"\nexit 1\n' > "$R/scripts/canary.sh"
+  chmod +x "$R/scripts/check-report.sh" "$R/scripts/canary.sh"
+  mklanes "$R" 'report | reports/ scripts/ | 1 | ^report: [1-9][0-9]* lines checked$ | bash scripts/canary.sh | bash scripts/check-report.sh'
+  ev "$R" trust report >/dev/null
+  rc=$(ev "$R" run report)
+  { [ "$rc" = 1 ] && [ "$(python3 -I -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["verdict"])' "$R/.claude/evidence/report.jsonl" 2>/dev/null)" = fail ]; } && ok "research lane fails while the deliverable is absent (verdict fail)" || no "absent deliverable: run rc=$rc ($(head -c 300 "$WORK/ev.out"))"
   mkdir -p "$R/reports" && echo content > "$R/reports/x.md"
-  printf '{"session_id": "tsuite-r"}' | CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/stop-gate.sh" >/dev/null 2>&1
-  ck 2 $? "artifact gate: deliverable present ⇒ PASS + green boundary prompt (v3.14)"
+  rc=$(ev "$R" run report)
+  { [ "$rc" = 0 ] && [ "$(python3 -I -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["verdict"])' "$R/.claude/evidence/report.jsonl" 2>/dev/null)" = pass ]; } && ok "deliverable present: the lane passes (verdict pass)" || no "present deliverable: run rc=$rc ($(head -c 300 "$WORK/ev.out"))"
 fi
 
 echo "=== L2-6 · spawning via a symlink resolves the real template"

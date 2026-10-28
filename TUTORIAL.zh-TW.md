@@ -152,21 +152,28 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 | 你看到 | 代表 | 怎麼做 |
 |---|---|---|
 | `SETUP GATE` | CLAUDE.md 還帶著 `UNCONFIGURED` sentinel | 讓 `/setup` 跑;或說明你不要 —— 讓行一次,下個 session 再武裝 |
-| `GATE FAILED (red block n of 2 …)` | `[in_progress]` 里程碑的 verify 是紅的,這個 turn 結束不了 | 讓它修;命令本身錯了,看第一條 |
-| `NOTE — spawnlog has no executor row` | 里程碑已武裝,但 executor 從沒啟動 | 不用做事 —— 它會被要求 spawn 第 1 階,而不是升級 |
-| `… is RED — blocked n stops in a row … yielding now`(`STUCK` 列) | 連續三次紅燈:閘門把里程碑交給你 | 讀 `gatelog` + `lessons.md`;修掉原因、改 verify(附理由),或放棄 |
-| `GATE INTEGRITY — the milestone gate cannot arm` | 任務狀態壞了(`CURRENT` 空白、plan.md 不見、零個或多個 `[in_progress]`、分支不對);記成 `INTEGRITY` | 修掉訊息指出的狀態;intake 中途暫停是合法的 —— 說出來 |
-| `GATE REFUSED — … forbidden operation` | verify 含提權命令、git push 或絕對路徑的 `rm -rf`;沒有執行 | 在 plan.md 改寫那條 verify |
-| `… executor in flight … verify deferred`(`WAITING` 列) | executor 還在跑(Claude Code 有列出);它回報之前每次停止都延後 | 等 —— 它結束時會喚醒 session |
-| `MILESTONE COMPLETE …` | 綠燈邊界;模型必須說明要繼續還是暫停 | 它若問了你問題,就回答 |
-| `… is green; the run is paused at a milestone boundary`(`PAUSED` 列) | run 停在綠燈上等你 | 說繼續,或改方向 |
-| `… is a human checkpoint - run held; sign off with: touch …` | `checkpoint: human` 里程碑通過了 | 看過 demo,再執行它指定的 `touch` |
-| `bash-guard` 跳出的確認提示 | 離開專案樹的 `rm -rf`,或碰到 `.env` 的命令 | 只核准你真的要的 |
+| `GATE BLOCKED (block n of 2 …)` … `is marked [x] without an evidence reference` | 某個 slice 是 `[x]`,但不是 `evidence.sh done` 寫的;這個 turn 結束不了 | 讓它把那行改回 `[~]`,再跑 `evidence.sh done S<n>`;絕不手改 `[x]` |
+| `… cites evidence that does not hold: …` | `[x]` 引用的紀錄不見了、是紅的、屬於別條 lane,或不是它的 `DONE` 列記的那筆 | 重跑該 lane,再 `done` 一次 |
+| `… the evidence is not fresh for the current content` | `close` 寫下 `Closed:` 之後內容又變了 | 重跑 lane(與最終 Codex),再 `close` 一次;或刪掉 `Closed:` 那行 |
+| `claude-starter-gate: BLOCK` | 每次擋之前印的標記 | 不用做事 —— 它防止 CLI 把這次擋丟掉 |
+| `… in flight; evidence check deferred until it reports`(`WAITING` 列) | lane、Codex 傳送或 subagent 還在跑 | 等 —— 它結束時會喚醒 session |
+| `… is BLOCKED - n stops in a row on the same card and content …` `yielding now`(`STUCK` 列) | 同一份 card 與內容被擋兩次:這個 run 交給你了 | 讀 `donelog`;修掉原因、重新 trust 錯的 lane,或放棄 |
+| `internal error` … `not blocking this stop`(`GATE-ERROR` 列) | 閘門自己出錯;這次停止已放行 | 記一筆 friction;修好之前 slice 不會被檢查 |
+| `TRUST REFUSED —` … `static-only command` | 這條 lane 只證明原始碼存在 | 讓 lane 真的跑產品 |
+| `TRUST REFUSED —` … `the canary passed` | 餵已知壞的輸入,lane 還是綠的 | 修 lane 或它的 canary |
+| `RUN REFUSED —` … `changed since trust` | trust 之後 lane 那行、某個 `@` 行或 `.claude/gitleaks.toml` 變了 | 看過改動,再跑一次 `bash scripts/evidence.sh trust <lane>` |
+| `ESCALATE —` … `failed 3 times in a row` | 同一條 lane 在同一個 slice 連續失敗三次 | 停下來回報(`/debug`);只有你想再試時才確認 `run --escalated` |
+| `expect not matched` | 跑完了,但少了某個標記行 | 開它印出的 log 路徑;產品沒做到 lane 檢查的事 |
+| `executed=0` | 什麼都沒跑(零個測試、資料列或請求) | 未證明,不是通過 —— 修正選取範圍 |
+| `secret or internal-IP rule` | lane(或 canary)的 log 命中 `.claude/gitleaks.toml`;這次 run 判失敗 | 讓輸出別印出它;絕不貼那份 log |
+| `lane files changed during the run` | lane 跑的時候有檔案被改;紀錄作廢 | 等改動停了再重跑 |
+| `NOT DONE —` / `NOT CLOSED —` … `Not proven this time` | `done` 或 `close` 拒絕,並列出缺什麼(紀錄、checker、Codex、核准、lane 範圍外的檔、過期的 lane) | 補上缺的;說「完成」之前先讀「沒證明到什麼」那段 |
+| `card changed since approval` / `CARD LINT —` | 你核准之後 card 被改了,或格式壞了 | 看過 diff 再核准一次 / 修掉 lint 指出的地方 |
+| `bash-guard` 跳出的確認提示 | 離開專案的 `rm -rf`、碰 `.env`;task 進行中的 `git add -A`/`.`、`git checkout -- <path>`、`git checkout .`/`-f`、`git switch --discard-changes`/`-f`、`git restore`、`git stash`;任何時候碰 `.claude/evidence/`、trust 檔或 donelog 的命令、`evidence.sh trust`/`approve`/`check`/`codex`、`run --escalated`、`task-pair.sh --over-estimate` | 只核准你真的要的;trust、approve、check 就是你的簽核。`bypassPermissions` 下只剩 `settings.json` 的三條 ask(trust/approve/check)會出現 |
 | `BASH GUARD — blocked (…)` | force-push、提權命令、`rm -rf /`:永不無人值守執行;記在 `private/bash-guard.log` | 真的要,就自己跑 |
 | 讀 `.env*` / `.secrets/` 被權限拒絕 | H1:Claude 永遠不讀密鑰 | 密鑰放那裡;程式在 runtime 讀 |
-| `WARNING: state.md last updated …` / `… is newer than state.md` | 記憶過期,或上個 session 沒跑 `/wrap` 就結束 | `/wrap` |
-| `WARNING: task … has [pending] milestones but none [in_progress]` | 閘門是關的 | 讓它把下一個里程碑標成 `[in_progress]` |
-| `WARNING: … bytes (cap …)` | 會被注入的檔案超過上限 | 照訊息說的蒸餾 |
+| `WARNING: state.md last updated …` / `… is newer than state.md` / `WARNING: … bytes (cap …)` / `TRUNCATED: first 4096 of` | 記憶過期,或上個 session 沒跑 `/wrap`;或被注入的檔超過上限(state.md 5120、card.md 4096 —— 會被截斷、notes.md 16384、CLAUDE.md 20480) | `/wrap`;蒸餾,或把細節移到 `notes.md` |
+| `has been idle` … `the Stop gate does not check it` / `a v3 plan.md task without card.md` | task 閒置超過 7 天 / `tasks/CURRENT` 指向 v3 task,v4 既不注入也不檢查 | 用 `/task` 續跑或刪 `CURRENT` / 在 `v3-final` checkout 上做完、改寫成 card,或刪 `CURRENT` |
 | `lessons.md` 裡的 `pair: judge no-verdict ×2 …` | Codex judge 兩次沒給 verdict;改用 Claude 席 | 看 judge pane(exit 4 = 那裡有對話框要你處理) |
 | `harness-report.sh`:`verify changed after FAIL` | gate 在失敗後被移動了 | 去 `lessons.md` 找理由;沒有就問為什麼 |
 | `harness-report.sh`:`verification depth gap` | `risk: med/high` 的里程碑沒經過 verifier 就完成了 | 補驗,或知情地接受風險 |
