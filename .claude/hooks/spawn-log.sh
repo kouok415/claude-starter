@@ -19,15 +19,22 @@
 # SPAWN rows.
 #
 # checker stop: the report goes to `evidence.sh check` — the only checker
-# record `evidence.sh done` accepts. Sources, the first one carrying
-# `checker-verdict:` wins (else the first non-empty one):
-#   a. the agent transcript's last SubagentHandback tool_use input.message —
-#      on CC >= 2.1.271 a handed-back report is NOT the last_assistant_message
+# record `evidence.sh done` accepts. Only the CURRENT wake counts: the rows
+# after the transcript's last `user` row that is a plain prompt (the spawn
+# prompt, or the "sent a message while you were working" row of a SendMessage
+# re-wake), not a tool_result — a re-woken checker must never be recorded
+# with the previous wake's verdict (hooks review H1). Sources, by delivery
+# order, the first non-empty one wins — a verdict line is NOT a criterion:
+#   a. the current wake's last SubagentHandback tool_use input.message — on
+#      CC >= 2.1.271 a handed-back report is NOT the last_assistant_message,
+#      and a delivered handback beats an earlier draft that had a verdict
 #   b. the payload's last_assistant_message (what `claude -p` delivers, C0)
-#   c. the transcript's last assistant text
+#   c. the current wake's last assistant text
 # The transcript is written asynchronously (C0, CC 2.1.309: the copy taken
-# inside the hook lacked its last rows; +1 s had them), so with no verdict
-# anywhere an existing transcript is re-read every 0.5 s for up to 3 s.
+# inside the hook lacked its last rows; +1 s had them), so with no handback in
+# the current wake and no `checker-verdict:` line in (b), an existing
+# transcript is re-read every 0.5 s for up to 3 s. Residual: a lag that also
+# hides a short re-wake's prompt row leaves the previous wake looking current.
 # Nothing captured -> a record with verdict `uncaptured`, which done refuses:
 # the harness never trusts narration.
 #
@@ -106,7 +113,10 @@ path = os.path.expanduser(path) if isinstance(path, str) else ""
 last = p.get("last_assistant_message")
 last = last if isinstance(last, str) else ""
 
-def candidates():
+def blocks(c, kind):
+    return [b for b in c if isinstance(b, dict) and b.get("type") == kind] if isinstance(c, list) else []
+
+def wake():  # the current wake -> (its last handback message, its last assistant text)
     hb, text = "", ""
     try:
         rows = open(path, encoding="utf-8", errors="replace").read().splitlines() if path else []
@@ -115,23 +125,29 @@ def candidates():
     for row in rows:
         try:
             r = json.loads(row)
-            c = r["message"]["content"] if r.get("type") == "assistant" else []
+            c = r["message"]["content"]
         except Exception:
             continue
-        for b in c if isinstance(c, list) else []:
-            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "SubagentHandback":
-                m = (b.get("input") or {}).get("message")
-                hb = m if isinstance(m, str) else hb
-        ts = [b.get("text") for b in c if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)]
+        if r.get("type") == "user":
+            if isinstance(c, str) or (blocks(c, "text") and not blocks(c, "tool_result")):
+                hb, text = "", ""   # a plain prompt starts a new wake
+            continue
+        if r.get("type") != "assistant":
+            continue
+        for b in blocks(c, "tool_use"):
+            m = b.get("input").get("message") if b.get("name") == "SubagentHandback" and isinstance(b.get("input"), dict) else None
+            hb = m if isinstance(m, str) and m.strip() else hb
+        ts = [b["text"] for b in blocks(c, "text") if isinstance(b.get("text"), str)]
         text = "\n".join(ts) if ts else text
-    return [("handback", hb), ("last_message", last), ("transcript", text)]
+    return hb, text
 
-cs = candidates()
+hb, text = wake()
+verdict = any(l.startswith("checker-verdict:") for l in last.splitlines())
 end = time.time() + 3
-while not any("checker-verdict:" in t for _, t in cs) and path and os.path.isfile(path) and time.time() < end:
+while not hb and not verdict and path and os.path.isfile(path) and time.time() < end:
     time.sleep(0.5)
-    cs = candidates()
-pick = [c for c in cs if "checker-verdict:" in c[1]] or [c for c in cs if c[1].strip()] or [("none", "")]
+    hb, text = wake()
+pick = [c for c in (("handback", hb), ("last_message", last), ("transcript", text)) if c[1].strip()] or [("none", "")]
 open(sys.argv[1], "w", encoding="utf-8").write(pick[0][1])
 print(pick[0][0])' "$tf" 2>/dev/null)"
 case "$src" in handback|last_message|transcript) ;; *) src=none ;; esac

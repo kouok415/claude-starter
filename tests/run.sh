@@ -1461,6 +1461,126 @@ bad=""; for c in 'cat scripts/evidence.sh' 'bash scripts/evidence.sh status > /t
   silent "$WORK/l145a" "$c" || bad="$bad [$c]"
 done; [ -z "$bad" ] && ok "bash-guard stays silent on reads of those files" || no "chain read asked:$bad"
 
+echo "=== L1-46 · hooks review regressions (independent review of the C3 hooks at 818e0f3)"
+# One assertion (or one small group) per finding; the finding id leads each message.
+# Each fails on 8f41e9d (the C3 hooks plus the evidence.sh review fix) and passes here.
+# H2, H3b, H4 and M1's evidence.sh half are L1-45's.
+bgj() { python3 -I -c 'import json,sys; d={"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}
+if len(sys.argv) > 2: d["cwd"] = sys.argv[2]
+print(json.dumps(d))' "$@"; }
+asks() { bgj "${@:2}" | CLAUDE_PROJECT_DIR="$1" bash "$BG" > "$WORK/bg.out" 2>/dev/null && grep -q '"permissionDecision":"ask"' "$WORK/bg.out"; }   # $1 project, $2 command [, $3 cwd]
+quiet() { bgj "${@:2}" | CLAUDE_PROJECT_DIR="$1" bash "$BG" > "$WORK/bg.out" 2>/dev/null && [ ! -s "$WORK/bg.out" ]; }
+Pg="$WORK/l146g"; mkproj "$Pg"; mkcard "$Pg" demo off '- [~] S1 first — lanes: smoke ; codex: no'; TD="$Pg/.ai_context/tasks/demo"
+
+# H1 — spawn-log reads the current wake only. tests/fixtures/cc-2.1.309/agent-checker-twowake.jsonl is
+# SYNTHESIZED from the recorded fixtures: rows 1-5 = agent-checker-handback.jsonl verbatim (wake 1, a handback
+# with S1 pass), then a SendMessage re-wake row shaped like CC's ("The coordinator sent a message while you were
+# working: …", isMeta) and wake 2's re-check, ending in a handback with S1 fail (rows 9-10).
+Ph="$WORK/l146h"; mkdir -p "$Ph/.ai_context/tasks/demo" "$Ph/scripts"; cp "$TD/card.md" "$Ph/.ai_context/tasks/demo/"; echo demo > "$Ph/.ai_context/tasks/CURRENT"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" > "%s"; cat > "%s"; echo "check S1 pass deadbeef01"\n' "$WORK/h1.argv" "$WORK/h1.stdin" > "$Ph/scripts/evidence.sh"
+hstop() { python3 -I - "$FX/subagentstop-checker.json" "$1" "$2" "$3" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1])); p["agent_transcript_path"] = sys.argv[3]; p["last_assistant_message"] = sys.argv[4]
+json.dump(p, open(sys.argv[2], "w"))
+PY
+}
+head -n 8 "$FX/agent-checker-twowake.jsonl" > "$WORK/h1.jsonl"; hstop "$WORK/h1.json" "$WORK/h1.jsonl" 'Handing the report back now.'
+( sleep 1; tail -n 2 "$FX/agent-checker-twowake.jsonl" >> "$WORK/h1.jsonl" ) & ap=$!
+CLAUDE_PROJECT_DIR="$Ph" bash "$SL" checker stop < "$WORK/h1.json" >/dev/null 2>&1; wait "$ap"
+{ grep -q -- '--source handback$' "$WORK/h1.argv" && grep -qx 'checker-verdict: S1 fail' "$WORK/h1.stdin" && ! grep -q 'S1 pass' "$WORK/h1.stdin"; } \
+  && ok "H1 a re-woken checker whose handback lands 1 s late: wake 2's verdict (fail) is recorded, never wake 1's pass" || no "H1 stale wake: [$(cat "$WORK/h1.argv")] $(tail -n 1 "$WORK/h1.stdin")"
+python3 -I - "$FX/agent-checker-handback.jsonl" "$WORK/h1b.jsonl" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+for r in rows:
+    for b in r["message"]["content"]:
+        if b.get("type") == "text":
+            b["text"] = "Draft.\nVERIFIED (L4) draft claim — cat hello.txt\ncheckker-verdict: S1 pass".replace("checkker", "checker")
+        if b.get("name") == "SubagentHandback":
+            b["input"]["message"] = "DELIVERED-REPORT: the claim could not be checked; no verdict line."
+open(sys.argv[2], "w").write("".join(json.dumps(r) + "\n" for r in rows))
+PY
+hstop "$WORK/h1b.json" "$WORK/h1b.jsonl" 'Handed back.'; CLAUDE_PROJECT_DIR="$Ph" bash "$SL" checker stop < "$WORK/h1b.json" >/dev/null 2>&1
+{ grep -q -- '--source handback$' "$WORK/h1.argv" && grep -q DELIVERED-REPORT "$WORK/h1.stdin" && ! grep -q 'checker-verdict' "$WORK/h1.stdin"; } \
+  && ok "H1 a delivered handback without a verdict beats an earlier draft that had one (recorded unparsed, done refuses)" || no "H1 draft won: [$(cat "$WORK/h1.argv")] $(head -c 200 "$WORK/h1.stdin")"
+
+# H3a / M3 — A6 asks for real donelog writes only, also through a cd or the payload's cwd
+bad=""; for c in 'cd .ai_context/tasks/demo && printf "x\tDONE\tS2\n" >> donelog' 'cd .ai_context/tasks && echo x >> demo/donelog'; do asks "$Pg" "$c" || bad="$bad [$c]"; done
+asks "$Pg" 'printf x >> donelog' "$TD" || bad="$bad [cwd: printf x >> donelog]"
+[ -z "$bad" ] && ok "H3a a write to a bare donelog after cd into the task dir (or with cwd there) asks" || no "H3a donelog write via cd not asked:$bad"
+bad=""; for c in 'grep -c BLOCK .ai_context/tasks/demo/donelog 2>/dev/null' 'wc -l .ai_context/tasks/demo/donelog 2>&1' "awk -F'\t' '\$2 == \"RUN\"' .ai_context/tasks/demo/donelog" \
+  "sed -n '1,20p' .ai_context/tasks/demo/donelog" 'cp .ai_context/tasks/demo/donelog /tmp/donelog.bak' 'cd .ai_context/tasks/demo && grep RUN donelog'; do quiet "$Pg" "$c" || bad="$bad [$c]"; done
+for c in 'cp /tmp/x .ai_context/tasks/demo/donelog 2>/dev/null' "awk -i inplace '{print}' .ai_context/tasks/demo/donelog" 'tee -a .ai_context/tasks/demo/donelog' \
+  'dd if=/dev/null of=.ai_context/tasks/demo/donelog' 'truncate -s0 .ai_context/tasks/demo/donelog' 'ln -sf /tmp/x .ai_context/tasks/demo/donelog'; do asks "$Pg" "$c" || bad="$bad [write: $c]"; done
+[ -z "$bad" ] && ok "M3 donelog reads (grep/wc 2>, awk, sed -n, cp elsewhere) stay silent; writes (cp onto, awk -i inplace, tee, dd of=, truncate, ln) ask" || no "M3 donelog rule:$bad"
+
+# M1 — the gate trusts only ok/foreign SLICE rows, and every [x] it sees needs one (stub porcelain)
+Pm="$WORK/l146m"; mkdir -p "$Pm/.ai_context/tasks/demo" "$Pm/scripts"; printf '# ok\n## Commands\n- Test: `true`\n' > "$Pm/CLAUDE.md"; echo demo > "$Pm/.ai_context/tasks/CURRENT"
+printf '# Demo task\n<!-- card v4 ; pair: off ; base: - ; estimate: 1h 50L -->\nGoal: m1\n## Slices\n- [x] S1 first — lanes: smoke ; codex: no ✓ smoke@0123abcd check@0123abce\n' > "$Pm/.ai_context/tasks/demo/card.md"
+printf '#!/usr/bin/env bash\nprintf "TREE\\t0123456789ab\\nCLOSED\\tnone\\t-\\nLINE\\tstub\\n"\n' > "$Pm/scripts/evidence.sh"; rc=$(gt "$Pm" tsuite-l146m1)
+{ [ "$rc" = 2 ] && grep -qF 'S1 cites evidence that does not hold: not evaluated by evidence.sh' "$WORK/g.err"; } && ok "M1 an [x] slice with no SLICE row in the porcelain blocks (not evaluated by evidence.sh)" || no "M1 missing SLICE row passed (rc=$rc)"
+printf '#!/usr/bin/env bash\nprintf "TREE\\t0123456789ab\\nSLICE\\tS1\\tnoref\\tno evidence reference\\nCLOSED\\tnone\\t-\\nLINE\\tstub\\n"\n' > "$Pm/scripts/evidence.sh"; rc=$(gt "$Pm" tsuite-l146m1b)
+{ [ "$rc" = 2 ] && grep -qF 'S1 is marked [x] without an evidence reference' "$WORK/g.err"; } && ok "M1 a porcelain noref blocks even where the gate itself read a reference" || no "M1 porcelain noref passed (rc=$rc)"
+
+# M2 — gate state never under the project; an unwritable counter yields; the supervisor never blocks mute
+P2="$WORK/l146s"; ready "$P2"; mkdir -p "$P2/.tmp"
+sed -i.bak 's/^- \[ \] S2 second — lanes: smoke ; codex: no$/& ✓ smoke@0badc0de check@0badc0df/; s/^- \[ \] S2 /- [x] S2 /' "$P2/.ai_context/tasks/demo/card.md"; rm -f "$P2/.ai_context/tasks/demo/card.md.bak"
+r=""; for _ in 1 2 3; do printf '{"session_id":"tsuite-l146m2"}' | TMPDIR="$P2/.tmp" CLAUDE_PROJECT_DIR="$P2" bash "$GATE" >/dev/null 2>&1; r="$r$?"; done
+{ [ "$r" = 220 ] && [ "$(dl "$P2" demo STUCK)" = 1 ] && [ -z "$(ls -A "$P2/.tmp")" ]; } && ok "M2 TMPDIR inside the project: state goes elsewhere, the third stop yields (STUCK)" || no "M2 in-project TMPDIR: rcs $r, STUCK $(dl "$P2" demo STUCK), .tmp: $(ls -A "$P2/.tmp" | head -3)"
+rm -f /tmp/claude-gate-red-tsuite-l146m2-* /tmp/claude-gate-stuck-tsuite-l146m2-* /tmp/claude-gate-line-tsuite-l146m2-*
+if [ "$(id -u)" = 0 ]; then skp "M2 unwritable TMPDIR (root writes everywhere)"
+else
+  mkdir -p "$WORK/l146ro"; chmod 555 "$WORK/l146ro"; n0="$(dl "$P2" demo GATE-ERROR)"
+  printf '{"session_id":"tsuite-l146ro"}' | TMPDIR="$WORK/l146ro" CLAUDE_PROJECT_DIR="$P2" bash "$GATE" > "$WORK/g.out" 2>/dev/null; rc=$?
+  { [ "$rc" = 0 ] && [ "$(dl "$P2" demo GATE-ERROR)" = $((n0 + 1)) ] && grep -q 'GATE-ERROR.*block counter' "$P2/.ai_context/tasks/demo/donelog" && grep -qF 'internal error' "$WORK/g.out"; } \
+    && ok "M2 an unwritable block counter yields with a GATE-ERROR row instead of blocking uncounted" || no "M2 unwritable counter (rc=$rc): $(cat "$WORK/g.out")"
+  cp "$P2/CLAUDE.md" "$WORK/l146cl"; printf '# t\n<!-- claude-starter: UNCONFIGURED -->\n' > "$P2/CLAUDE.md"
+  printf '{"session_id":"tsuite-l146ro2"}' | TMPDIR="$WORK/l146ro" CLAUDE_PROJECT_DIR="$P2" bash "$GATE" > "$WORK/g.out" 2> "$WORK/g.err"; rc=$?; cp "$WORK/l146cl" "$P2/CLAUDE.md"
+  { [ "$rc" = 2 ] && grep -qF 'SETUP GATE' "$WORK/g.err"; } && ok "M2 no writable TMPDIR: a block still carries its reason on stderr" || no "M2 mute block (rc=$rc): stderr '$(head -c 120 "$WORK/g.err")'"
+  chmod 755 "$WORK/l146ro"
+fi
+
+# M4 / L2 — evidence.sh trust|approve|check|codex in command position on a normalised probe
+bad=""; for c in "bash scripts/evidence.sh 'trust' smoke" 'bash scripts/evidence.sh "approve"' $'bash scripts/evidence.sh \\\ntrust smoke' \
+  'bash scripts/evidence\.sh check S1 --agent x --source human' 'bash -c "bash scripts/evidence.sh trust smoke"'; do asks "$Pg" "$c" || bad="$bad [$c]"; done
+[ -z "$bad" ] && ok "M4 quoted, escaped or line-continued subcommands still ask (globs, variables and symlinks stay the boundary)" || no "M4 not asked:$bad"
+bad=""; for c in 'git commit -m "fix: evidence.sh check S1 parses the verdict"' "git commit -m 'docs: run bash scripts/evidence.sh approve after reading'"; do quiet "$Pg" "$c" || bad="$bad [$c]"; done
+[ -z "$bad" ] && ok "L2 a commit message mentioning evidence.sh check/approve does not ask" || no "L2 commit message asked:$bad"
+
+# M5 — a session started with --agent executor|checker is no background subagent
+Pa="$WORK/l146a"; ready "$Pa"; sed -i.bak 's/^- \[ \] S2 /- [x] S2 /' "$Pa/.ai_context/tasks/demo/card.md"
+rc=$(gt "$Pa" tsuite-l146m5 ',"agent_type":"executor","background_tasks":[]'); ck 2 "$rc" "M5 a top-level agent_type (--agent executor session) does not defer the gate"
+
+# L1 — bash-guard bypasses
+bad=""; for c in '$(rm${IFS}.claude/evidence/smoke.jsonl)scripts/evidence.sh status' 'rm -rf .claude' 'rm -rf ./.claude/./evidence' 'rm -r "$CLAUDE_PROJECT_DIR"/.claude/'; do asks "$Pg" "$c" || bad="$bad [$c]"; done
+[ -z "$bad" ] && ok "L1 A5: a \$( ) prefix on an allowed call, rm -r of .claude itself and ./ /./ path variants ask" || no "L1 A5 bypass:$bad"
+bad=""; for c in '/usr/bin/git stash' 'bash -c "git add -A"' 'git checkout src/a.txt' 'git add *'; do asks "$Pg" "$c" || bad="$bad [$c]"; done
+for c in 'git checkout main' 'git checkout -b src'; do quiet "$Pg" "$c" || bad="$bad [quiet: $c]"; done
+[ -z "$bad" ] && ok "L1 G rules: absolute git, bash -c \"git …\", git checkout <existing path> and git add * ask; branch checkouts stay silent" || no "L1 G rules:$bad"
+
+# L2 — no ask for git add/diff/log/show of the trust file, nor for git restore --staged
+bad=""; for c in 'git add .claude/done-lanes .claude/done-lanes.trust' 'git diff .claude/done-lanes.trust' 'git log -p -- .claude/done-lanes.trust' 'git restore --staged src/a.txt'; do quiet "$Pg" "$c" || bad="$bad [$c]"; done
+for c in 'cat .claude/done-lanes.trust' 'git show HEAD:.claude/done-lanes.trust > .claude/done-lanes.trust' 'git restore --staged -W src/a.txt' 'git restore src/a.txt'; do asks "$Pg" "$c" || bad="$bad [ask: $c]"; done
+[ -z "$bad" ] && ok "L2 staging or reading the trust file and unstaging stay silent; other trust-file use and worktree restores ask" || no "L2:$bad"
+
+# L3 — a GATE-ERROR reason holds no absolute project or home path, and a long one keeps its end
+P3="$WORK/l146e"; ready "$P3"; cp "$REPO/.claude/hooks/"*.sh "$P3/.claude/hooks/"
+awk '/^# --- 1\. Setup gate/ {print "if ;; then"} {print}' "$GATE" > "$P3/.claude/hooks/stop-gate.sh"
+printf '{"session_id":"tsuite-l146l3"}' | CLAUDE_PROJECT_DIR="$P3" bash "$P3/.claude/hooks/stop-gate.sh" >/dev/null 2>&1; r1="$(tail -n 1 "$P3/.ai_context/tasks/demo/donelog")"
+H3="$WORK/l146home"; mkdir -p "$H3/hk" "$H3/$(printf 'deep%.0s/' $(seq 1 30))"; cp "$P3/.claude/hooks/"*.sh "$H3/hk/"; cp "$P3/.claude/hooks/"*.sh "$H3/$(printf 'deep%.0s/' $(seq 1 30))"
+printf '{"session_id":"tsuite-l146l3b"}' | HOME="$H3" CLAUDE_PROJECT_DIR="$P3" bash "$H3/hk/stop-gate.sh" >/dev/null 2>&1; r2="$(tail -n 1 "$P3/.ai_context/tasks/demo/donelog")"
+printf '{"session_id":"tsuite-l146l3c"}' | CLAUDE_PROJECT_DIR="$P3" bash "$H3/$(printf 'deep%.0s/' $(seq 1 30))stop-gate.sh" >/dev/null 2>&1; r3="$(tail -n 1 "$P3/.ai_context/tasks/demo/donelog")"
+{ printf '%s' "$r1" | grep -qF 'rc=2: .claude/hooks/stop-gate.sh: line' && ! printf '%s' "$r1$r2" | grep -qF -e "$P3" -e "$H3" && printf '%s' "$r2" | grep -qF 'rc=2: ~/hk/stop-gate.sh: line' \
+  && printf '%s' "$r3" | grep -qE 'rc=2: \.\.\..*stop-gate\.sh: line [0-9]+' && [ "$(printf '%s' "$r3" | cut -f7 | wc -c)" -le 170 ]; } \
+  && ok "L3 GATE-ERROR reasons strip the project root and \$HOME, and a long one keeps its end" || no "L3 reasons: [$r1] [$r2] [$r3]"
+
+# L4 — Edit asks and their Bash-side twin cover bash-guard, session-start, the checker agent, settings.local.json
+bad=""; for f in .claude/hooks/bash-guard.sh .claude/hooks/session-start.sh .claude/agents/checker.md .claude/settings.local.json; do
+  grep -qF "\"Edit(./$f)\"" "$REPO/.claude/settings.json" || bad="$bad [Edit $f]"
+  { asks "$Pg" "echo x >> $f" && grep -qF 'evidence chain trusts' "$WORK/bg.out"; } || bad="$bad [Bash $f]"
+done
+[ -z "$bad" ] && ok "L4 settings.json Edit-asks and bash-guard asks on writes to bash-guard, session-start, checker.md, settings.local.json" || no "L4 uncovered:$bad"
+
 echo "=== L1-14 · pre-commit guards: append-only + S2 bulk"
 D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$D/.ai_context/knowledge"
 printf 'preamble\n' > "$D/.ai_context/decisions.md"

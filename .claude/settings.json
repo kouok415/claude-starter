@@ -32,7 +32,11 @@
       "Edit(./.claude/hooks/guard-patterns.sh)",
       "Edit(./.claude/hooks/stop-gate.sh)",
       "Edit(./.claude/hooks/spawn-log.sh)",
-      "Edit(./.claude/settings.json)"
+      "Edit(./.claude/hooks/bash-guard.sh)",
+      "Edit(./.claude/hooks/session-start.sh)",
+      "Edit(./.claude/agents/checker.md)",
+      "Edit(./.claude/settings.json)",
+      "Edit(./.claude/settings.local.json)"
     ],
     "deny": [
       "Read(./.env)",

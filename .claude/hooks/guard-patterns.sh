@@ -5,12 +5,14 @@
 #
 #   bash-guard.sh     PreToolUse tiers (deny: force-push / sudo / rm -rf on
 #                     the root; ask: rm -rf leaving the tree, the evidence
-#                     ledger, git commands that drop work during a /task)
+#                     ledger and chain, git commands that drop work during a
+#                     /task)
 #   stop-gate.sh and  setup sentinel; task helpers (CURRENT, idle task,
 #   session-start.sh  pid locks)
 #   spawn-log.sh      task helpers, the donelog writer
 #
-# scripts/evidence.sh sources it too (static-command matcher, donelog writer).
+# scripts/evidence.sh sources it too (static-command matcher, donelog writer,
+# the done-slice regex the gate shares).
 #
 # v3.9 shipped two hand-mirrored copies, and the stop-gate's literal
 # substrings let `rm -fr`, `rm -r -f` and double-space spellings execute
@@ -81,38 +83,70 @@ GUARD_SETUP_SENTINEL='claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace be
 
 # --- v4 bash-guard ask tier (claude-starter v4) ------------------------------
 # git commands that throw uncommitted work away, asked only while a /task is
-# active (the checker reads the main tree; lanes hash it). A git word, then any
-# global options (-C <dir>, -c <k=v>, --flags), then the subcommand.
-_G_GIT='(^|[[:space:];&|(])git([[:space:]]+(-[Cc][[:space:]]+[^[:space:];&|]+|--?[[:alnum:]][^[:space:];&|]*))*[[:space:]]+'
-_G_END='([[:space:];&|)]|$)'
-GUARD_GIT_ADD_ALL="${_G_GIT}add([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(-[[:alnum:]]*A[[:alnum:]]*|--all|\\.|\\./|:/)${_G_END}"
+# active (the checker reads the main tree; lanes hash it). A git word — also
+# /usr/bin/git and the quoted script of `bash -c "git …"` — then any global
+# options (-C <dir>, -c <k=v>, --flags), then the subcommand.
+_G_GIT='(^|[[:space:];&|("'"'"'/])git([[:space:]]+(-[Cc][[:space:]]+[^[:space:];&|]+|--?[[:alnum:]][^[:space:];&|]*))*[[:space:]]+'
+_G_END='([[:space:];&|)"'"'"']|$)'
+GUARD_GIT_ADD_ALL="${_G_GIT}add([[:space:]]+[^[:space:];&|]+)*[[:space:]]+["'"'"']?(-[[:alnum:]]*A[[:alnum:]]*|--all|\\.|\\./|:/|\\*)${_G_END}"
 GUARD_GIT_CHECKOUT_PATH="${_G_GIT}checkout([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(--[[:space:]]+[^[:space:];&|]|\\.${_G_END})"
+# Any checkout: bash-guard then asks when one of its words is an existing path (`git checkout src/a.txt`).
+GUARD_GIT_CHECKOUT="${_G_GIT}checkout${_G_END}"
 GUARD_GIT_RESTORE="${_G_GIT}restore${_G_END}"
+# `git restore --staged <x>` only unstages; with --worktree / -W it also overwrites the file.
+GUARD_GIT_RESTORE_STAGED='(^|[[:space:]])(--staged|-[[:alnum:]]*S[[:alnum:]]*)([[:space:]"'"'"']|$)'
+GUARD_GIT_RESTORE_WT='(^|[[:space:]])(--worktree|-[[:alnum:]]*W[[:alnum:]]*)([[:space:]"'"'"']|$)'
 GUARD_GIT_STASH="${_G_GIT}stash${_G_END}"
 GUARD_GIT_STASH_READ="${_G_GIT}stash[[:space:]]+(list|show)${_G_END}"
 GUARD_GIT_DISCARD="${_G_GIT}(checkout|switch)([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(-[[:alnum:]]*f[[:alnum:]]*|--force|--discard-changes)${_G_END}"
+# git subcommands that only read or stage: they may name the trust file (pre-commit keeps it append-only).
+GUARD_GIT_READ="${_G_GIT}(add|diff|log|show)${_G_END}"
 
 # The evidence ledger: only scripts/evidence.sh writes it. trust, approve and
 # check are the human's sign-off; codex is task-pair.sh's own call.
-GUARD_EVIDENCE_HUMAN='(^|[[:space:];&|(/])evidence\.sh[[:space:]]+(trust|approve|check|codex)([[:space:];&|)]|$)'
+# GUARD_EVIDENCE_HUMAN reads ONE command segment of a normalised probe (bash-guard
+# joins backslash-newlines, deletes quotes and backslashes, then splits on ; & | ( )
+# backticks and newlines): evidence.sh in command position — after env assignments,
+# bash/sh/env/exec/timeout-style wrappers and their flags, by any path. So `evidence.sh
+# check` inside a `git commit -m` message stays silent, unless the message itself puts
+# one of those separators right before it. Globs (evid*.sh), variables and symlinks
+# naming the script stay the documented boundary.
+GUARD_EVIDENCE_HUMAN='^[[:space:]]*(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|bash|sh|zsh|dash|env|command|exec|nohup|time|timeout|nice|-[^[:space:]]*|[0-9][0-9.]*[smhd]?)[[:space:]]+)*([^[:space:]]*/)?evidence\.sh[[:space:]]+(trust|approve|check|codex)([[:space:]]|$)'
 GUARD_EVIDENCE_OVERRIDE='evidence\.sh[[:space:]]+run[[:space:]][^;&|]*--escalated'
 GUARD_PAIR_OVERESTIMATE='(^|[[:space:];&|(/])task-pair\.sh[[:space:]].*--over-estimate([[:space:];&|)]|$)'
-GUARD_LEDGER_PATH="\\.claude/evidence(/|[[:space:];&|)\"']|\$)|\\.claude/done-lanes\\.trust"
-GUARD_DONELOG_PATH='\.ai_context/tasks/[^[:space:]/;&|]+/donelog'
-GUARD_DONELOG_WRITE='>|(^|[[:space:]])(tee|sed|perl|awk|truncate|mv|cp|rm|ln|dd|install|python3?)([[:space:]]|$)'
-# A Bash-side write to a file the evidence chain trusts (the ones settings.json Edit-asks): a redirect, tee
-# or truncate onto it, sed/perl -i on it, rm/mv/unlink/shred of it, cp/install/ln/rsync with it as the last
-# word, dd of=it. Reading them (cat, grep, sed -n, bash scripts/evidence.sh …) stays silent.
-_G_CHAIN='[^[:space:];&|<>]*(scripts/(evidence|precommit-gitleaks|harness-report)\.sh|\.claude/hooks/(guard-patterns|stop-gate|spawn-log)\.sh|\.claude/settings\.json)(["'"'"'[:space:])]|$)'
-GUARD_CHAIN_WRITE=">[>|]?[[:space:]]*${_G_CHAIN}|(^|[[:space:]])(tee|truncate|rm|mv|unlink|shred)[[:space:]]([^;&|]*[[:space:]])?${_G_CHAIN}|(^|[[:space:]])(sed|perl)[[:space:]]([^;&|]*[[:space:]])?(-[[:alnum:]]*i|--in-place)[^;&|]*[[:space:]]${_G_CHAIN}|(^|[[:space:]])(cp|install|ln|rsync)[[:space:]]([^;&|]*[[:space:]])?${_G_CHAIN}[[:space:]]*\$|of=${_G_CHAIN}"
-# The whole command is ONE allowed evidence.sh call: no ; & | redirect,
-# backtick or $ in its arguments (the path may carry "$CLAUDE_PROJECT_DIR"/).
-GUARD_EVIDENCE_OK='^[[:space:]]*(bash[[:space:]]+)?[^[:space:];&|]*scripts/evidence\.sh[[:space:]]+(run|status|show|done|close|start|lint)([[:space:]][^;&|<>`$]*)?$'
+# A5, read on a probe whose /./ and // are collapsed: the ledger directory, the trust
+# file (git add/diff/log/show of it exempt), and rm -r of .claude itself.
+GUARD_LEDGER_DIR="\\.claude/evidence(/|[[:space:];&|)\"']|\$)"
+GUARD_TRUST_FILE='\.claude/done-lanes\.trust'
+GUARD_TRUST_REDIRECT=">[>|]?[[:space:]]*[^[:space:];&|<>]*${GUARD_TRUST_FILE}"
+GUARD_RM_CLAUDE='(^|[[:space:];&|(])rm[[:space:]]([^;&|]*[[:space:]])?["'"'"']?([^[:space:];&|]*/)?\.claude(/\*?)?["'"'"']?([[:space:];&|)]|$)'
+GUARD_RM_RECURSIVE='(^|[[:space:]])(-[[:alnum:]]*[rR][[:alnum:]]*|--recursive)([[:space:]]|$)'
+
+# A Bash-side WRITE to a file (target ERE $2), set into variable $1: a redirect onto it,
+# tee/truncate onto it, rm/mv/unlink/shred of it, sed/perl -i or awk -i inplace on it,
+# cp/install/ln/rsync with it as the last word (trailing redirections aside), dd of=it.
+# Reads (cat, grep, wc, sed -n, awk without -i, cp it elsewhere, 2>/dev/null) never match.
+_g_write() { # $1 = variable name, $2 = target ERE (anchored at a word start by the forms here)
+  printf -v "$1" '%s' ">[>|]?[[:space:]]*$2|(^|[[:space:]])(tee|truncate|rm|mv|unlink|shred)[[:space:]]([^;&|]*[[:space:]])?$2|(^|[[:space:]])(sed|perl)[[:space:]]([^;&|]*[[:space:]])?(-[[:alnum:]]*i|--in-place)[^;&|]*[[:space:]]$2|(^|[[:space:]])g?awk[[:space:]]([^;&|]*[[:space:]])?-i[[:space:]]*inplace[^;&|]*[[:space:]]$2|(^|[[:space:]])(cp|install|ln|rsync)[[:space:]]([^;&|]*[[:space:]])?$2([[:space:]]*[0-9]*>&?[^[:space:]]*)*[[:space:]]*\$|of=$2"
+}
+# A6: a task donelog (only evidence.sh and the hooks append to it). _REL is used when
+# the command cd's into .ai_context (GUARD_CD_AICTX) or runs there: a bare `donelog`.
+_g_write GUARD_DONELOG_WRITE '[^[:space:];&|<>]*\.ai_context/tasks/[^[:space:]/;&|<>"'"'"']+/donelog(["'"'"'[:space:])]|$)'
+_g_write GUARD_DONELOG_WRITE_REL '([^[:space:];&|<>]*/|["'"'"'])?donelog(["'"'"'[:space:])]|$)'
+GUARD_CD_AICTX='(^|[[:space:];&|(])(cd|pushd)[[:space:]]+([^;&|]*[[:space:]])?["'"'"']?[^[:space:];&|]*\.ai_context([/"'"'"'[:space:];&|)]|$)'
+# The scripts and settings the evidence chain trusts — the files settings.json Edit-asks.
+_g_write GUARD_CHAIN_WRITE '[^[:space:];&|<>]*(scripts/(evidence|precommit-gitleaks|harness-report)\.sh|\.claude/hooks/(guard-patterns|stop-gate|spawn-log|bash-guard|session-start)\.sh|\.claude/agents/checker\.md|\.claude/settings(\.local)?\.json)(["'"'"'[:space:])]|$)'
+# The whole command is ONE allowed evidence.sh call: a literal "$CLAUDE_PROJECT_DIR"/
+# or plain path prefix (no $( ) < > or backtick), no ; & | redirect, backtick or $ after.
+GUARD_EVIDENCE_OK='^[[:space:]]*(bash[[:space:]]+)?("\$CLAUDE_PROJECT_DIR"/|[A-Za-z0-9_./~+@-]*)scripts/evidence\.sh[[:space:]]+(run|status|show|done|close|start|lint)([[:space:]][^;&|<>`$]*)?$'
+
+# A done slice line of a card, as the Stop gate and evidence.sh status read it (one regex, hooks review M1).
+GUARD_SLICE_X='^- \[x\] S[0-9]+([[:space:]]|$)'
 
 # --- v4 task helpers (claude-starter v4) ------------------------------------
 # Shared with scripts/evidence.sh, which sources this file and refuses to run
-# (exit 6) without all five — one copy of the static-command matcher and of
-# the donelog writer (ADR-004).
+# (exit 6) without all five and GUARD_SLICE_X — one copy of the static-command
+# matcher, of the donelog writer and of the done-slice regex (ADR-004).
 
 # A command that only lints, parses or lists the code: each segment (split
 # on && || ; |, leading VAR=x dropped) starts with a static tool or carries

@@ -20,7 +20,9 @@
 #     content (closed) -> block
 #   - otherwise one status line, printed only when it changed this session
 # Counted blocks: the same (session, card + content) blocks at most twice; the
-# third stop yields — exit 0, one STUCK row, a systemMessage to the human.
+# third stop yields — exit 0, one STUCK row, a systemMessage to the human. The
+# counters live outside the project ($TMPDIR, else /tmp); a counter that cannot
+# be written yields at once with a GATE-ERROR row.
 # stop_hook_active is honoured by the setup gate only.
 #
 # Fail-open (D5): the gate's own errors never block. This file runs twice —
@@ -41,30 +43,52 @@ TASKS="$ROOT/.ai_context/tasks"
 # --- 0. Supervisor (outer pass; sources nothing, so nothing below can break it)
 if [ "${CLAUDE_STARTER_GATE_INNER:-}" != 1 ]; then
   payload="$(cat 2>/dev/null || true)"
-  errf="$(mktemp "${TMPDIR:-/tmp}/claude-gate-err.XXXXXX" 2>/dev/null)" || errf=/dev/null
+  # Gate state (block counters, markers, this stderr file — and evidence.sh's
+  # scratch files) never lives under the project: a file there changes the tree
+  # the block count is keyed on, so the count never reaches STUCK (review M2).
+  st="${TMPDIR:-/tmp}"
+  r="$(cd "$ROOT" 2>/dev/null && pwd -P)"
+  if [ -n "$r" ]; then
+    case "$(cd "$st" 2>/dev/null && pwd -P)/" in "$r"/*) st=/tmp ;; esac
+  fi
+  errf="$(mktemp "$st/claude-gate-err.XXXXXX" 2>/dev/null || mktemp /tmp/claude-gate-err.XXXXXX 2>/dev/null)" || errf=""
   tmo=()
   command -v timeout >/dev/null 2>&1 && tmo=(timeout 25)
-  out="$(printf '%s' "$payload" | CLAUDE_STARTER_GATE_INNER=1 ${tmo[@]+"${tmo[@]}"} bash "${BASH_SOURCE[0]}" 2>"$errf")"
-  rc=$?
+  if [ -n "$errf" ]; then
+    out="$(printf '%s' "$payload" | TMPDIR="$st" CLAUDE_STARTER_GATE_INNER=1 ${tmo[@]+"${tmo[@]}"} bash "${BASH_SOURCE[0]}" 2>"$errf")"
+    rc=$?
+    err="$(cat "$errf" 2>/dev/null)"
+    rm -f "$errf"
+  else   # no temp file anywhere: stderr shares stdout; the inner's own stdout lines are known
+    out="$(printf '%s' "$payload" | TMPDIR="$st" CLAUDE_STARTER_GATE_INNER=1 ${tmo[@]+"${tmo[@]}"} bash "${BASH_SOURCE[0]}" 2>&1)"
+    rc=$?
+    err="$(printf '%s\n' "$out" | grep -v -e '^claude-starter-gate: BLOCK$' -e '^{"systemMessage":')"
+    out="$(printf '%s\n' "$out" | grep -e '^claude-starter-gate: BLOCK$' -e '^{"systemMessage":')"
+  fi
   if [ "$rc" = 0 ]; then
     [ -z "$out" ] || printf '%s\n' "$out"
   elif [ "$rc" = 2 ] && [ "${out%%$'\n'*}" = 'claude-starter-gate: BLOCK' ]; then
     printf '%s\n' "$out"
-    cat "$errf" >&2
+    printf '%s\n' "${err:-claude-starter gate: blocked - bash scripts/evidence.sh status shows why}" >&2
   else
-    why="$(tail -n 1 "$errf" 2>/dev/null | tr -cd 'A-Za-z0-9 ._:/=()-' | cut -c1-160)"
+    # The reason lands in a tracked donelog: no absolute project or home path,
+    # and when it is long the end (the actual error) is what is kept (review L3).
+    why="$(printf '%s\n' "$err" | grep -v '^[[:space:]]*$' | tail -n 1)"
+    case "$ROOT" in /?*) why="${why//"${ROOT%/}/"/}" ;; esac
+    case "${HOME:-}" in /?*) why="${why//"${HOME%/}"/"~"}" ;; esac
+    why="$(printf '%s' "$why" | tr -cd 'A-Za-z0-9 ._:/=()~-')"
+    [ "${#why}" -le 160 ] || why="...${why: -157}"
     [ "$rc" = 124 ] && why="${why:-timed out after 25 s}"
     why="rc=$rc${why:+: $why}"
     s="$(tr -d '[:space:]' 2>/dev/null < "$TASKS/CURRENT")"
     case "$s" in
       ''|*/*|*..*) ;;
-      *) [ ! -d "$TASKS/$s" ] || printf '%s\tGATE-ERROR\t-\tgate\t-\t-\t%s\n' \
-           "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$why" >> "$TASKS/$s/donelog" 2>/dev/null ;;
+      *) [ ! -d "$TASKS/$s" ] || { printf '%s\tGATE-ERROR\t-\tgate\t-\t-\t%s\n' \
+           "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$why" >> "$TASKS/$s/donelog"; } 2>/dev/null ;;
     esac
     printf '{"systemMessage":"claude-starter gate: internal error (%s) - not blocking this stop; logged to the task donelog. Check by hand: bash scripts/evidence.sh status"}\n' "$why"
     rc=0
   fi
-  [ "$errf" = /dev/null ] || rm -f "$errf"
   exit "$rc"
 fi
 
@@ -94,7 +118,7 @@ if [ "$stop_active" = 0 ] && [ -f "$ROOT/CLAUDE.md" ] && \
    grep -qE "$GUARD_SETUP_SENTINEL" "$ROOT/CLAUDE.md"; then
   marker="${TMPDIR:-/tmp}/claude-setup-nudge-${sid_s}"
   if [ ! -f "$marker" ]; then
-    : > "$marker" 2>/dev/null || true
+    { : > "$marker"; } 2>/dev/null
     mark_block
     {
       printf 'SETUP GATE — this project has not been set up: CLAUDE.md still carries the UNCONFIGURED sentinel / template placeholders.\n'
@@ -107,7 +131,7 @@ if [ "$stop_active" = 0 ] && [ -f "$ROOT/CLAUDE.md" ] && \
 fi
 
 # --- 2. The task: none, v3 or idle -> pass --------------------------------------
-if [ "${GUARD_PATTERNS_V4:-}" != 1 ]; then
+if [ "${GUARD_PATTERNS_V4:-}" != 1 ] || [ -z "${GUARD_SLICE_X:-}" ]; then
   echo "guard-patterns.sh missing or predates v4 (no task helpers)" >&2
   exit 3
 fi
@@ -118,7 +142,7 @@ donelog="$TASKS/$slug/donelog"
 if [ ! -f "$card" ]; then
   v3m="${TMPDIR:-/tmp}/claude-gate-v3note-${sid_s}"
   if [ -f "$TASKS/$slug/plan.md" ] && [ ! -f "$v3m" ]; then
-    : > "$v3m" 2>/dev/null || true
+    { : > "$v3m"; } 2>/dev/null
     printf '{"systemMessage":"claude-starter gate: tasks/CURRENT names %s, a v3 plan.md task without card.md - the v4 gate does not check it. Finish it on the v3-final template or rewrite it as a card."}\n' "$slug_j"
   fi
   exit 0
@@ -127,7 +151,10 @@ task_idle "$ROOT" "$slug" && exit 0
 
 # --- 3. Still running -> defer (D3; ADR-037 widened) ----------------------------
 # A block now buys nothing: the run's end re-wakes the session. Only live pid
-# locks and background subagents count — never a background shell command.
+# locks and background subagents (a background_tasks entry of "type":
+# "subagent") count — never a background shell command, and never the
+# payload's top-level agent_type: that is a session started with --agent
+# executor|checker, which no stop would ever check again (review M5).
 fl=""
 for lk in "$ROOT"/.claude/evidence/locks/*.lock; do
   [ -f "$lk" ] || continue
@@ -136,8 +163,9 @@ for lk in "$ROOT"/.claude/evidence/locks/*.lock; do
   n="${n%.lock}"
   fl="${fl:+$fl,}${n%%-*}:${n#*-}"
 done
-if printf '%s' "$payload" | grep -Eq '"type"[[:space:]]*:[[:space:]]*"subagent"|"agent_type"[[:space:]]*:[[:space:]]*"(executor|checker)"'; then
-  at="$(printf '%s' "$payload" | grep -oE '"agent_type"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/' | tr '\n' ',')"
+if printf '%s' "$payload" | grep -Eq '"type"[[:space:]]*:[[:space:]]*"subagent"'; then
+  at="$(printf '%s' "$payload" | tr '\n' ' ' | grep -oE '"type"[[:space:]]*:[[:space:]]*"subagent"[^{}]*' |
+        grep -oE '"agent_type"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/' | tr '\n' ',')"
   at="${at%,}"
   fl="${fl:+$fl,}subagent:${at:-?}"
 fi
@@ -165,13 +193,18 @@ hash_stdin() {
   fi
 }
 
-# An [x] line cites records after its first ` ✓ `: <name>@<hex id> or codex@waived.
+# An [x] line (GUARD_SLICE_X, the regex evidence.sh reads too) cites records
+# after its first ` ✓ `: <name>@<hex id> or codex@waived.
+xs=""
 while IFS= read -r ln; do
+  s="${ln#- \[x\] }"
+  s="${s%%[!S0-9]*}"
+  xs="$xs $s"
   r=""
   case "$ln" in *' ✓ '*) r="${ln#* ✓ }" ;; esac
   printf '%s\n' "$r" | grep -Eq '(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]+@([0-9a-f]{7,64}|waived)' ||
-    finding noref "$(printf '%s' "$ln" | cut -d' ' -f3)" "$(printf '%s' "$ln" | cut -d' ' -f3) is marked [x] without an evidence reference."
-done < <(grep -E '^- \[x\] S[0-9]+([[:space:]]|$)' "$card")
+    finding noref "$s" "$s is marked [x] without an evidence reference."
+done < <(grep -E "$GUARD_SLICE_X" "$card")
 
 tree=-
 if [ -n "$F_CL" ]; then
@@ -200,9 +233,20 @@ else
     echo "evidence.sh status --porcelain: unparseable output" >&2
     exit 3
   fi
+  # Only ok / foreign pass; every [x] the gate saw needs its SLICE row (review M1).
+  seen=" "
   while IFS=$'\t' read -r k s v d; do
-    [ "$k" = SLICE ] && [ "$v" = bad ] && finding badref "$s" "$s cites evidence that does not hold: $d"
+    [ "$k" = SLICE ] || continue
+    seen="$seen$s "
+    case "$v" in
+      ok|foreign) ;;
+      noref) finding noref "$s" "$s is marked [x] without an evidence reference." ;;
+      *) finding badref "$s" "$s cites evidence that does not hold: ${d:-$v}" ;;
+    esac
   done <<< "$st"
+  for s in $xs; do
+    case "$seen" in *" $s "*) ;; *) finding badref "$s" "$s cites evidence that does not hold: not evaluated by evidence.sh" ;; esac
+  done
   case "$closed" in
     stale*) finding closed - "the card says Closed: but the evidence is not fresh for the current content: ${closed#*$'\t'}" ;;
   esac
@@ -214,7 +258,7 @@ if [ -z "$F_CL" ]; then
   line="$(printf '%s' "$line" | tr -d '"\\' | tr -d '\000-\037')"
   lm="${TMPDIR:-/tmp}/claude-gate-line-${sid_s}-${slug_j}"
   if [ "$(cat "$lm" 2>/dev/null)" != "$line" ]; then
-    printf '%s' "$line" > "$lm" 2>/dev/null || true
+    { printf '%s' "$line" > "$lm"; } 2>/dev/null
     printf '{"systemMessage":"claude-starter gate: %s"}\n' "$line"
   fi
   exit 0
@@ -229,29 +273,28 @@ red_file() { # $1 = key -> prints the counter path
     "$(printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '_')"
 }
 
-red_count() { # $1 = key -> increments and prints the new count
-  rcf="$(red_file "$1")"
-  n="$(cat "$rcf" 2>/dev/null || true)"
-  case "$n" in (''|*[!0-9]*) n=0 ;; esac
-  n=$((n + 1))
-  printf '%s' "$n" > "$rcf" 2>/dev/null || true
-  printf '%s' "$n"
-}
-
 stuck_file() { # $1 = key -> prints the once-per-(session, key) STUCK marker path
   printf '%s/claude-gate-stuck-%s-%s' "${TMPDIR:-/tmp}" "$sid_s" \
     "$(printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '_')"
 }
 
 key="${slug_j}_$( { hash_stdin < "$card" | cut -c1-64; printf '%s\n' "$content"; } | hash_stdin | cut -c1-16)"
-rn="$(red_count "$key")"
+rcf="$(red_file "$key")"
+rn="$(cat "$rcf" 2>/dev/null || true)"
+case "$rn" in (''|*[!0-9]*) rn=0 ;; esac
+rn=$((rn + 1))
+# A count that cannot be kept cannot bound the blocks: yield instead (GATE-ERROR).
+if ! { printf '%s' "$rn" > "$rcf"; } 2>/dev/null || [ "$(cat "$rcf" 2>/dev/null)" != "$rn" ]; then
+  echo "${TMPDIR:-/tmp}: block counter not writable - yielding instead of blocking uncounted" >&2
+  exit 3
+fi
 # Three stops on the same card and content: the run is the human's now. ONE
 # STUCK row per (session, key) — the yield is one handoff however many stops
 # follow (F10); the systemMessage repeats so the human signal survives.
 if [ "$rn" -ge 3 ]; then
   smk="$(stuck_file "$key")"
   if [ ! -f "$smk" ]; then
-    : > "$smk" 2>/dev/null || true
+    { : > "$smk"; } 2>/dev/null
     donelog_row "$donelog" STUCK "${F_SL:--}" "$F_CL" "${tree:0:12}" - "yielded after $rn blocks on the same card and content"
   fi
   printf '{"systemMessage":"claude-starter gate: task %s is BLOCKED - %s stops in a row on the same card and content (%s), yielding now. A human needs to look: .ai_context/tasks/%s/donelog"}\n' \

@@ -65,16 +65,24 @@ _GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
 
 payload="$(cat 2>/dev/null || true)"
 
-# Extract tool_input.command; fall back to matching the raw payload (a
-# false positive from JSON noise is acceptable for a tripwire, a silent
-# parser failure is not).
+# Extract tool_input.command (and the payload's cwd, line 1); fall back to
+# matching the raw payload (a false positive from JSON noise is acceptable for
+# a tripwire, a silent parser failure is not).
 cmd="$(printf '%s' "$payload" | python3 -c '
 import json, sys
 try:
-    print(json.load(sys.stdin).get("tool_input", {}).get("command", ""))
+    p = json.load(sys.stdin)
+    c = p.get("cwd")
+    print("C" + (c if isinstance(c, str) else "").replace("\n", " "))
+    print(p.get("tool_input", {}).get("command", ""))
 except Exception:
     pass
 ' 2>/dev/null || true)"
+pcwd=""
+case "$cmd" in
+  C*) pcwd="${cmd%%$'\n'*}"; pcwd="${pcwd#C}"
+      case "$cmd" in *$'\n'*) cmd="${cmd#*$'\n'}" ;; *) cmd="" ;; esac ;;
+esac
 [ -n "$cmd" ] || cmd="$payload"
 
 log_deny() { # $1 = reason
@@ -171,17 +179,29 @@ fi
 # degrades to the v3 guard above — an empty regex would ask on every command.
 [ "${GUARD_PATTERNS_V4:-}" = 1 ] || exit 0
 
+# Matchers added after the first v4 release: an older guard-patterns.sh leaves them
+# unset, and an empty ERE would match every command — default to one that never does.
+for v in GUARD_GIT_CHECKOUT GUARD_GIT_RESTORE_STAGED GUARD_GIT_RESTORE_WT GUARD_GIT_READ GUARD_LEDGER_DIR \
+         GUARD_TRUST_FILE GUARD_TRUST_REDIRECT GUARD_RM_CLAUDE GUARD_RM_RECURSIVE GUARD_DONELOG_WRITE \
+         GUARD_DONELOG_WRITE_REL GUARD_CD_AICTX GUARD_CHAIN_WRITE; do
+  [ -n "${!v:-}" ] || printf -v "$v" '%s' 'x^'
+done
+
 has() { printf '%s' "$ask_probe" | grep -Eq -- "$1"; }
 
-# Some segment (split on ; & | and newlines) matches $1, not $2, and also $3.
-seg_any() { # $1 = ERE to hit, $2 = ERE to exclude ('' = none), $3 = ERE also required ('' = none)
+# Some segment (split on ; & | and newlines) of $SEG_IN (default: the probe)
+# matches $1 and $3, and not $2 — unless it also matches $4.
+seg_any() { # $1 = ERE to hit, $2 = ERE to exclude ('' = none), $3 = ERE also required ('' = none), $4 = exclusion override
   local seg
   while IFS= read -r seg; do
     printf '%s' "$seg" | grep -Eq -- "$1" || continue
-    [ -n "${2:-}" ] && printf '%s' "$seg" | grep -Eq -- "$2" && continue
+    if [ -n "${2:-}" ] && printf '%s' "$seg" | grep -Eq -- "$2" &&
+       ! { [ -n "${4:-}" ] && printf '%s' "$seg" | grep -Eq -- "$4"; }; then
+      continue
+    fi
     [ -n "${3:-}" ] && ! printf '%s' "$seg" | grep -Eq -- "$3" && continue
     return 0
-  done < <(printf '%s\n' "$ask_probe" | tr ';&|' '\n\n\n')
+  done < <(printf '%s\n' "${SEG_IN:-$ask_probe}" | tr ';&|' '\n\n\n')
   return 1
 }
 
@@ -192,7 +212,13 @@ evidence_ok() {
 }
 
 # The ledger is guarded at any time, task or not (A1–A6).
-sub="$(printf '%s' "$ask_probe" | grep -Eo -- "$GUARD_EVIDENCE_HUMAN" | head -n 1 | sed -E 's/.*evidence\.sh[[:space:]]+([a-z]+).*/\1/')"
+# A1–A3b read evidence.sh in command position on a normalised probe: backslash-
+# newlines joined, quotes and backslashes deleted, one segment per ; & | ( ) ` or
+# newline — `'trust'`, `"approve"`, `evidence\.sh` and `\⏎trust` all ask, a
+# commit message that mentions `evidence.sh check` does not (GUARD_EVIDENCE_HUMAN).
+sub="$(printf '%s\n' "$ask_probe" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' |
+  tr -d "\"'\\\\" | tr ';&|()`' '\n\n\n\n\n\n' | grep -E -m 1 -- "$GUARD_EVIDENCE_HUMAN" |
+  sed -E 's/^.*evidence\.sh[[:space:]]+([a-z]+).*$/\1/')"
 case "$sub" in
   trust) ask "evidence.sh trust — YOU approve this lane command as proof of done; confirm only after reading the lane's whole line and every @ line in .claude/done-lanes (the trust binds them and .claude/gitleaks.toml)" ;;
   approve) ask 'evidence.sh approve — records YOUR approval of the task card; confirm only if you, the human, have read and approve this card' ;;
@@ -205,31 +231,62 @@ fi
 if has "$GUARD_EVIDENCE_OVERRIDE"; then
   ask 'evidence.sh run past an ESCALATE (3 failed runs of this lane for this slice) — confirm only if you, the human, want another attempt'
 fi
-if has "$GUARD_LEDGER_PATH" && ! evidence_ok; then
+# A5 on a probe with /./ and // collapsed: the ledger directory; the trust file,
+# except where git only reads or stages it (a redirect onto it still asks); rm -r
+# of .claude itself.
+lp="$(printf '%s' "$ask_probe" | sed -E 's#/\./#/#g; s#/\./#/#g; s#//+#/#g')"
+if ! evidence_ok && { SEG_IN="$lp" seg_any "$GUARD_LEDGER_DIR" ||
+     SEG_IN="$lp" seg_any "$GUARD_TRUST_FILE" "$GUARD_GIT_READ" '' "$GUARD_TRUST_REDIRECT" ||
+     SEG_IN="$lp" seg_any "$GUARD_RM_CLAUDE" '' "$GUARD_RM_RECURSIVE"; }; then
   ask 'touches .claude/evidence/ or .claude/done-lanes.trust, which only scripts/evidence.sh writes — read them with the Read tool or evidence.sh status/show; confirm only if you, the human, intend this'
 fi
-# A donelog is tracked: git add, cat and grep on it stay silent — writes ask.
-if seg_any "$GUARD_DONELOG_PATH" '' "$GUARD_DONELOG_WRITE" && ! evidence_ok; then
+# A6: a donelog is tracked — git add, cat, grep, wc, sed -n, cp elsewhere stay
+# silent; only writes ask. Inside .ai_context (a cd in the command, or the
+# payload's cwd) a bare `donelog` operand counts too.
+dlw="$GUARD_DONELOG_WRITE"
+case "$pcwd" in */.ai_context|*/.ai_context/*) dlw="$GUARD_DONELOG_WRITE_REL" ;; esac
+has "$GUARD_CD_AICTX" && dlw="$GUARD_DONELOG_WRITE_REL"
+if seg_any "$dlw" && ! evidence_ok; then
   ask 'writes a task donelog, which only scripts/evidence.sh and the hooks append to — confirm only if you, the human, intend this'
 fi
-# The Bash-side twin of settings.json's Edit asks on the evidence chain (an older guard-patterns.sh lacks it).
-if [ -n "${GUARD_CHAIN_WRITE:-}" ] && seg_any "$GUARD_CHAIN_WRITE"; then
-  ask 'writes a script or setting the evidence chain trusts (evidence.sh, the gate, spawn-log, guard-patterns, the gitleaks wrapper, harness-report, settings.json) — confirm only if you, the human, intend this change'
+# The Bash-side twin of settings.json's Edit asks on the evidence chain.
+if seg_any "$GUARD_CHAIN_WRITE"; then
+  ask 'writes a script or setting the evidence chain trusts (evidence.sh, the hooks, guard-patterns, the checker agent, the gitleaks wrapper, harness-report, settings.json or settings.local.json) — confirm only if you, the human, intend this change'
 fi
+
+# A checkout segment naming an existing work-tree path without `--` (G2).
+checkout_path() {
+  local seg w skip ws
+  while IFS= read -r seg; do
+    printf '%s' "$seg" | grep -Eq -- "$GUARD_GIT_CHECKOUT" || continue
+    read -ra ws <<< "$(printf '%s' "${seg##*checkout}" | tr -d "\"'")"
+    skip=""
+    for w in ${ws[@]+"${ws[@]}"}; do
+      if [ -n "$skip" ]; then skip=""; continue; fi
+      case "$w" in -b|-B|--orphan) skip=1; continue ;; -*) continue ;; esac
+      case "$w" in
+        /*) [ -e "$w" ] && return 0 ;;
+        *) { [ -e "$ROOT/$w" ] || { [ -n "$pcwd" ] && [ -e "$pcwd/$w" ]; }; } && return 0 ;;
+      esac
+    done
+  done < <(printf '%s\n' "$ask_probe" | tr ';&|' '\n\n\n')
+  return 1
+}
 
 # While a /task is active (G1–G5): commands that throw uncommitted work away.
 # task_active may run git, so it is asked only after a matcher hits.
 g=""
 if has "$GUARD_GIT_ADD_ALL"; then g=add
 elif has "$GUARD_GIT_CHECKOUT_PATH"; then g=checkout
-elif has "$GUARD_GIT_RESTORE"; then g=restore
+elif seg_any "$GUARD_GIT_RESTORE" "$GUARD_GIT_RESTORE_STAGED" '' "$GUARD_GIT_RESTORE_WT"; then g=restore
 elif seg_any "$GUARD_GIT_STASH" "$GUARD_GIT_STASH_READ"; then g=stash
 elif has "$GUARD_GIT_DISCARD"; then g=discard
+elif checkout_path; then g=checkout
 fi
 if [ -n "$g" ] && task_active "$ROOT"; then
   case "$g" in
     add) ask 'git add -A / --all / . while a /task is active — stage the slice files by name; confirm only if every changed file belongs in this commit' ;;
-    checkout) ask 'git checkout -- <path> / git checkout . overwrites uncommitted work while a /task is active — confirm nothing unsaved is lost' ;;
+    checkout) ask 'git checkout [--] <path> / git checkout . overwrites uncommitted work while a /task is active — confirm nothing unsaved is lost' ;;
     restore) ask 'git restore overwrites uncommitted work while a /task is active — confirm nothing unsaved is lost' ;;
     stash) ask 'git stash moves uncommitted work out of the tree that lanes and the checker read while a /task is active — confirm (git stash list/show never ask)' ;;
     discard) ask 'git checkout -f / git switch --discard-changes throws away uncommitted work while a /task is active — confirm nothing unsaved is lost' ;;

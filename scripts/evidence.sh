@@ -42,6 +42,7 @@ h12() { local s; s="$(printf '%s' "$1" | "${SHA[@]}")"; echo "${s:0:12}"; }
 for f in static_only donelog_row lock_alive task_slug card_current_slice; do
   declare -F "$f" >/dev/null || die 6 ".claude/hooks/guard-patterns.sh is missing or predates v4 — re-sync the template"
 done
+[ -n "${GUARD_SLICE_X:-}" ] || die 6 ".claude/hooks/guard-patterns.sh predates the shared done-slice regex — re-sync the template"
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   NOGIT="not inside a git work tree"
 elif [ -n "$(git rev-parse --show-prefix 2>/dev/null)" ]; then   # review #7: trees would hash the wrong paths
@@ -627,9 +628,9 @@ row_in() { # $1 TYPE, $2 slice|-, $3 tree12|'' (any), $4 tokens a,b; $5 = donelo
   awk -F'\t' -v t="$1" -v s="$2" -v w="$3" -v r="$4" '$2 == t && $3 == s && (w == "" || $5 == w) && $6 == r {f = 1} END {exit !f}' "$5" 2>/dev/null
 }
 
-slice_rows() { # gate view (I-2, P-4): "S<n> TAB ok|foreign|noref|bad TAB detail" per [x] line (the gate's own regex, M1)
+slice_rows() { # gate view (I-2, P-4): "S<n> TAB ok|foreign|noref|bad TAB detail" per [x] line (GUARD_SLICE_X, the gate's regex, M1)
   local ln s t n r nf oth cited tk
-  grep -E '^- \[x\] S[0-9]+([[:space:]]|$)' "$CARD" | while IFS= read -r ln; do
+  grep -E "$GUARD_SLICE_X" "$CARD" | while IFS= read -r ln; do
     s="$(sed -E 's/^- \[x\] (S[0-9]+).*/\1/' <<<"$ln")"
     nf=""
     oth=""
