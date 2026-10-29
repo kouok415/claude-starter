@@ -11,7 +11,7 @@
 # Exit: 0 ok/pass · 1 fail or refused · 2 usage/format · 3 not allowed now · 4 busy · 5 ESCALATE · 6 internal
 # shellcheck disable=SC2046,SC2086  # lane paths and lane lists split on purpose
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 6
+case "$0" in */*) cd "${0%/*}/.." ;; *) cd .. ;; esac || exit 6
 export LC_ALL=C
 
 EV=.claude/evidence
@@ -23,7 +23,8 @@ NOGIT=""
 NOLEDGER=""
 IX=0
 TAB=$'\t'
-L_NAME=(); L_PATHS=(); L_MIN=(); L_EXP=(); L_CAN=(); L_CMD=(); L_LINE=(); EXT=(); MEMO=(); TREE=""; SIDX=""; HC=(); HL=(); HN=(); TW=()
+L_NAME=(); L_PATHS=(); L_MIN=(); L_EXP=(); L_CAN=(); L_CMD=(); L_LINE=(); EXT=(); MEMO=(); TREE=""; SIDX=""; SNEST=""; LCHK=""; HC=(); HL=(); HN=(); TW=()
+LSK=(); LSI=(); LSE=(); LSV=(); BYK=(); BYV=(); DF=(); FS=(); DT=(); TROW=(); JV=""; JR=""; TWHY=""; SM_LANES=""; SM_CODEX=""
 # A slice line is "<approved text>[ ✓ <tokens>]": lanes and codex are read only from the text before its first
 # ' ✓ ', and after it nothing but evidence tokens may follow (review #1). SLICE_RE matches the text before.
 SLICE_RE='^- \[[ ~ox]\] S[0-9]+ .+ (—|--) lanes: [a-z][a-z0-9-]*(,[a-z][a-z0-9-]*)* ; codex: (yes|no)( ; notes: §[^✓]+)?$'
@@ -43,9 +44,9 @@ for f in static_only donelog_row lock_alive task_slug card_current_slice; do
   declare -F "$f" >/dev/null || die 6 ".claude/hooks/guard-patterns.sh is missing or predates v4 — re-sync the template"
 done
 [ -n "${GUARD_SLICE_X:-}" ] || die 6 ".claude/hooks/guard-patterns.sh predates the shared done-slice regex — re-sync the template"
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if ! GITP="$(git rev-parse --is-inside-work-tree --show-prefix 2>/dev/null)"; then
   NOGIT="not inside a git work tree"
-elif [ -n "$(git rev-parse --show-prefix 2>/dev/null)" ]; then   # review #7: trees would hash the wrong paths
+elif case "$GITP" in *$'\n'*) [ -n "${GITP#*$'\n'}" ] ;; *) false ;; esac; then   # review #7: trees would hash the wrong paths
   NOGIT="the project root is not the git top level ($(git rev-parse --show-toplevel 2>/dev/null)) — give the project its own repository"
 fi
 [ -z "$NOGIT" ] || [ "${1:-}" = status ] || die 6 "$NOGIT"
@@ -94,7 +95,7 @@ load_lanes() { # -> L_NAME L_PATHS L_MIN L_EXP L_CAN L_CMD L_LINE, EXT[i], PAIR,
         ext="$ext$n ${ln#@ext }"$'\n'
         ;;
       '@pair '*|'@verify-paths '*)
-        ln="$(printf '%s' "$ln" | sed -E 's/[[:space:]]+#.*$//')"
+        [[ "$ln" =~ [[:space:]]+#.*$ ]] && ln="${ln:0:${#ln}-${#BASH_REMATCH[0]}}"   # sed -E 's/[[:space:]]+#.*$//', no fork
         dirs="$dirs$ln"$'\n'
         case "$ln" in
           '@pair codex') PAIR=codex ;;
@@ -127,11 +128,15 @@ load_lanes() { # -> L_NAME L_PATHS L_MIN L_EXP L_CAN L_CMD L_LINE, EXT[i], PAIR,
     [ -z "${EXT[IX]:-}" ] || bad "$n" "a second @ext for lane '$x'"
     EXT[IX]="$p"
   done <<< "$ext"
-  DIR_SHA="$(printf '%s' "$dirs" | cat - .claude/gitleaks.toml 2>/dev/null | sha | cut -c1-12)"
+  # rc 1 when gitleaks.toml cannot be read (lanes_soft then loads nothing), as the piped cat has always made it;
+  # lanes_soft's trial run (LCHK) only asks whether cat could read it
+  if [ -n "$LCHK" ]; then [ -r .claude/gitleaks.toml ] && [ ! -d .claude/gitleaks.toml ]; return; fi
+  DIR_SHA="$( { printf '%s' "$dirs"; cat .claude/gitleaks.toml 2>/dev/null; } | sha)" || { DIR_SHA="${DIR_SHA:0:12}"; return 1; }
+  DIR_SHA="${DIR_SHA:0:12}"
 }
 
 lanes_soft() { # load_lanes when .claude/done-lanes parses; rc != 0 (nothing loaded) otherwise
-  (load_lanes) >/dev/null 2>&1 && load_lanes
+  (LCHK=1; load_lanes) >/dev/null 2>&1 && load_lanes
 }
 
 # --- task, card, approval ------------------------------------------------------
@@ -141,7 +146,8 @@ task_ctx() { # -> SLUG CARD DLOG DIG D12 A12; $1 = soft: rc 1 instead of exiting
   s="$(task_slug .)" || { [ -n "${1:-}" ] && return 1; die 3 "no active task (.ai_context/tasks/CURRENT)"; }
   [ -f ".ai_context/tasks/$s/card.md" ] || { [ -n "${1:-}" ] && return 1; die 2 "no card at .ai_context/tasks/$s/card.md"; }
   SLUG="$s" CARD=".ai_context/tasks/$s/card.md" DLOG=".ai_context/tasks/$s/donelog"
-  DIG="card:$(card_norm "$CARD" | sha)"
+  DIG="$(card_norm "$CARD" | "${SHA[@]}")"
+  DIG="card:${DIG:0:64}"
   D12="${DIG:5:12}"
   A12="$(awk -F'\t' '$2 == "APPROVE" {a = $5} END {print a}' "$DLOG" 2>/dev/null)"
   return 0
@@ -153,16 +159,19 @@ task_ctx() { # -> SLUG CARD DLOG DIG D12 A12; $1 = soft: rc 1 instead of exiting
 #   Closed: line in close's format (CLOSED_RE). Other text after a ✓, or a Closed: line elsewhere, stays in.
 card_norm() { sed -E -e "/^- \[[ ~ox]\] S[0-9]+ /{s/^- \[[ ~ox]\] /- [ ] /;s/ ✓( $TOK)+\$//;}" -e "\${/$CLOSED_RE/d;}" "$1"; }
 
-slice_line() { [[ "$1" =~ ^S[0-9]+$ ]] && grep -E "^- \[[ ~ox]\] $1( |\$)" "$CARD" | head -n 1; }
-slice_meta() { # $1 = slice line -> "<lanes,...> <yes|no>", read before its first ' ✓ ' (review #1)
-  printf '%s' "${1%% ✓ *}" | sed -nE 's/.* lanes: ([a-z0-9,-]+) ; codex: (yes|no)( ; notes: .*)?$/\1 \2/p'
+slice_line() { [[ "$1" =~ ^S[0-9]+$ ]] && grep -m 1 -E "^- \[[ ~ox]\] $1( |\$)" "$CARD"; }
+SM_RE='.* lanes: ([a-z0-9,-]+) ; codex: (yes|no)( ; notes: .*)?$'
+slice_meta() { # $1 = slice line -> SM_LANES (a,b) and SM_CODEX (yes|no), empty when it does not parse; read before its first ' ✓ ' (review #1)
+  SM_LANES="" SM_CODEX=""
+  [[ "${1%% ✓ *}" =~ $SM_RE ]] && SM_LANES="${BASH_REMATCH[1]}" SM_CODEX="${BASH_REMATCH[2]}"
+  return 0
 }
 slice_ok() { # $1 = slice line -> rc 0 when the approved part parses and only tokens follow its first ' ✓ '
   [[ "${1%% ✓ *}" =~ $SLICE_RE ]] && { [ "${1#* ✓ }" = "$1" ] || [[ " ${1#* ✓ }" =~ $TOKS_RE ]]; }
 }
-slice_lanes() { slice_meta "$1" | cut -d' ' -f1 | tr , ' '; }
+slice_lanes() { slice_meta "$1"; [ -z "$SM_LANES" ] || printf '%s\n' "${SM_LANES//,/ }"; }
 pair_on() { [ "$PAIR" = codex ] || grep -Eq '^<!-- card v4 .*pair: codex' "$CARD"; }
-codex_yes() { [ "$(slice_meta "$1" | cut -d' ' -f2)" = yes ] && pair_on; }
+codex_yes() { slice_meta "$1"; [ "$SM_CODEX" = yes ] && pair_on; }
 card_base() { sed -nE 's/^<!-- card v4 .* base: ([0-9a-f]+) .*/\1/p' "$CARD" | head -n 1; }
 
 waived() { # $1 = unit -> the reason of its WAIVE row at the current card digest; rc 1 when there is none
@@ -174,9 +183,12 @@ started_row() { # $1 = S<n> -> its open START row (none once a DONE row follows)
 }
 
 card_lanes() { # every lane a slice cites: the declared ones in done-lanes order, then undeclared ones (review #2)
-  local all="" ln i
-  while IFS= read -r ln; do all="$all $(slice_lanes "$ln")"; done < <(grep -E '^- \[[ ~ox]\] S[0-9]+ ' "$CARD")
-  all=" $(printf '%s\n' $all | awk '!s[$0]++' | tr '\n' ' ')"
+  local all=" " ln i l
+  while IFS= read -r ln; do   # " a b " — each lane once, in first-cited order
+    slice_meta "$ln"
+    for l in ${SM_LANES//,/ }; do case "$all" in *" $l "*) ;; *) all="$all$l " ;; esac; done
+  done < <(grep -E '^- \[[ ~ox]\] S[0-9]+ ' "$CARD")
+  [ "$all" != " " ] || all="  "
   for ((i = 0; i < ${#L_NAME[@]}; i++)); do
     case "$all" in *" ${L_NAME[i]} "*) echo "${L_NAME[i]}"; all="${all/ ${L_NAME[i]} / }" ;; esac
   done
@@ -209,12 +221,22 @@ tree_of() { # $@ = paths ('.' = whole repo) -> one content id; .ai_context/ and 
     [ $# -gt 0 ] || exit 0
     export GIT_INDEX_FILE="$idx"
     X=(':(exclude).ai_context' ':(exclude).claude/evidence')
-    [ -n "$SIDX" ] || cp "$(git rev-parse --git-path index)" "$idx" 2>/dev/null || rm -f "$idx"
-    l="$(git ls-files -z -co --exclude-standard -- "$@" "${X[@]}" | tr '\0' '\n')" || exit 1
-    [ -n "$SIDX" ] || printf '%s\n' "$l" | tr '\n' '\0' | git update-index --add --remove --info-only -z --stdin 2>/dev/null || exit 1
+    if [ -n "$SIDX" ] && [ -z "$SNEST" ]; then   # share_index saw no untracked repository: none to list
+      l=""
+    elif [ -n "$SIDX" ]; then   # l only names nested repos here: unquoted names as -z gives them, unless one needed quoting
+      l="$(git -c core.quotepath=false ls-files -co --exclude-standard -- "$@" "${X[@]}")" || exit 1
+      case $'\n'"$l" in *$'\n"'*) l="$(git ls-files -z -co --exclude-standard -- "$@" "${X[@]}" | tr '\0' '\n')" || exit 1 ;; esac
+    else
+      cp "$(git rev-parse --git-path index)" "$idx" 2>/dev/null || rm -f "$idx"
+      l="$(git ls-files -z -co --exclude-standard -- "$@" "${X[@]}" | tr '\0' '\n')" || exit 1
+      printf '%s\n' "$l" | tr '\n' '\0' | git update-index --add --remove --info-only -z --stdin 2>/dev/null || exit 1
+    fi
     s="$(git ls-files -s -- "$@" "${X[@]}")" || exit 1
     printf '%s\n' "$s"
-    { grep '/$' <<<"$l"; awk -F'\t' '$1 ~ /^160000 / {print $2}' <<<"$s"; } | while IFS= read -r g; do
+    g=""   # a line ending in / (an untracked repository) or a gitlink: only then the nested pass
+    case "$l"$'\n' in */$'\n'*) g=1 ;; esac
+    case $'\n'"$s" in *$'\n'"160000 "*) g=1 ;; esac
+    [ -z "$g" ] || { grep '/$' <<<"$l"; awk -F'\t' '$1 ~ /^160000 / {print $2}' <<<"$s"; } | while IFS= read -r g; do
       s="$(unset GIT_INDEX_FILE; cd "$g" && SIDX="" tree_of .)" && [ "${s#error:}" = "$s" ] && echo "${g%/} $s" || exit 1
     done
   )" && out="$(printf '%s\n' "$out" | git hash-object --stdin)"; then echo "$out"
@@ -222,14 +244,24 @@ tree_of() { # $@ = paths ('.' = whole repo) -> one content id; .ai_context/ and 
   [ -n "$SIDX" ] || rm -f "$idx"
 }
 share_index() { # status (H2): one scratch index of the whole worktree; on any failure each tree hashes on its own
+  # SNEST: update-index's stderr. It names every untracked repository ("Ignoring path <dir>/"); empty, the
+  # worktree has none, so a tree on this index needs no listing of its own to find one.
   [ -z "$NOGIT" ] && SIDX="$(mktemp "${TMPDIR:-/tmp}/evidence-idx.XXXXXX")" || return 0
   trap 'rm -f "$SIDX"' EXIT
   cp "$(git rev-parse --git-path index)" "$SIDX" 2>/dev/null || rm -f "$SIDX"
-  GIT_INDEX_FILE="$SIDX" git ls-files -z -co --exclude-standard -- . ':(exclude).ai_context' ':(exclude).claude/evidence' |
-    GIT_INDEX_FILE="$SIDX" git update-index --add --remove --info-only -z --stdin 2>/dev/null || { rm -f "$SIDX"; SIDX=""; }
+  SNEST="$(GIT_INDEX_FILE="$SIDX" git ls-files -z -co --exclude-standard -- . ':(exclude).ai_context' ':(exclude).claude/evidence' |
+    GIT_INDEX_FILE="$SIDX" git update-index --add --remove --info-only -z --stdin 2>&1 >/dev/null)" || { rm -f "$SIDX"; SIDX=""; }
 }
 
 lane_tree() { tree_of ${L_PATHS[$1]}; }
+lane_memo() { # $1 = lane index -> MEMO[$1]: its tree, hashed once per call (H2) and shared by lanes with the same paths
+  local j
+  [ -z "${MEMO[$1]:-}" ] || return 0
+  for ((j = 0; j < ${#L_NAME[@]}; j++)); do
+    [ -n "${MEMO[j]:-}" ] && [ "${L_PATHS[j]}" = "${L_PATHS[$1]}" ] && { MEMO[$1]="${MEMO[j]}"; return 0; }
+  done
+  MEMO[$1]="$(lane_tree "$1")"
+}
 slice_paths() { # $1 = S<n> -> the union of its declared lanes' paths, one per line
   local l p=""
   for l in $(slice_lanes "$(slice_line "$1")"); do lane_ix "$l" && p="$p ${L_PATHS[IX]}"; done
@@ -237,6 +269,7 @@ slice_paths() { # $1 = S<n> -> the union of its declared lanes' paths, one per l
 }
 slice_tree() { tree_of $(slice_paths "$1"); }
 
+REC_DROP=$'[",\\\\\t\r\n]'   # what record() drops from a string: " , \ TAB CR LF (was tr -d '",\\\t\r\n')
 record() { # $1 = ledger, then key=str | key:int | key@raw (markers, last); one JSON line whose strings hold no " , \ TAB; sets RID
   local f="$EV/$1" a k v body="" vals=""
   shift
@@ -244,67 +277,172 @@ record() { # $1 = ledger, then key=str | key:int | key@raw (markers, last); one 
     k="${a%%[=:@]*}"
     v="${a:${#k}+1}"
     case "${a:${#k}:1}" in
-      =) v="$(printf '%s' "$v" | tr -d '",\\\t\r\n')"; body="$body,\"$k\":\"$v\"" ;;
+      =) v="${v//$REC_DROP/}"; body="$body,\"$k\":\"$v\"" ;;
       :) v="${v:-0}"; body="$body,\"$k\":$v" ;;
       *) body="$body,\"$k\":$v" ;;
     esac
     vals="$vals$v"
   done
-  RID="$(printf '%s' "$vals" | sha | cut -c1-8)"
+  RID="$(printf '%s' "$vals" | "${SHA[@]}")"
+  RID="${RID:0:8}"
   printf '{"id":"%s"%s}\n' "$RID" "$body" >> "$f"
 }
 
-jget() { local re=".*[{,]\"$2\":\"?([^\",}]*)"; [[ "${1%%,\"markers\":*}" =~ $re ]] && printf '%s\n' "${BASH_REMATCH[1]}" || :; }
+jv() { # $1 = record, $2 = key -> JV: its value (empty when absent); jget without the subshell
+  local re=".*[{,]\"$2\":\"?([^\",}]*)"
+  JV=""
+  [[ "${1%%,\"markers\":*}" =~ $re ]] && JV="${BASH_REMATCH[1]}"
+  return 0
+}
+jvs() { # $1 = record, then keys -> JV: their values joined by one space, as "$(jget r a) $(jget r b)" gives them
+  local r="$1" k o=""
+  shift
+  for k in "$@"; do jv "$r" "$k"; o="$o $JV"; done
+  JV="${o# }"
+}
+jget() { jv "$1" "$2"; [ -z "$JV" ] || printf '%s\n' "$JV"; }
 lastrec() { # $1 = ledger(s), $2 [$3] = fixed strings the line must hold -> the last such line
   A="${2:-\"id\"}" B="${3:-\"id\"}" awk 'index($0, ENVIRON["A"]) && index($0, ENVIRON["B"]) {r = $0} END {if (r != "") print r}' "$EV"/$1 2>/dev/null
 }
 byid() { [[ "$1" =~ ^[0-9a-f]{8}$ ]] && lastrec "*.jsonl" "{\"id\":\"$1\""; }
-approving() { [ "$(jget "$1" run_state) $(jget "$1" verdict) $(jget "$1" critical) $(jget "$1" high) $(jget "$1" prov)" = "completed pass 0 0 ok" ]; }
+byids() { # $@ = record ids -> BYK[i] / BYV[i]: each 8-hex id and what byid prints for it, from one awk pass
+  local i=0 k
+  BYK=() BYV=()
+  for k in "$@"; do [[ "$k" =~ ^[0-9a-f]{8}$ ]] && BYK+=("$k"); done
+  [ ${#BYK[@]} -gt 0 ] || return 0
+  while IFS= read -r k; do BYV[i]="$k"; i=$((i + 1)); done < <(A="${BYK[*]}" awk '
+    BEGIN {n = split(ENVIRON["A"], I, " ")}
+    {for (i = 1; i <= n; i++) if (index($0, "{\"id\":\"" I[i] "\"")) r[i] = $0}
+    END {for (i = 1; i <= n; i++) print r[i]}' "$EV"/*.jsonl 2>/dev/null)
+}
+byid_of() { # $1 = id -> JR: its record from the last byids (byid's answer), empty when not looked up or not found
+  local i
+  JR=""
+  for ((i = 0; i < ${#BYK[@]}; i++)); do [ "${BYK[i]}" = "$1" ] && { JR="${BYV[i]:-}"; return 0; }; done
+  return 0
+}
+approving() { jvs "$1" run_state verdict critical high prov; [ "$JV" = "completed pass 0 0 ok" ]; }
 
-def_sha() { # $1 = a cmd or canary field -> sha256[:12] of it plus "LF<path> <sha256>" for each repo file it names (review #8)
-  local w x="$1"
-  for w in $(printf '%s' "$1" | tr -c 'A-Za-z0-9._/+@-' '\n'); do
+DEF_NP='[!A-Za-z0-9._/+@-]'   # a field's words are its runs of these bytes (was tr -c 'A-Za-z0-9._/+@-' '\n')
+def_files() { # $1 = a cmd or canary field -> DF[]: the repo files its words name, in order (review #8)
+  local w
+  DF=()
+  for w in ${1//$DEF_NP/$'\n'}; do
     case "$w" in /*|*..*) continue ;; esac
-    [ -f "$w" ] && x="$x"$'\n'"$w $(sha < "$w")"
+    [ -f "$w" ] && DF+=("$w")
   done
-  h12 "$x"
+  return 0
 }
-
-lane_defs() { # $1 = lane index -> HC HL HN [$1]: its cmd, line and canary hashes, once per call (H2); HD
-  [ -n "${HC[$1]:-}" ] || HC[$1]="$(def_sha "${L_CMD[$1]}")" HL[$1]="$(h12 "${L_LINE[$1]}")" HN[$1]="$(def_sha "${L_CAN[$1]}")"
-  [ -n "${HD+x}" ] || HD="$(awk -F'\t' '!/^#/ {r = $5} END {print r}' "$TR" 2>/dev/null)"; :
-}
-trust_why() { # $1 = lane index -> why its current definition is not trusted; empty when it is (02 §0.2)
-  local w c l n
-  lane_defs "$1"
-  w="$(awk -F'\t' -v l="${L_NAME[$1]}" '$2 == l {r = $0} END {print r}' "$TR" 2>/dev/null)"
-  IFS=$'\t' read -r _ _ c l _ n _ <<<"$w"
-  if [ -z "$w" ]; then echo "never trusted"
-  elif [ "$c" != "${HC[$1]}" ]; then echo "command changed since trust (its text or a repo file it names)"
-  elif [ "$l" != "${HL[$1]}" ]; then echo "lane line changed since trust"
-  elif [ "$n" != "${HN[$1]}" ]; then echo "canary changed since trust (a repo file it names)"
-  elif [ "$HD" != "$DIR_SHA" ]; then echo "@ directives or scan rules changed since trust"
+files_sha() { # $@ = files -> FS[i]: what `sha < file` prints for each; one hasher run when all are readable
+  local f i=0 ln ok=1
+  FS=()
+  [ $# -gt 0 ] || return 0
+  for f in "$@"; do [ -r "$f" ] || ok=""; done
+  if [ -n "$ok" ]; then
+    while IFS= read -r ln; do FS[i]="${ln:0:64}"; i=$((i + 1)); done < <("${SHA[@]}" -- "$@" 2>/dev/null)
+  fi
+  if [ "$i" != $# ]; then   # an unreadable file or a short answer: one file at a time, as before
+    i=0
+    FS=()
+    for f in "$@"; do FS[i]="$(sha < "$f")"; i=$((i + 1)); done
   fi
 }
+def_texts() { # $@ = cmd or canary fields -> DT[i]: field i plus "LF<path> <sha256>" for each repo file it names
+  local a all=() n=() i=0 j k=0
+  for a in "$@"; do
+    def_files "$a"
+    n+=(${#DF[@]})
+    all+=(${DF[@]+"${DF[@]}"})
+  done
+  files_sha ${all[@]+"${all[@]}"}
+  DT=()
+  for a in "$@"; do
+    DT[i]="$a"
+    for ((j = 0; j < n[i]; j++)); do DT[i]="${DT[i]}"$'\n'"${all[k]} ${FS[k]}"; k=$((k + 1)); done
+    i=$((i + 1))
+  done
+}
+def_sha() { # $1 = a cmd or canary field -> sha256[:12] of it plus "LF<path> <sha256>" for each repo file it names (review #8)
+  def_texts "$1"
+  h12 "${DT[0]}"
+}
+
+lane_defs() { # $1 = lane index -> HC HL HN [$1]: its cmd, line and canary hashes, once per call (H2); HD, TROW
+  local a="" b="" c=""
+  if [ -z "${HC[$1]:-}" ]; then   # def_sha, h12, def_sha in two hasher runs: the files both fields name, then the three texts
+    def_texts "${L_CMD[$1]}" "${L_CAN[$1]}"
+    { IFS= read -r a; IFS= read -r b; IFS= read -r c; } < <("${SHA[@]}" <(printf '%s' "${DT[0]}") <(printf '%s' "${L_LINE[$1]}") <(printf '%s' "${DT[1]}"))
+    HC[$1]="${a:0:12}" HL[$1]="${b:0:12}" HN[$1]="${c:0:12}"
+  fi
+  trust_rows
+}
+lane_defs_all() { # lane_defs for every lane (status asks them all): two hasher runs in all, not two per lane
+  local i f=() h=() ln
+  for ((i = 0; i < ${#L_NAME[@]}; i++)); do f+=("${L_CMD[i]}" "${L_CAN[i]}"); done
+  [ ${#f[@]} -gt 0 ] || return 0
+  def_texts "${f[@]}"   # DT[2i] = lane i's cmd text, DT[2i + 1] its canary text; load_lanes allows 3 lanes at most
+  while IFS= read -r ln; do h+=("${ln:0:12}"); done < <("${SHA[@]}" \
+    <(printf '%s' "${DT[0]}") <(printf '%s' "${L_LINE[0]}") <(printf '%s' "${DT[1]}") \
+    <(printf '%s' "${DT[2]:-}") <(printf '%s' "${L_LINE[1]:-}") <(printf '%s' "${DT[3]:-}") \
+    <(printf '%s' "${DT[4]:-}") <(printf '%s' "${L_LINE[2]:-}") <(printf '%s' "${DT[5]:-}"))
+  for ((i = 0; i < ${#L_NAME[@]}; i++)); do HC[i]="${h[3 * i]:-}" HL[i]="${h[3 * i + 1]:-}" HN[i]="${h[3 * i + 2]:-}"; done
+  trust_rows
+}
+trust_rows() { # -> HD (dir_sha of the trust file's last row) and TROW[i] (lane i's last row), one awk per call
+  local i=0 ln
+  [ -z "${HD+x}" ] || return 0
+  HD=""
+  TROW=()
+  { IFS= read -r HD; while IFS= read -r ln; do TROW[i]="$ln"; i=$((i + 1)); done; } < <(A="${L_NAME[*]}" awk -F'\t' '
+    BEGIN {n = split(ENVIRON["A"], a, " ")}
+    !/^#/ {d = $5}
+    {for (i = 1; i <= n; i++) if ($2 == a[i]) r[i] = $0}
+    END {print d; for (i = 1; i <= n; i++) print r[i]}' "$TR" 2>/dev/null)
+}
+trust_note() { # $1 = lane index -> TWHY: why its current definition is not trusted; empty when it is (02 §0.2)
+  local w c l n
+  lane_defs "$1"
+  w="${TROW[$1]:-}"
+  IFS=$'\t' read -r _ _ c l _ n _ <<<"$w"
+  if [ -z "$w" ]; then TWHY="never trusted"
+  elif [ "$c" != "${HC[$1]}" ]; then TWHY="command changed since trust (its text or a repo file it names)"
+  elif [ "$l" != "${HL[$1]}" ]; then TWHY="lane line changed since trust"
+  elif [ "$n" != "${HN[$1]}" ]; then TWHY="canary changed since trust (a repo file it names)"
+  elif [ "$HD" != "$DIR_SHA" ]; then TWHY="@ directives or scan rules changed since trust"
+  else TWHY=""
+  fi
+}
+trust_why() { trust_note "$1"; [ -z "$TWHY" ] || echo "$TWHY"; }
 
 lane_state() { # $1 = lane -> LS fresh|stale|fail|missing|untrusted|undeclared, LID, LSD, LSW (words for gaps, footers)
+  # A declared lane's answer is kept for the rest of the call (H2), like its trees: no command here writes a lane record
+  # between two asks (status asks twice, done and close ask again in their footer).
   local r
+  if lane_ix "$1" && [ -n "${LSK[IX]:-}" ]; then
+    LS="${LSK[IX]}" LID="${LSI[IX]}" LSD="${LSE[IX]}" LSW="${LSV[IX]}"
+    return 0
+  fi
   r="$(lastrec "$1.jsonl")"
-  LID="$(jget "$r" id)" LS=fresh LSD=fresh LSW=""
+  jv "$r" id
+  LID="$JV" LS=fresh LSD=fresh LSW=""
   if ! lane_ix "$1"; then
     LS=undeclared LSD="not declared in .claude/done-lanes — declare it (the human trusts it) or fix the card"
-  elif lane_defs "$IX" && { [ -n "${TW[IX]+x}" ] || TW[IX]="$(trust_why "$IX")"; } && [ -n "${TW[IX]}" ]; then
+    return 0
+  elif lane_defs "$IX" && { [ -n "${TW[IX]+x}" ] || { trust_note "$IX"; TW[IX]="$TWHY"; }; } && [ -n "${TW[IX]}" ]; then
     LS=untrusted LSD="not trusted: ${TW[IX]} — the human runs: bash scripts/evidence.sh trust $1"
   elif [ -z "$r" ]; then
     LS=missing LSD=missing
-  elif [ "$(jget "$r" verdict)" != pass ]; then
-    LS=fail LSD="failed ($(jget "$r" why))"
-  elif [ "$(jget "$r" cmd_sha) $(jget "$r" lane_sha)" != "${HC[IX]} ${HL[IX]}" ]; then
+  elif jv "$r" verdict; [ "$JV" != pass ]; then
+    jv "$r" why
+    LS=fail LSD="failed ($JV)"
+  elif jvs "$r" cmd_sha lane_sha; [ "$JV" != "${HC[IX]} ${HL[IX]}" ]; then
     LS=stale LSD="stale (record $LID ran under another lane definition)" LSW="pass $LID ran under another definition of the lane"
   else   # review #9 above: a record counts only under the definition trusted now; H2 here: one hash per lane and call
-    [ -n "${MEMO[IX]:-}" ] || MEMO[IX]="$(lane_tree "$IX")"
-    [ "$(jget "$r" tree)" = "${MEMO[IX]}" ] || LS=stale LSD="stale (record $LID was for other content)" LSW="content changed since pass $LID"
+    lane_memo "$IX"
+    jv "$r" tree
+    [ "$JV" = "${MEMO[IX]}" ] || LS=stale LSD="stale (record $LID was for other content)" LSW="content changed since pass $LID"
   fi
+  LSK[IX]="$LS" LSI[IX]="$LID" LSE[IX]="$LSD" LSV[IX]="$LSW"
 }
 
 rev_tail() { # $1 type, $2 unit, $3 lane, $4 tree, $5 result -> the donelog row of review record RID
@@ -628,24 +766,47 @@ row_in() { # $1 TYPE, $2 slice|-, $3 tree12|'' (any), $4 tokens a,b; $5 = donelo
   awk -F'\t' -v t="$1" -v s="$2" -v w="$3" -v r="$4" '$2 == t && $3 == s && (w == "" || $5 == w) && $6 == r {f = 1} END {exit !f}' "$5" 2>/dev/null
 }
 
+sortu() { # $@ = words -> SU: them sorted and deduplicated, one per line (as printf '%s\n' $words | sort -u under LC_ALL=C)
+  local w a=() i j t
+  for w in "$@"; do
+    for ((i = 0; i < ${#a[@]}; i++)); do [ "${a[i]}" = "$w" ] && continue 2; done
+    a+=("$w")
+  done
+  for ((i = 1; i < ${#a[@]}; i++)); do   # insertion sort: a handful of lane names
+    t="${a[i]}"
+    for ((j = i - 1; j >= 0; j--)); do [[ "${a[j]}" > "$t" ]] || break; a[j + 1]="${a[j]}"; done
+    a[j + 1]="$t"
+  done
+  SU=""
+  for ((i = 0; i < ${#a[@]}; i++)); do SU="$SU${SU:+$'\n'}${a[i]}"; done
+}
+
 slice_rows() { # gate view (I-2, P-4): "S<n> TAB ok|foreign|noref|bad TAB detail" per [x] line (GUARD_SLICE_X, the gate's regex, M1)
-  local ln s t n r nf oth cited tk
-  grep -E "$GUARD_SLICE_X" "$CARD" | while IFS= read -r ln; do
-    s="$(sed -E 's/^- \[x\] (S[0-9]+).*/\1/' <<<"$ln")"
+  # $1 = a prefix for every row (status --porcelain: SLICE<TAB>). The cited records are read in one ledger pass (byids).
+  local p="${1:-}" ln s t n r nf oth cited tk a ids=() L=()
+  while IFS= read -r ln; do
+    L+=("$ln")
+    case "$ln" in *' ✓ '*) slice_ok "$ln" && for t in ${ln#* ✓ }; do ids+=("${t#*@}"); done ;; esac
+  done < <(grep -E "$GUARD_SLICE_X" "$CARD")
+  byids ${ids[@]+"${ids[@]}"}
+  for ln in ${L[@]+"${L[@]}"}; do
+    [[ "$ln" =~ ^-\ \[x\]\ (S[0-9]+) ]]   # sed -E 's/^- \[x\] (S[0-9]+).*/\1/'; GUARD_SLICE_X holds it
+    s="${BASH_REMATCH[1]}"
     nf=""
     oth=""
     cited=""
     case "$ln" in
       *' ✓ '*) tk="${ln#* ✓ }" ;;
-      *) printf '%s\tnoref\tno evidence reference\n' "$s"; continue ;;
+      *) printf '%s%s\tnoref\tno evidence reference\n' "$p" "$s"; continue ;;
     esac
     if ! slice_ok "$ln"; then   # review #1: the approved part parses, and after the first ' ✓ ' only tokens
-      printf '%s\tbad\tthe line does not parse, or text after its first check mark is not only <name>@<8 hex> tokens\n' "$s"
+      printf '%s%s\tbad\tthe line does not parse, or text after its first check mark is not only <name>@<8 hex> tokens\n' "$p" "$s"
       continue
     fi
     for t in $tk; do
       n="${t%%@*}"
-      r="$(byid "${t#*@}")"
+      byid_of "${t#*@}"
+      r="$JR"
       case "$n" in check|codex) ;; *) cited="$cited $n" ;; esac
       if [ "$t" = codex@waived ]; then
         waived "$s" >/dev/null || oth="$oth; codex@waived has no waiver at card:$D12"
@@ -654,31 +815,39 @@ slice_rows() { # gate view (I-2, P-4): "S<n> TAB ok|foreign|noref|bad TAB detail
       else
         case "$n" in   # review #4: a review record counts only for this task
           check)
-            [ "$(jget "$r" lane) $(jget "$r" unit) $(jget "$r" task) $(jget "$r" verdict)" = "checker $s $SLUG pass" ] ||
+            jvs "$r" lane unit task verdict
+            [ "$JV" = "checker $s $SLUG pass" ] ||
               oth="$oth; $t is not a passing checker record of $s in this task"
             ;;
           codex)
-            { [ "$(jget "$r" lane) $(jget "$r" unit) $(jget "$r" task)" = "codex-slice $s $SLUG" ] && approving "$r"; } ||
+            jvs "$r" lane unit task
+            { [ "$JV" = "codex-slice $s $SLUG" ] && approving "$r"; } ||
               oth="$oth; $t is not an approving codex-slice review of $s in this task"
             ;;
           *)
-            [ "$(jget "$r" lane) $(jget "$r" verdict)" = "$n pass" ] || oth="$oth; $t is not a passing $n record"
+            jvs "$r" lane verdict
+            [ "$JV" = "$n pass" ] || oth="$oth; $t is not a passing $n record"
             ;;
         esac
       fi
     done
-    [ "$(printf '%s\n' $cited | sort -u)" = "$(printf '%s\n' $(slice_lanes "$ln") | sort -u)" ] ||
-      oth="$oth; cites lanes ($(echo $cited)) but the slice declares ($(slice_lanes "$ln"))"
+    slice_meta "$ln"
+    a="${SM_LANES//,/ }"
+    sortu $cited
+    t="$SU"
+    sortu $a
+    [ "$t" = "$SU" ] ||
+      oth="$oth; cites lanes ($(echo $cited)) but the slice declares ($a)"
     case " $tk" in *" codex@"*) ;; *) codex_yes "$ln" && oth="$oth; codex@ missing (codex: yes, pair on)" ;; esac
-    t="$(tr ' ' , <<<"$tk")"
+    t="${tk// /,}"
     row_in DONE "$s" '' "$t" "$DLOG" || oth="$oth; no DONE row with these ids"
     if [ -z "$nf$oth" ]; then
-      printf '%s\tok\t%s\n' "$s" "$tk"
+      printf '%s%s\tok\t%s\n' "$p" "$s" "$tk"
     elif [ -z "$oth" ] && git show "HEAD:$DLOG" 2>/dev/null | row_in DONE "$s" '' "$t" -; then   # H3b: committed rows only
-      printf '%s\tforeign\t%s\n' "$s" "${nf#; }"
+      printf '%s%s\tforeign\t%s\n' "$p" "$s" "${nf#; }"
     else
       r="$nf${oth:-; the DONE row with these ids is not committed}"
-      printf '%s\tbad\t%s\n' "$s" "$(printf '%s' "${r#; }" | tr -cd '\040-\176' | cut -c1-300)"
+      printf '%s%s\tbad\t%s\n' "$p" "$s" "$(printf '%s' "${r#; }" | tr -cd '\040-\176' | cut -c1-300)"
     fi
   done
 }
@@ -687,7 +856,7 @@ final_ok() { # $1 = whole tree -> rc 0 when this task's final review holds there
   if pair_on; then
     FIN=codex-final
     FREC="$(lastrec codex.jsonl '"lane":"codex-final","unit":"final",' "\"task\":\"$SLUG\",")"
-    if [ -n "$FREC" ] && approving "$FREC" && [ "$(jget "$FREC" tree)" = "$1" ]; then
+    if [ -n "$FREC" ] && approving "$FREC" && jv "$FREC" tree && [ "$JV" = "$1" ]; then
       FTOK="codex@$(jget "$FREC" id)"
     elif waived final >/dev/null; then
       FTOK=codex@waived
@@ -697,8 +866,8 @@ final_ok() { # $1 = whole tree -> rc 0 when this task's final review holds there
   else
     FIN=checker-final
     FREC="$(lastrec checker.jsonl '"lane":"checker","unit":"final",' "\"task\":\"$SLUG\",")"
-    [ -n "$FREC" ] && [ "$(jget "$FREC" verdict)" = pass ] && [ "$(jget "$FREC" tree)" = "$1" ] &&
-      FTOK="check@$(jget "$FREC" id)"
+    [ -n "$FREC" ] && jv "$FREC" verdict && [ "$JV" = pass ] && jv "$FREC" tree && [ "$JV" = "$1" ] && jv "$FREC" id &&
+      FTOK="check@$JV"
   fi
 }
 
@@ -710,7 +879,8 @@ closed_row() { # "none|ok|foreign|stale TAB detail" for the Closed: line (R11; r
   ct="${c#Closed: tree:}"
   ct="${ct%% *}"
   tk="${c#* ✓ }"
-  tk="$(tr ' ' , <<<"${tk% — *}")"
+  tk="${tk% — *}"
+  tk="${tk// /,}"
   w="${TREE:-$(tree_of .)}"
   ! grep -qE '^- \[[ ~o]\] S[0-9]+' "$CARD" || { det="$det; not every slice is [x]"; hard=1; }
   [ ${#L_NAME[@]} -gt 0 ] || { det="$det; .claude/done-lanes is missing or does not parse"; hard=1; }
@@ -725,7 +895,8 @@ closed_row() { # "none|ok|foreign|stale TAB detail" for the Closed: line (R11; r
   done
   if ! final_ok "$w"; then
     det="$det; $FIN: $([ -n "$FREC" ] && echo stale || echo missing)"
-    [ "$(jget "$FREC" tree)" = "$w" ] && hard=1   # the latest final review at this content does not approve
+    jv "$FREC" tree
+    [ "$JV" = "$w" ] && hard=1   # the latest final review at this content does not approve
   fi
   [ "$ct" = "${w:0:12}" ] || { det="$det; tree: changed since close"; hard=1; }
   [ "$(awk -F'\t' '$2 == "CLOSE" {r = $5 " " $6} END {print r}' "$DLOG" 2>/dev/null)" = "$ct $tk" ] ||
@@ -939,10 +1110,11 @@ cmd_status() { # status [--line|--porcelain|--tree <S<n>|final>] (02 §0.9): --p
     [ -z "$A12" ] || [ "$A12" = "$D12" ] || x=changed
     line="evidence[$SLUG]: slice $(card_current_slice "$CARD")"
     line="$line ($(grep -c '^- \[x\] S[0-9]' "$CARD")/$(grep -cE '^- \[[ ~ox]\] S[0-9]+ ' "$CARD") done) · card $x"
+    lane_defs_all
     for ((k = 0; k < ${#L_NAME[@]}; k++)); do
       l="${L_NAME[k]}"
       lane_state "$l"
-      lock_alive "$(cut -f1 "$EV/locks/run-$l.lock" 2>/dev/null)" && LS=running
+      [ -f "$EV/locks/run-$l.lock" ] && lock_alive "$(cut -f1 "$EV/locks/run-$l.lock" 2>/dev/null)" && LS=running
       line="$line · $l $LS"
     done
     cr=1
@@ -956,8 +1128,9 @@ cmd_status() { # status [--line|--porcelain|--tree <S<n>|final>] (02 §0.9): --p
   esac
   if [ "$m" = --porcelain ]; then
     printf 'TREE\t%s\n' "$TREE"
-    slice_rows | sed "s/^/SLICE$TAB/"
-    printf 'CLOSED\t%s\nLINE\t%s\n' "$cr" "$(tr -d '"\\' <<<"$line")"
+    slice_rows "SLICE$TAB"
+    x="${line//[\"\\]/}"   # tr -d '"\\'
+    printf 'CLOSED\t%s\nLINE\t%s\n' "$cr" "${x%"${x##*[!$'\n']}"}"
     exit 0
   fi
   tl="$(bash scripts/harness-report.sh --tripwire "$SLUG" 2>/dev/null)" || tl=""   # --tripwire lands in C6; until then no tripwire part

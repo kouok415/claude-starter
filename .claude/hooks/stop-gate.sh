@@ -57,7 +57,8 @@ if [ "${CLAUDE_STARTER_GATE_INNER:-}" != 1 ]; then
   if [ -n "$errf" ]; then
     out="$(printf '%s' "$payload" | TMPDIR="$st" CLAUDE_STARTER_GATE_INNER=1 ${tmo[@]+"${tmo[@]}"} bash "${BASH_SOURCE[0]}" 2>"$errf")"
     rc=$?
-    err="$(cat "$errf" 2>/dev/null)"
+    err=""
+    [ -f "$errf" ] && [ -r "$errf" ] && err="$(< "$errf")"   # cat 2>/dev/null without the fork; bash's own warnings still show
     rm -f "$errf"
   else   # no temp file anywhere: stderr shares stdout; the inner's own stdout lines are known
     out="$(printf '%s' "$payload" | TMPDIR="$st" CLAUDE_STARTER_GATE_INNER=1 ${tmo[@]+"${tmo[@]}"} bash "${BASH_SOURCE[0]}" 2>&1)"
@@ -95,19 +96,37 @@ fi
 # --- 1. Setup gate (inner pass from here on) -----------------------------------
 # Sentinel + task helpers, one source with session-start.sh and bash-guard.sh
 # (ADR-004); the fallback keeps the setup gate armed on a partial sync.
-_GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
+case "${BASH_SOURCE[0]}" in */*) _GP="${BASH_SOURCE[0]%/*}/guard-patterns.sh" ;; *) _GP=./guard-patterns.sh ;; esac
 # shellcheck source=guard-patterns.sh
 [ -f "$_GP" ] && . "$_GP"
 [ -n "${GUARD_SETUP_SENTINEL:-}" ] || GUARD_SETUP_SENTINEL='claude-starter: UNCONFIGURED|<e\.g\.,|<command>|Replace before first commit'
 
 payload="$(cat 2>/dev/null || true)"
+# A one-line payload is read with bash's regex, as grep and sed read a line; a
+# payload with a newline in it, or a session_id match that is not the whole
+# line (sed would print the rest too), goes through grep / sed as before.
+one_line=1
+case "$payload" in *$'\n'*) one_line="" ;; esac
 stop_active=0
-if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+re='"stop_hook_active"[[:space:]]*:[[:space:]]*true'
+if [ -n "$one_line" ]; then [[ "$payload" =~ $re ]] && stop_active=1
+elif printf '%s' "$payload" | grep -q "$re"; then
   stop_active=1
 fi
-sid="$(printf '%s' "$payload" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-# Filename-safe session id for this hook's own marker/counter files.
-sid_s="$(printf '%s' "${sid:-nosession}" | tr -cd 'A-Za-z0-9._-')"
+re='.*"session_id"[[:space:]]*:[[:space:]]*"([^"]*)".*'
+sid=""
+if [ -n "$one_line" ] && [[ "$payload" =~ $re ]] && [ "${BASH_REMATCH[0]}" = "$payload" ]; then
+  sid="${BASH_REMATCH[1]}"
+else
+  case "$payload" in *'"session_id"'*) sid="$(printf '%s' "$payload" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')" ;; esac
+fi
+# Filename-safe session id for this hook's own marker/counter files (tr only when it is not already).
+SAFE_CH=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-
+safe() { # $1 = string -> FS_SAFE: it with every byte outside A-Za-z0-9._- deleted (tr -cd)
+  case "$1" in *[!$SAFE_CH]*) FS_SAFE="$(printf '%s' "$1" | tr -cd 'A-Za-z0-9._-')" ;; *) FS_SAFE="$1" ;; esac
+}
+safe "${sid:-nosession}"
+sid_s="$FS_SAFE"
 [ -n "$sid_s" ] || sid_s=nosession
 
 # Fixed stdout marker, printed before EVERY exit-2 block (see the header).
@@ -136,7 +155,8 @@ if [ "${GUARD_PATTERNS_V4:-}" != 1 ] || [ -z "${GUARD_SLICE_X:-}" ]; then
   exit 3
 fi
 slug="$(task_slug "$ROOT")" || exit 0
-slug_j="$(printf '%s' "$slug" | tr -cd 'A-Za-z0-9._-')"
+safe "$slug"
+slug_j="$FS_SAFE"
 card="$TASKS/$slug/card.md"
 donelog="$TASKS/$slug/donelog"
 if [ ! -f "$card" ]; then
@@ -163,7 +183,8 @@ for lk in "$ROOT"/.claude/evidence/locks/*.lock; do
   n="${n%.lock}"
   fl="${fl:+$fl,}${n%%-*}:${n#*-}"
 done
-if printf '%s' "$payload" | grep -Eq '"type"[[:space:]]*:[[:space:]]*"subagent"'; then
+re='"type"[[:space:]]*:[[:space:]]*"subagent"'
+if { [ -n "$one_line" ] && [[ "$payload" =~ $re ]]; } || { [ -z "$one_line" ] && printf '%s' "$payload" | grep -Eq "$re"; }; then
   at="$(printf '%s' "$payload" | tr '\n' ' ' | grep -oE '"type"[[:space:]]*:[[:space:]]*"subagent"[^{}]*' |
         grep -oE '"agent_type"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/' | tr '\n' ',')"
   at="${at%,}"
@@ -195,16 +216,25 @@ hash_stdin() {
 
 # An [x] line (GUARD_SLICE_X, the regex evidence.sh reads too) cites records
 # after its first ` ✓ `: <name>@<hex id> or codex@waived.
+# One grep reads every line's references (-a: a line in another encoding stays a line).
 xs=""
+xa=()
+ra=()
 while IFS= read -r ln; do
   s="${ln#- \[x\] }"
   s="${s%%[!S0-9]*}"
   xs="$xs $s"
   r=""
   case "$ln" in *' ✓ '*) r="${ln#* ✓ }" ;; esac
-  printf '%s\n' "$r" | grep -Eq '(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]+@([0-9a-f]{7,64}|waived)' ||
-    finding noref "$s" "$s is marked [x] without an evidence reference."
+  xa+=("$s")
+  ra+=("$r")
 done < <(grep -E "$GUARD_SLICE_X" "$card")
+if [ ${#ra[@]} -gt 0 ]; then
+  while IFS=: read -r n _; do
+    s="${xa[n - 1]}"
+    finding noref "$s" "$s is marked [x] without an evidence reference."
+  done < <(printf '%s\n' "${ra[@]}" | grep -anvE '(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]+@([0-9a-f]{7,64}|waived)')
+fi
 
 tree=-
 if [ -n "$F_CL" ]; then
@@ -226,9 +256,19 @@ else
     echo "evidence.sh status --porcelain failed (rc $rc)" >&2
     exit 3
   fi
-  tree="$(printf '%s\n' "$st" | awk -F'\t' '$1 == "TREE" {print $2; exit}')"
-  closed="$(printf '%s\n' "$st" | awk -F'\t' '$1 == "CLOSED" {print $2 "\t" $3; exit}')"
-  line="$(printf '%s\n' "$st" | awk -F'\t' '$1 == "LINE" {print $2; exit}')"
+  # The first TREE, CLOSED and LINE rows, their fields cut at each TAB (as awk -F'\t' reads them).
+  tree="" closed="" line="" t1="" t2="" t3=""
+  while IFS= read -r ln; do
+    k="${ln%%$'\t'*}"
+    case "$k" in TREE|CLOSED|LINE) ;; *) continue ;; esac
+    v=""
+    case "$ln" in *$'\t'*) v="${ln#*$'\t'}" ;; esac
+    case "$k" in
+      TREE) [ -n "$t1" ] || { t1=1; tree="${v%%$'\t'*}"; } ;;
+      CLOSED) [ -n "$t2" ] || { t2=1; d=""; case "$v" in *$'\t'*) d="${v#*$'\t'}" ;; esac; closed="${v%%$'\t'*}"$'\t'"${d%%$'\t'*}"; } ;;
+      LINE) [ -n "$t3" ] || { t3=1; line="${v%%$'\t'*}"; } ;;
+    esac
+  done <<< "$st"
   if [ -z "$tree" ] || [ -z "$closed" ] || [ -z "$line" ]; then
     echo "evidence.sh status --porcelain: unparseable output" >&2
     exit 3
@@ -255,9 +295,11 @@ fi
 
 # --- 6. Nothing wrong -> the status line, once per change per session -----------
 if [ -z "$F_CL" ]; then
-  line="$(printf '%s' "$line" | tr -d '"\\' | tr -d '\000-\037')"
+  case "$line" in *[[:cntrl:]\"\\]*) line="$(printf '%s' "$line" | tr -d '"\\' | tr -d '\000-\037')" ;; esac
   lm="${TMPDIR:-/tmp}/claude-gate-line-${sid_s}-${slug_j}"
-  if [ "$(cat "$lm" 2>/dev/null)" != "$line" ]; then
+  old=""
+  [ -f "$lm" ] && [ -r "$lm" ] && old="$(< "$lm")"
+  if [ "$old" != "$line" ]; then
     { printf '%s' "$line" > "$lm"; } 2>/dev/null
     printf '{"systemMessage":"claude-starter gate: %s"}\n' "$line"
   fi

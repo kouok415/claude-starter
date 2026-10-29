@@ -1619,6 +1619,60 @@ bad=""; for f in .claude/hooks/bash-guard.sh .claude/hooks/session-start.sh .cla
 done
 [ -z "$bad" ] && ok "L4 settings.json Edit-asks and bash-guard asks on writes to bash-guard, session-start, checker.md, settings.local.json" || no "L4 uncovered:$bad"
 
+echo "=== L1-48 · perf pass: the fork-free paths keep the old bytes (v4)"
+# evidence.sh, guard-patterns.sh, the gate and task-pair.sh lost their per-field and per-file
+# forks. Each check runs the old command as the oracle: the faster path keeps and drops the same
+# characters — tabs, newlines, quotes, backslashes, control bytes, UTF-8 and invalid bytes.
+NST=$'q"u,o\\b\tt\rr\nn \x01\x1f\x7f \xc3\xa9\xe4\xb8\xad\xff\xfe!'
+P48="$WORK/l148"; ready "$P48"
+rep S2 pass | ev "$P48" check S2 --agent "tsuite$NST" --source human >/dev/null
+want="$(printf '%s' "tsuite$NST" | LC_ALL=C tr -d '",\\\t\r\n')"
+got="$(tail -n 1 "$P48/.claude/evidence/checker.jsonl" | LC_ALL=C sed -E 's/.*"agent_id":"([^"]*)".*/\1/')"
+[ "$got" = "$want" ] && ok "record() drops exactly \" , \\ TAB CR LF from a string field (tr -d is the oracle)" || no "record agent_id: $(printf %q "$got") want $(printf %q "$want")"
+P48p="$WORK/l148p"; mkproj "$P48p"; mklanes "$P48p" "$LANE_SMOKE"; mkcard "$P48p" demo codex '- [~] S1 first — lanes: smoke ; codex: yes'
+ev "$P48p" approve >/dev/null; R48="tsuite$NST$(printf 'x%.0s' $(seq 1 320))"
+rc=$(ev "$P48p" approve --waive S1 --reason "$R48")
+want="$(printf '%s' "$R48" | LC_ALL=C tr '\t\r\n' '   ' | head -c 300)"
+got="$(tail -n 1 "$P48p/.ai_context/tasks/demo/donelog" | LC_ALL=C cut -f7)"
+{ [ "$rc" = 0 ] && [ "$got" = "$want" ] && dl7 "$P48p" demo; } && ok "donelog_row turns TAB CR LF into spaces, keeps every other byte, caps at 300 (7 fields)" || no "WAIVE row (rc=$rc): $(printf %q "$got")"
+printf ' \t demo \r\n\v\f' > "$P48/.ai_context/tasks/CURRENT"; ev "$P48" status --line >/dev/null; a="$(cat "$WORK/ev.out")"
+printf 'de\0mo\n' > "$P48/.ai_context/tasks/CURRENT"; ev "$P48" status --line >/dev/null; b="$(cat "$WORK/ev.out")"
+echo demo > "$P48/.ai_context/tasks/CURRENT"
+case "$a|$b" in 'evidence[demo]: '*'|evidence[demo]: '*) ok "task_slug: whitespace in CURRENT is dropped as tr -d '[:space:]' drops it; a NUL goes through tr" ;; *) no "task_slug: [$a] [$b]" ;; esac
+# the gate's session id: one-line payloads take bash's regex, multi-line ones grep/sed; same marker either way
+D48="$WORK/l148s"; mkdir -p "$D48/.ai_context"; printf '# t\nclaude-starter: UNCONFIGURED\n' > "$D48/CLAUDE.md"
+s48='tsuite-l148 x/y..z é$'; m48="${TMPDIR:-/tmp}/claude-setup-nudge-$(printf '%s' "$s48" | tr -cd 'A-Za-z0-9._-')"
+printf '{"session_id":"%s","stop_hook_active":false}' "$s48" | CLAUDE_PROJECT_DIR="$D48" bash "$GATE" >/dev/null 2>&1; r1=$?; f1=1; [ -f "$m48" ] && f1=0; rm -f "$m48"
+printf '{\n "session_id": "%s",\n "stop_hook_active": false\n}\n' "$s48" | CLAUDE_PROJECT_DIR="$D48" bash "$GATE" >/dev/null 2>&1; r2=$?; f2=1; [ -f "$m48" ] && f2=0; rm -f "$m48"
+printf '{"session_id":"%s","stop_hook_active":true}' "$s48" | CLAUDE_PROJECT_DIR="$D48" bash "$GATE" >/dev/null 2>&1; r3=$?
+printf '{\n "session_id": "%s",\n "stop_hook_active": true\n}' "$s48" | CLAUDE_PROJECT_DIR="$D48" bash "$GATE" >/dev/null 2>&1; r4=$?
+[ "$r1$f1$r2$f2$r3$r4" = 202000 ] && ok "gate: session_id and stop_hook_active read alike from one-line and multi-line payloads (marker named as tr -cd names it)" || no "gate payload reads: rc/marker $r1$f1$r2$f2$r3$r4 (want 202000)"
+# task-pair.sh fingerprint: one stat and one hasher run for plain files, the old per-file line for the rest
+fp_ref() { # $1 = repo -> the pre-perf fingerprint() (no task): one wc, hash and awk per untracked file
+  local ROOT="$1" ex=(':(exclude).claude/evidence' ':(exclude).ai_context/defects.csv') uf p sz hs=(sha256sum)
+  command -v sha256sum >/dev/null 2>&1 || hs=(shasum -a 256)
+  {
+    git -C "$ROOT" rev-parse HEAD; git -C "$ROOT" status --porcelain -- . "${ex[@]}"; git -C "$ROOT" diff HEAD -- . "${ex[@]}"
+    git -C "$ROOT" ls-files -o --exclude-standard -- . "${ex[@]}" | while IFS= read -r uf; do
+      p="$ROOT/$uf"
+      sz="$(wc -c < "$p" 2>/dev/null | tr -d ' ' || true)"
+      if [ -n "$sz" ] && [ "$sz" -le 1048576 ]; then printf '%s %s\n' "$uf" "$("${hs[@]}" < "$p" | awk '{print $1}')"
+      else printf '%s %s %s\n' "$uf" "${sz:-?}" "$(stat -c %Y "$p" 2>/dev/null || stat -f %m "$p" 2>/dev/null || echo '?')"; fi
+    done
+  } 2>/dev/null | "${hs[@]}" | awk '{print $1}'
+}
+F48="$WORK/l148f"; mkdir -p "$F48/scripts" "$F48/u"; git -C "$F48" init -q; echo t > "$F48/t.txt"; git -C "$F48" add t.txt; git -C "$F48" commit -qm t
+cp "$REPO/scripts/task-pair.sh" "$F48/scripts/"; f0="$(cd "$F48" && bash scripts/task-pair.sh fingerprint 2>/dev/null)"; r0="$(fp_ref "$F48")"
+echo a > "$F48/u/plain"; echo b > "$F48/u/a b"; echo c > "$F48/u/q\"t"; echo d > "$F48/u/ünï"; echo e > "$F48/u/-x"; : > "$F48/u/empty"
+echo f > "$F48/u/b\\s"; echo g > "$F48/u/c"$'\r'"r"; echo h > "$F48/u/i"$'\377'
+head -c 1048576 /dev/zero > "$F48/u/1mib"; head -c 1048577 /dev/zero > "$F48/u/1mib+1"; ln -s plain "$F48/u/link"; ln -s nowhere "$F48/u/dangling"
+echo s > "$F48/u/unreadable"; chmod 000 "$F48/u/unreadable"; git init -q "$F48/u/nested"; echo t2 >> "$F48/t.txt"
+f1="$(cd "$F48" && bash scripts/task-pair.sh fingerprint 2>/dev/null)"; r1="$(fp_ref "$F48")"
+git -C "$F48" config core.quotepath false; f2="$(cd "$F48" && bash scripts/task-pair.sh fingerprint 2>/dev/null)"; r2="$(fp_ref "$F48")"; chmod 644 "$F48/u/unreadable"
+{ [ -n "$f0" ] && [ "$f0" = "$r0" ] && [ "$f1" = "$r1" ] && [ "$f2" = "$r2" ] && [ "$f1" != "$f0" ] && [ "$f2" != "$f1" ]; } \
+  && ok "fingerprint is byte-identical to the per-file one (spaces, quotes, backslash, CR, UTF-8 and invalid bytes, -x, empty, 1 MiB edge, links, unreadable, nested repo, quotepath off)" \
+  || no "fingerprint drifted: $f0/$r0 $f1/$r1 $f2/$r2"
+
 echo "=== L1-14 · pre-commit guards: append-only + S2 bulk"
 D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$D/.ai_context/knowledge/lessons"
 printf 'preamble\n' > "$D/.ai_context/decisions.md"
@@ -2943,6 +2997,39 @@ PY
   t1=$(date +%s%N)
   ms=$(( (t1 - t0) / 1000000 ))
   [ "$ms" -lt 500 ] && ok "no-op gate latency ${ms}ms (<500ms)" || no "no-op gate latency ${ms}ms (>=500ms)"
+
+  echo "=== L2-7 · a spawned project through one v4 task (#6 gate latency; #1-5, #7-9 land with C7)"
+  # #6 (01's L2-5b): lab's own stop-gate on a closed card with its real evidence.sh — three lanes,
+  # two on the same paths — stays under the spec's 500 ms per stop. The median of five stops: one
+  # slow stop on a busy runner is noise, three are a regression. (Where coreutils' timeout polls
+  # every 100 ms — uutils — the gate's two timeouts round each stop up to the next 100 ms.)
+  printf '#!/usr/bin/env bash\npython3 -I -c "import time; time.sleep(1.02 - time.time() %% 1)"\necho "verify: $(ls src | wc -l | tr -d " ") passed, 0 failed"\necho "coverage: ok"\n' > "$P/scripts/verify.sh"
+  printf '#!/usr/bin/env bash\necho "verify: 0 passed, 1 failed"; exit 1\n' > "$P/scripts/canary.sh"
+  mkdir -p "$P/src"; echo a > "$P/src/a.txt"; chmod +x "$P/scripts/verify.sh" "$P/scripts/canary.sh"
+  mklanes "$P" "$LANE_SMOKE" "${LANE_SMOKE/smoke | src\/ scripts\//unit | src\/}" "${LANE_SMOKE/smoke | src\/ scripts\//lint | src\/ scripts\/}"
+  git -C "$P" add -A >/dev/null 2>&1; git -C "$P" commit -qm "l2-7 fixture" --no-verify >/dev/null 2>&1
+  mkcard "$P" lat off '- [~] S1 first — lanes: smoke,unit,lint ; codex: no'
+  r27=""; for l in smoke unit lint; do r27="$r27$(ev "$P" trust "$l")"; done
+  r27="$r27$(ev "$P" approve)$(ev "$P" start S1)"; for l in smoke unit lint; do r27="$r27$(ev "$P" run "$l")"; done
+  r27="$r27$(rep S1 pass | ev "$P" check S1 --agent fx --source human)$(ev "$P" "done" S1)"
+  r27="$r27$(rep final pass | ev "$P" check final --agent fx --source human)$(ev "$P" close)"
+  if [ "$r27" = 000000000000 ] && grep -q '^Closed: ' "$P/.ai_context/tasks/lat/card.md"; then
+    a27=(); g27=""
+    us27() { python3 -I -c 'import time; print(int(time.time() * 1e6))'; }   # bash < 5: no EPOCHREALTIME
+    for i in 1 2 3 4 5; do   # EPOCHREALTIME's digits are microseconds, whatever the locale's radix
+      t0="${EPOCHREALTIME:-}"; t0="${t0//[!0-9]/}"; [ -n "$t0" ] || t0="$(us27)"
+      g27="$g27$(GATE_BIN="$P/.claude/hooks/stop-gate.sh" gt "$P" "tsuite-l27-$i")"
+      t1="${EPOCHREALTIME:-}"; t1="${t1//[!0-9]/}"; [ -n "$t1" ] || t1="$(us27)"
+      a27+=($(( (t1 - t0) / 1000 )))
+    done
+    ms="$(printf '%s\n' "${a27[@]}" | sort -n | sed -n 3p)"
+    { [ "$g27" = 00000 ] && [ ! -s "$WORK/g.err" ] && [ "$ms" -lt 500 ]; } \
+      && ok "L2-7#6 lab gate on a closed 3-lane card: median ${ms} ms of 5 stops (${a27[*]}) < 500 ms" \
+      || no "L2-7#6 lab gate latency: median ${ms} ms of 5 stops (${a27[*]}), rc $g27, $(head -c 200 "$WORK/g.err") — target < 500 ms"
+  else
+    no "L2-7 fixture: trust/approve/start/run/check/done/close rc $r27 (want all 0) — $(head -c 300 "$WORK/ev.out")"
+  fi
+  rm -f "$P/.ai_context/tasks/CURRENT"
 fi
 
 echo "=== L2-1b · --local spawn ships tracked content only (F17)"

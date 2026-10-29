@@ -101,6 +101,70 @@ hash_stdin() {
 # `evidence.sh codex` with blocker/major findings). Everything else under
 # pair/ (packets, old results) counts: a judge that touched anything voids
 # its own verdict.
+# Untracked files: "<path> <sha256>" up to 1 MiB, "<path> <size|?> <mtime|?>"
+# above (or unreadable). Readable plain files are sized by one stat and hashed
+# by one hasher run; anything else — or a stat or hasher answering short —
+# goes one file at a time (fp_one), so the lines are the same either way.
+fp_one() { # $1 = a name as ls-files -o prints it -> its fingerprint line
+  local p="$ROOT/$1" sz
+  sz="$(wc -c < "$p" 2>/dev/null | tr -d ' ' || true)"
+  if [ -n "$sz" ] && [ "$sz" -le 1048576 ]; then
+    printf '%s %s\n' "$1" "$(hash_stdin < "$p" | awk '{print $1}')"
+  else
+    printf '%s %s %s\n' "$1" "${sz:-?}" \
+      "$(stat -c %Y "$p" 2>/dev/null || stat -f %m "$p" 2>/dev/null || echo '?')"
+  fi
+}
+fp_untracked() { # stdin: ls-files -o names -> their fingerprint lines, in order
+  local uf i j=0 k=0 ok=1 m names=() plain=() sizes=() small=() sums=() hs
+  while IFS= read -r uf; do names+=("$uf"); done
+  [ ${#names[@]} -gt 0 ] || return 0
+  for uf in "${names[@]}"; do
+    if [ -f "$ROOT/$uf" ] && [ -r "$ROOT/$uf" ]; then plain+=("$ROOT/$uf"); fi
+  done
+  if [ ${#plain[@]} -gt 0 ]; then
+    m="$(stat -L -c %s -- "${plain[@]}" 2>/dev/null || stat -L -f %z -- "${plain[@]}" 2>/dev/null)" || ok=""
+    [ -z "$m" ] || while IFS= read -r i; do sizes+=("$i"); done <<< "$m"
+    [ ${#sizes[@]} = ${#plain[@]} ] || ok=""
+    for i in ${sizes[@]+"${sizes[@]}"}; do
+      case "$i" in ''|*[!0-9]*) ok="" ;; esac
+    done
+  fi
+  if [ -n "$ok" ] && [ ${#plain[@]} -gt 0 ]; then
+    for ((i = 0; i < ${#plain[@]}; i++)); do
+      if [ "${sizes[i]}" -le 1048576 ]; then small+=("${plain[i]}"); fi
+    done
+    if [ ${#small[@]} -gt 0 ]; then
+      if command -v sha256sum >/dev/null 2>&1; then hs=(sha256sum)
+      elif command -v shasum >/dev/null 2>&1; then hs=(shasum -a 256)
+      else hs=(cksum)
+      fi
+      m="$("${hs[@]}" -- "${small[@]}" 2>/dev/null)" || ok=""
+      [ -z "$m" ] || while read -r i _; do sums+=("$i"); done <<< "$m"
+      [ ${#sums[@]} = ${#small[@]} ] || ok=""
+      # a bare digest only: a hasher escapes some names with a leading backslash
+      for i in ${sums[@]+"${sums[@]}"}; do
+        if [ "${hs[0]}" = cksum ]; then case "$i" in ''|*[!0-9]*) ok="" ;; esac
+        else case "$i" in *[!0-9a-f]*) ok="" ;; esac; [ ${#i} = 64 ] || ok=""
+        fi
+      done
+    fi
+  fi
+  for uf in "${names[@]}"; do
+    if [ -n "$ok" ] && [ $j -lt ${#plain[@]} ] && [ "${plain[j]}" = "$ROOT/$uf" ]; then
+      if [ "${sizes[j]}" -le 1048576 ]; then
+        printf '%s %s\n' "$uf" "${sums[k]}"
+        k=$((k + 1))
+      else
+        fp_one "$uf"
+      fi
+      j=$((j + 1))
+    else
+      if [ $j -lt ${#plain[@]} ] && [ "${plain[j]}" = "$ROOT/$uf" ]; then j=$((j + 1)); fi
+      fp_one "$uf"
+    fi
+  done
+}
 fingerprint() {
   git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1 || return 1
   local ex=(':(exclude).claude/evidence' ':(exclude).ai_context/defects.csv')
@@ -111,16 +175,7 @@ fingerprint() {
     git -C "$ROOT" rev-parse HEAD
     git -C "$ROOT" status --porcelain -- . "${ex[@]}"
     git -C "$ROOT" diff HEAD -- . "${ex[@]}"
-    git -C "$ROOT" ls-files -o --exclude-standard -- . "${ex[@]}" | while IFS= read -r uf; do
-      p="$ROOT/$uf"
-      sz="$(wc -c < "$p" 2>/dev/null | tr -d ' ' || true)"
-      if [ -n "$sz" ] && [ "$sz" -le 1048576 ]; then
-        printf '%s %s\n' "$uf" "$(hash_stdin < "$p" | awk '{print $1}')"
-      else
-        printf '%s %s %s\n' "$uf" "${sz:-?}" \
-          "$(stat -c %Y "$p" 2>/dev/null || stat -f %m "$p" 2>/dev/null || echo '?')"
-      fi
-    done
+    git -C "$ROOT" ls-files -o --exclude-standard -- . "${ex[@]}" | fp_untracked
   } 2>/dev/null | hash_stdin | awk '{print $1}'
 }
 
@@ -945,7 +1000,7 @@ next_seq() {
   local n=0 f b
   for f in "$PAIR_DIR"/[0-9][0-9][0-9]-*.md; do
     [ -f "$f" ] || continue
-    b="$(basename "$f")"; b=$((10#${b%%-*}))
+    b="${f##*/}"; b=$((10#${b%%-*}))
     [ "$b" -gt "$n" ] && n="$b"
   done
   printf '%03d' $((n + 1))

@@ -175,9 +175,15 @@ static_only() { # $1 = command -> rc 0 when every segment is static
 }
 
 # .ai_context/tasks/CURRENT -> slug; rc 1 when absent, empty, or a path.
+# Every hook asks this on every call, so it reads the file with the builtin
+# (whitespace deleted as `tr -d '[:space:]'` does); a NUL byte goes through tr.
 task_slug() { # $1 = project root
-  local s
-  s="$(tr -d '[:space:]' 2>/dev/null < "$1/.ai_context/tasks/CURRENT")" || return 1
+  local s="" r
+  { IFS= read -r -d '' s; r=$?; } 2>/dev/null < "$1/.ai_context/tasks/CURRENT" || return 1
+  if [ "$r" = 0 ]; then
+    s="$(tr -d '[:space:]' 2>/dev/null < "$1/.ai_context/tasks/CURRENT")" || return 1
+  fi
+  s="${s//[$' \t\n\v\f\r']/}"
   case "$s" in ''|*/*|*..*) return 1 ;; esac
   printf '%s\n' "$s"
 }
@@ -185,7 +191,7 @@ task_slug() { # $1 = project root
 # The card's in-progress slice: S<n> of the first `- [~]` line, else `-`.
 card_current_slice() { # $1 = card.md
   local s
-  s="$(sed -nE 's/^- \[~\] (S[0-9]+)( .*)?$/\1/p' "$1" 2>/dev/null | head -n 1)"
+  s="$(sed -nE -e '/^- \[~\] (S[0-9]+)( .*)?$/{' -e 's//\1/p' -e 'q' -e '}' "$1" 2>/dev/null)"
   printf '%s\n' "${s:--}"
 }
 
@@ -206,7 +212,8 @@ donelog_row() { # $1 = donelog, $2..$7 = TYPE slice lane|agent|class tree12 reco
   [ -d "${f%/*}" ] || return 0
   row="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   for i in 1 2 3 4 5 6; do
-    v="$(printf '%s' "${1:-}" | tr '\t\r\n' '   ')"; shift 2>/dev/null
+    v="${1:-}"; shift 2>/dev/null
+    v="${v//[$'\t\r\n']/ }"
     [ "$i" = 6 ] && v="${v:0:300}"
     row="$row	${v:--}"
   done
@@ -224,29 +231,42 @@ file_mtime() { # $1 = path -> epoch seconds; empty when absent
 }
 
 # Newest of card.md and donelog mtimes; only when both are a week old is the
-# last commit on task/<slug> asked for (one git call, and only then).
-task_last_active() { # $1 = root, $2 = slug -> epoch; empty when nothing is known
-  local d="$1/.ai_context/tasks/$2" t c
-  t="$(file_mtime "$d/card.md")"
-  c="$(file_mtime "$d/donelog")"
+# last commit on task/<slug> asked for (one git call, and only then). Sets
+# TASK_AT (epoch; empty when nothing is known) and TASK_NOW — no subshell:
+# the Stop gate and bash-guard ask this on every call. Both files present:
+# one stat for the two (each on its own when that does not print two times).
+task_at() { # $1 = root, $2 = slug -> TASK_AT TASK_NOW
+  local d="$1/.ai_context/tasks/$2" t="" c="" m re=$'^(-?[0-9]+)\n(-?[0-9]+)$'
+  if [ -e "$d/card.md" ] && [ -e "$d/donelog" ] &&
+     m="$(stat -c %Y "$d/card.md" "$d/donelog" 2>/dev/null || stat -f %m "$d/card.md" "$d/donelog" 2>/dev/null)" &&
+     [[ "$m" =~ $re ]]; then
+    t="${BASH_REMATCH[1]}" c="${BASH_REMATCH[2]}"
+  else
+    t="$(file_mtime "$d/card.md")"
+    c="$(file_mtime "$d/donelog")"
+  fi
+  if [ "${BASH_VERSINFO[0]:-0}" -ge 5 ]; then TASK_NOW="$EPOCHSECONDS"; else TASK_NOW="$(date +%s)"; fi
   if [ -n "$c" ] && { [ -z "$t" ] || [ "$c" -gt "$t" ]; }; then t="$c"; fi
-  if [ -z "$t" ] || [ $(($(date +%s) - t)) -gt "$TASK_IDLE_SECS" ]; then
+  if [ -z "$t" ] || [ $((TASK_NOW - t)) -gt "$TASK_IDLE_SECS" ]; then
     c="$(git -C "$1" log -1 --format=%ct "refs/heads/task/$2" 2>/dev/null)"
     if [ -n "$c" ] && { [ -z "$t" ] || [ "$c" -gt "$t" ]; }; then t="$c"; fi
   fi
-  printf '%s\n' "$t"
+  TASK_AT="$t"
+}
+
+task_last_active() { # $1 = root, $2 = slug -> epoch; empty when nothing is known
+  task_at "$1" "$2"
+  printf '%s\n' "$TASK_AT"
 }
 
 task_idle() { # $1 = root, $2 = slug -> rc 0 when idle; an unknown age is not idle
-  local t
-  t="$(task_last_active "$1" "$2")"
-  [ -n "$t" ] && [ $(($(date +%s) - t)) -gt "$TASK_IDLE_SECS" ]
+  task_at "$1" "$2"
+  [ -n "$TASK_AT" ] && [ $((TASK_NOW - TASK_AT)) -gt "$TASK_IDLE_SECS" ]
 }
 
 task_idle_days() { # $1 = root, $2 = slug -> whole days since the last activity
-  local t
-  t="$(task_last_active "$1" "$2")"
-  [ -n "$t" ] && echo $((($(date +%s) - t) / 86400))
+  task_at "$1" "$2"
+  [ -n "$TASK_AT" ] && echo $(((TASK_NOW - TASK_AT) / 86400))
 }
 
 # A /task is active: CURRENT names a slug, its card exists, and it is not idle.
