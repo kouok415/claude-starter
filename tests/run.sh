@@ -2467,6 +2467,10 @@ f0="$(fpr)"; printf '%s\t900\tstart\tslice\tS2\t-\t-\t-\t-\t-\tx\n' "$(date -u '
 mkdir -p "$PD/.claude/evidence"; echo '{}' > "$PD/.claude/evidence/r.json"; f1="$(fpr)"
 echo x > "$PKD/x.txt"; f2="$(fpr)"; rm -f "$PKD/x.txt"; sed '$d' "$RL" > "$FK/rl.tmp"; mv "$FK/rl.tmp" "$RL"
 { [ -n "$f0" ] && [ "$f0" = "$f1" ] && [ "$f1" != "$f2" ]; } && ok "fingerprint: a new pair/ file counts; runlog, donelog and .claude/evidence/ writes do not" || no "fingerprint exclusions wrong ($f0 / $f1 / $f2)"
+# The fake's tree_changed variant appends to FAKE_HERDR_TOUCH mid-run: here the defects.csv row that
+# spawn-log's evidence.sh check (a failing checker) or evidence.sh codex (blocker/major) writes meanwhile.
+pk=$(mkpkt 124 slice S2 "$HD"); rc=$(tp FAKE_HERDR_PROMPT=tree_changed FAKE_HERDR_TOUCH="$PD/.ai_context/defects.csv" -- send "$pk"); rm -f "$PD/.ai_context/defects.csv"
+{ [ "$rc" = 0 ] && grep -q "	124	end:completed	" "$RL"; } && ok "a defects.csv row appended while the judge runs leaves the run completed, not tree_changed" || no "defects.csv append voided the run (rc=$rc): $(grep '	124	end' "$RL")"
 
 echo "=== L1-42 · one run per task: the pair lock (v4, D3)"
 LK="$PD/.claude/evidence/locks"; pre=$(prompts); pk2=$(mkpkt 132 slice S2 "$HD")   # written before: a new file in pair/ would void 131

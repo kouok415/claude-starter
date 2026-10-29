@@ -87,13 +87,16 @@ hash_stdin() {
 }
 
 # HEAD + status + diff + untracked content, minus what is machine-written
-# while a run is in flight: the runlog, this run's result, and the donelog
-# and .claude/evidence/ — the gate, spawn-log and a parallel checker write
-# those during every run (R16). Everything else under pair/ (packets, old
-# results) counts: a judge that touched anything voids its own verdict.
+# while a run is in flight: the runlog, this run's result, the donelog,
+# .ai_context/defects.csv and .claude/evidence/ — the gate, spawn-log and a
+# parallel checker write those during every run (R16; defects.csv gets a row
+# from spawn-log's `evidence.sh check` of a failing checker and from
+# `evidence.sh codex` with blocker/major findings). Everything else under
+# pair/ (packets, old results) counts: a judge that touched anything voids
+# its own verdict.
 fingerprint() {
   git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1 || return 1
-  local ex=(':(exclude).claude/evidence')
+  local ex=(':(exclude).claude/evidence' ':(exclude).ai_context/defects.csv')
   [ -z "${TASK:-}" ] || ex+=(":(exclude)$TASK/donelog")
   [ -z "${PAIR_DIR:-}" ] || ex+=(":(exclude)$PAIR_DIR/runlog")
   [ -z "${RESULT:-}" ] || ex+=(":(exclude)$RESULT")
