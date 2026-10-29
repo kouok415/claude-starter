@@ -2161,6 +2161,53 @@ else
   skp "TUTORIAL message table (spawned project — template-repo only)"
 fi
 
+echo "=== L1-38 · docs: box trees name only shipped files, MIGRATION -9, TUTORIAL banners (v4, C8)"
+if [ -f "$REPO/MIGRATION.md" ] && [ -f "$REPO/README.zh-TW.md" ]; then
+  # Reverse of L1-18b: every file-like token in a box tree (*.sh *.md *.json *.yml *.yaml *.toml
+  # *.example, with or without its directory) is a tracked file at the root or under one of the
+  # shipped directories — or the stub of one the user creates (lint.sh ← lint.sh.example).
+  shipped="$(git -C "$REPO" ls-files 2>/dev/null)" || shipped=""
+  [ -n "$shipped" ] || shipped="$(cd "$REPO" && find . -type f -not -path './.git/*' | sed 's#^\./##')"
+  for pair in "README.md|## What's in the box" "README.zh-TW.md|## 盒子裡有什麼"; do
+    f="${pair%%|*}"; h="${pair#*|}"
+    tree="$(awk -v h="$h" '$0==h {f=1; next} f && /^```/ {if (++n==2) exit; next} f && n==1' "$REPO/$f")"
+    toks="$(printf '%s\n' "$tree" | awk '{ while (match($0, /[A-Za-z0-9_.\/-]+/)) { t = substr($0, RSTART, RLENGTH); $0 = substr($0, RSTART + RLENGTH)
+             if (t ~ /\.(sh|md|json|yml|yaml|toml|example)$/) print t } }' | sort -u)"
+    miss=""; nt=0
+    while IFS= read -r t; do
+      [ -n "$t" ] || continue
+      nt=$((nt + 1)); hit=""
+      for d in "" .claude/ .claude/hooks/ .claude/agents/ .claude/skills/ scripts/ templates/ tests/; do
+        printf '%s\n' "$shipped" | grep -qxF -e "$d$t" -e "$d$t.example" && { hit=1; break; }
+      done
+      [ -n "$hit" ] || miss="$miss $t"
+    done <<< "$toks"
+    { [ "$nt" -ge 20 ] && [ -z "$miss" ]; } && ok "$f box tree names only shipped files ($nt names)" || no "$f box tree names files the template does not ship:${miss:- (only $nt names parsed)}"
+  done
+  first="$(grep -m 1 '^## ' "$REPO/MIGRATION.md")"
+  sec="$(awk -v h="$first" '$0 == h {f = 1; next} f && /^## / {exit} f' "$REPO/MIGRATION.md")"
+  { printf '%s\n' "$first" | grep -qE '^## -?[0-9]+\. claude-starter v.* → v' &&
+    grep -qxF '## -9. claude-starter v3-final → v4.0' "$REPO/MIGRATION.md" &&
+    printf '%s\n' "$sec" | grep -qxF '### What changed, and why' &&
+    printf '%s\n' "$sec" | grep -qE '^### (Migrating|Upgrade steps)'; } &&
+    ok "MIGRATION opens with a numbered release section (what changed + migrating) and carries -9 v3-final → v4.0" ||
+    no "MIGRATION: first section '$first' is not a numbered release with 'What changed, and why' + 'Migrating', or -9 v3-final → v4.0 is missing"
+  grep -q '^## Unreleased' "$REPO/MIGRATION.md" && no "MIGRATION still has an '## Unreleased' section" || ok "MIGRATION has no '## Unreleased' section"
+  bad=""
+  for t in TUTORIAL.md TUTORIAL.zh-TW.md; do
+    head -8 "$REPO/$t" | grep -qE '\*\*v([4-9]|[1-9][0-9]+)\.[0-9]+' || bad="$bad $t"
+  done
+  [ -z "$bad" ] && ok "both TUTORIAL banners document a v4 release" || no "TUTORIAL banner predates v4:$bad"
+  bad=""
+  for t in TUTORIAL.md TUTORIAL.zh-TW.md; do
+    r="$(grep '^| ' "$REPO/$t" | grep -F 'codex no verdict twice')"
+    { [ -n "$r" ] && ! printf '%s\n' "$r" | grep -vqF 'evidence.sh'; } || bad="$bad $t"
+  done
+  [ -z "$bad" ] && ok "the 'codex no verdict twice' row names evidence.sh, its owner (R12)" || no "the 'codex no verdict twice' row is missing or does not name evidence.sh:$bad"
+else
+  skp "doc structure checks (spawned project — template-repo only)"
+fi
+
 echo "=== L1-33 · agents and the task skill (v4): checker, executor, card / lanes / evidence"
 AG="$REPO/.claude/agents"; TK="$REPO/.claude/skills/task"
 f="$AG/checker.md"

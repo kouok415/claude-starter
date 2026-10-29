@@ -1,16 +1,10 @@
 # Migration guide
 
-Twenty migrations live here (docs are bilingual elsewhere; this file and the
+Eighteen migrations live here (docs are bilingual elsewhere; this file and the
 English README are the authority when translations drift):
 
-- **[Unreleased — in-flight deferral reads the Stop payload](#unreleased--in-flight-deferral-reads-the-stop-payload)** — the gate defers a verify only while Claude Code lists a background `executor` as running; spawnlog freshness no longer counts, because a background executor logs a row per re-wake and an executor that had already reported kept the gate deferred with nothing left to wake the session.
-- **[Unreleased — templates, /setup, TUTORIAL](#unreleased--templates-setup-tutorial)** — the research template asks for a "What we don't know" section and empty-search records; `/setup` drafts a Verify that proves use, not liveness; TUTORIAL §7 gains a message → meaning → action table.
-- **[Unreleased — pair ledger rulings](#unreleased--pair-ledger-rulings)** — `pair/ledger.md` gains a `seats` column and a fixed `source` enum; minors can be ruled `noted`; high-stakes findings can only be fixed or left `open`.
-- **[Unreleased — sharper checker prompts](#unreleased--sharper-checker-prompts)** — the plan-critic runs `risk: low` verifies before work starts; rung 2 starts from rung 1's premise; verifier, final panel and executor get concrete checklists for vacuous tests, symptom masking, unseen readers and hand-synced lists; planner lenses are defined.
-- **[Unreleased — checker audits](#unreleased--checker-audits)** — `harness-report.sh` flags verify commands changed after a FAIL and `risk: med/high` milestones that finished without their verifier; verifier spawns get their own spawnlog class; README box trees are tested against the shipped files.
-- **[Unreleased — /number-check](#unreleased--number-check)** — a stock skill that vets a measured number (backtest, benchmark, metric) before it is reported; the analysis DoD points at it, sync suggests the same line to existing projects.
-- **[Unreleased — pair-codex transport](#unreleased--pair-codex-transport)** — `/task --profile=pair-codex`: a Codex judge over herdr takes the checker seats; `scripts/task-pair.sh` + `pair.md` + fake-herdr tests (transport only).
-- **[Unreleased — completion and profile fixes](#unreleased--completion-and-profile-fixes)** — current final verification, terminal human checkpoints, and consistent profile-switch warnings.
+- **[-9. claude-starter v3-final → v4.0](#-9-claude-starter-v3-final--v40)** — the evidence release: v4.0 replaces `/task` v3 — a one-page task card replaces spec/plan/brief/lessons and the planning crew; only `scripts/evidence.sh` can mark a slice done, from trusted lanes that ran on the current content; the Stop gate runs no lane; one checker per slice; Codex at the card, high-stakes slices and the close; nine files retired by sync.
+- **[-8. claude-starter v3.14.5 → v3-final](#-8-claude-starter-v3145--v3-final)** — the last v3 release (`v3-final` = `776624a`): in-flight deferral from the Stop payload, research template + /setup Verify, pair ledger rulings, sharper checker prompts, checker audits, `/number-check`, pair-codex transport, completion and profile fixes.
 - **[-7. claude-starter v3.14 → v3.14.5](#-7-claude-starter-v314--v3145)** — the
   single-rm-tier patch: the `Bash(rm -rf:*)` ask rule leaves
   `settings.json` — declarative ask rules prompt in every mode (bypass
@@ -31,6 +25,9 @@ English README are the authority when translations drift):
   strong tier, execution on the cheap one), selected per task via
   `/task --profile=...` and applied by `scripts/task-profile.sh`; the
   completion check splits into its own `final-verifier` agent.
+- **[-4. claude-starter v3.11 → v3.12](#-4-claude-starter-v311--v312)** — the
+  legibility release: demo promises, the STATUS.md live view, the
+  decision ledger.
 - **[-3. claude-starter v3.10 → v3.11](#-3-claude-starter-v310--v311)** — the
   token-diet release: single-sourced always-injected surfaces, on-demand
   wrap reference split, spawn-prompt-authoritative executors, finished-task
@@ -74,7 +71,225 @@ English README are the authority when translations drift):
 
 ---
 
-## Unreleased — in-flight deferral reads the Stop payload
+## -9. claude-starter v3-final → v4.0
+
+The evidence release: v4.0 replaces `/task` v3. Fleet data from v3 (58
+plans, 971 milestones): the bugs were caught by independent checks —
+verifiers, the Codex judge, the plan critic, the final panel — mostly
+while the Stop gate showed green; the gate itself left a PASS for only 60%
+of done milestones and never checked 243; the planning ceremony grew plans
+by ~30% with no measurable catch rate. v4.0 keeps the checks and the
+memory layers, and replaces the ceremony and the verify-running gate with
+a one-page card, run evidence only `scripts/evidence.sh` can write, and a
+checker per slice. The last v3 release is tagged `v3-final` (§-8); it is
+the rollback point, and v4.0 rolls back in one revert commit (§Rollback).
+
+**Breaking:** a task started under v3 cannot continue under v4. Finish or
+abandon it before syncing — `sync-project.sh --update-stock` exits 1 while
+`tasks/CURRENT` names a `plan.md` task without `card.md` that has a commit
+or an uncommitted change within the last 7 days.
+
+### What changed, and why
+
+| v3-final | v4.0 | Reason |
+|---|---|---|
+| `spec.md` + `plan.md` + `brief.md` + `lessons.md`; scout, 1–3 planners, plan critic | one `card.md` (≤4 KB, injected, approved by you) + `notes.md` (never injected); lessons that pass a counterfactual test go to `knowledge/lessons/`, one per file | synthesis grew plans ~30%; L plans median 43.7 KB; 45 of 57 briefs and 36 of 57 lessons files over their caps |
+| Stop gate re-ran the milestone verify at turn end (PASS cache, sweep/UNARMED, integrity and branch checks, forbidden-verify denylist) | the gate runs no lane: each `[x]` must cite passing records with a matching `DONE` row, a `Closed:` line must be fresh; otherwise one status line. It reads evidence only through `evidence.sh status --porcelain`, and its own errors never block (`GATE-ERROR`) | 40% of done milestones never met the gate; three releases fixed gate-caused stalls |
+| one `- verify:` command per milestone, written by the planner | ≤3 lanes per project in `.claude/done-lanes`, trusted once by you: static checks refused, the canary must fail; the lane's line, the repo files its command and canary name, the `@` lines and `.claude/gitleaks.toml` are hashed into `.claude/done-lanes.trust`, and any change needs a new trust | ~520 vacuous-verification incidents in 17 projects |
+| the model flipped `[done]` | only `evidence.sh done S<n>` writes `[x]`: passing records for the slice's lanes made after `start` on the current content, every changed file inside those lanes' paths, a passing checker record (the slice's own result `VERIFIED` by running it), a `codex-slice` pass or your waiver when required, a current approval | "done" becomes a record, not a claim |
+| risk tiers; verifier at med/high; final-verifier three-lens panel | a fresh `checker` per slice (sees the card, the diff and the raw records, never the executor's summary; re-runs lanes ≤10 min); at close a final Codex check (pair on) or the checker's final pass (pair off) | 96% of milestones were tagged med/high; 40% of the low ones had vacuous gates |
+| escalation ladder (rungs 1–4, divergent worktrees, reframer) | `/debug`: two failed fixes → test their shared premise; three → stop; `evidence.sh run` asks before a fourth run of the same lane on the same slice (`ESCALATE`) | rung 3 rarely ran as designed |
+| green-boundary prompt + `PAUSED`; `- checkpoint: human` + ack files | the run continues by default; `[o]` marks a slice waiting on the owner — shown, never blocking a stop | 361 `PAUSED` rows over 25 tasks; one more state file to forge |
+| profiles (`opus-tier`, `fable-tier`, `mixed`, `mixed-judge`, `pair-codex`) via `task-profile.sh` | no profiles; Codex pairing is `@pair codex` in `.claude/done-lanes` (project default), raised per card with `pair:` | no model routing in the harness; the profile only mattered for pairing |
+| pair-codex at spec, brief, plan loop (≤10 rounds), verify, drift, 3 lenses × 2 seats | Codex at the card, at `codex: yes` slices, and at close; six-line result; pass = completed ∧ `verdict: pass` ∧ blocker 0 ∧ major 0 ∧ the judge's own `apply_patch` write of the result in its Codex transcript (`prov=ok`); a unit Codex cannot answer is waived by you (`approve --waive`), never skipped silently; judge pane `judge-<repo id>-<slug>`, its scratch in `/tmp/pair-<repo hash>-<slug>/`, its run state in `.claude/evidence/pair/<slug>/` | accepted findings by stage: spec 40, verify 29, plan 17, brief 7, drift 2; 721 MB of judge scratch had piled up in one `pair/` |
+| `gatelog`, `spawnlog`, `STATUS.md`, `.gate-cache`, `.last-verify` | `tasks/<slug>/donelog` (append-only, hook/script-written) + `.claude/evidence/` (records and logs, per machine, gitignored); existing `gatelog`/`spawnlog` files stay Edit-denied and append-only as history | one event stream; scores computed from it |
+| scoreboard (11 columns) filled by the model at `/wrap`; `--csv` 13 columns | a new `scoreboard-v4.csv` (`date,slug,slices,blocks,stuck,codex_runs,interventions,duration_min,outcome,harness`) computed from the card and the donelog by `harness-report.sh --row`, `interventions` left `-`; the v3 `scoreboard.csv` stays as read-only history; `--csv` v2 (first column `csv_version`); `defects.csv` (`date,slug,slice,finder,phase,severity,n,summary,fixed_in,ref`) | interventions were recalled; defects had no writer |
+| session-start injected the filtered plan, brief, lessons and spec (104–154 KB with a task) | INDEX + state + the card (cut at 4096 B) + one status line; nothing for a task idle > 7 days or a v3 task | 7 of 8 open tasks were idle and still injected |
+| bash-guard knew nothing about tasks | during a task: `git add -A`/`.`, `git checkout [ref] [--] <path>`, `git checkout .`/`-f`, `git switch --discard-changes`/`-f`, `git restore`, `git stash` ask (`git commit -a` does not); any time: touching the ledger or the trust file, a Bash write to a donelog, a `pair/` mailbox, Codex's session logs or the evidence-chain scripts and settings, and `evidence.sh trust`/`approve`/`check`/`codex` ask — `trust`/`approve`/`check` and the Edit asks on the chain files also as declarative `settings.json` rules, the only asks that survive `bypassPermissions` | ~67 broken-rule incidents; `git checkout` erased uncommitted work twice |
+| — | new skills `/prove`, `/debug`, `/backtest-check`, `/defect` (you invoke it); a `verify` skill template; `/number-check` adds range and outside-source cross-checks | each maps to a fleet failure class |
+| sync only added or replaced | `--update-stock` also deletes stock copies of retired files and advances `tests/run.sh`/`tests/fake-herdr.sh` only where they are stock copies (bringing `tests/fixtures/` along); `chmod +x` only on the scripts it ships; an active v3 task stops it | nine files retired; the blanket chmod flipped project scripts |
+| — | `NOTICE`: MIT notices for Superpowers, Compound Engineering, pstack; adapted files end with a `Source:` line | `/prove`, `/debug` and the verify template adapt their text |
+| — | `.claude/gitleaks.toml`: lane and canary logs are scanned with gitleaks defaults + internal-IPv4 (QEMU `10.0.2.0/24` allowed), tailnet-hostname and two URL-credential rules (`grep -E` on the IP rule without gitleaks); the pre-commit scan is unchanged | lane logs feed records and Codex packets; the four added rules cover leak kinds the default rules let past |
+
+### Files
+
+- **Added (9):** `scripts/evidence.sh`, `.claude/agents/checker.md`,
+  `.claude/skills/prove/SKILL.md`, `.claude/skills/debug/SKILL.md`,
+  `.claude/skills/backtest-check/SKILL.md`, `.claude/skills/defect/SKILL.md`,
+  `.claude/skills/setup/verify-template.md`, `.claude/gitleaks.toml`, `NOTICE`
+  (plus the template-only `tests/fixtures/`).
+- **Retired (9):** `.claude/agents/{scout,planner,plan-critic,verifier,reframer,final-verifier}.md`,
+  `scripts/{task-profile,task-status,task-statusline}.sh`.
+- **Rewritten or changed, same path:** `stop-gate.sh`, `session-start.sh`,
+  `spawn-log.sh`, `bash-guard.sh`, `guard-patterns.sh`, `settings.json`,
+  the task skill (`SKILL.md`, `reference.md`, `pair.md`),
+  `scripts/task-pair.sh`, `agents/executor.md`, the wrap and setup skills,
+  `/number-check`, `harness-report.sh` (now mode 100755, so it runs as
+  `scripts/harness-report.sh` too), `check-append-only.sh`,
+  `check-context-bulk.sh` (task donelogs exempt, like v3's
+  gatelogs/spawnlogs), `precommit-gitleaks.sh` (`--scan-file`),
+  `.pre-commit-config.yaml` (the append-only regex adds
+  `scoreboard-v4.csv`, `defects.csv`, `tasks/*/donelog` and
+  `.claude/done-lanes.trust`), seed `INDEX.md` (schema v4), the three
+  CLAUDE.md templates, the template `.gitignore`; `tests/run.sh`,
+  `tests/fake-herdr.sh`.
+
+### Migrating
+
+1. **Finish or abandon running v3 tasks.** If `tasks/CURRENT` points at a
+   directory with `plan.md`, finish it with a `v3-final` checkout of the
+   template, or delete `CURRENT` (the directory stays as history).
+   `sync-project.sh --update-stock` refuses (exit 1) while such a task
+   has a commit or an uncommitted change from the last 7 days; a plain
+   sync only warns.
+2. **Sync:** `./sync-project.sh --update-stock <project>` from a v4.0
+   checkout (a full clone — replacement and retirement compare against the
+   template's git history; without it they fall back to suggestions). It
+   adds the new files; replaces stock copies; deletes the nine retired
+   files where they are byte-identical to a template version (the
+   deletions show in `git status` for you to commit; customized copies are
+   kept and listed); `chmod +x`es only the scripts it ships; appends the
+   `.claude/evidence/` block to `.gitignore` and removes the v3
+   task-runtime ignore blocks (`.gate-cache`, `STATUS.md`, `.last-verify`,
+   `pair/.fp-*`) where they are the template's own text and none of those
+   files exists; replaces `tests/run.sh` and `tests/fake-herdr.sh` only
+   where they are stock copies, never adds them, and copies the missing
+   `tests/fixtures/` next to a stock `tests/run.sh`. It prints a
+   suggestion for each item below that still needs you.
+3. **Customized `settings.json`:** replace the `SubagentStart` block with
+   the template's `SubagentStart` + `SubagentStop` blocks (matchers
+   `executor`, `checker` → `spawn-log.sh`); add the deny entries
+   `Edit(./.claude/evidence/**)`, `Edit(./.claude/done-lanes.trust)`,
+   `Edit(./.ai_context/tasks/**/donelog)`, `Edit(./.claude/gitleaks.toml)`,
+   `Edit(./.ai_context/tasks/**/pair/**)`, `Edit(~/.codex/sessions/**)`;
+   keep the `gatelog` and `spawnlog` denies (they protect v3 evidence);
+   delete the `ack-*` deny and the `verifier` and `scout|planner|…`
+   matchers; add the `permissions.ask` rules
+   `Bash(bash scripts/evidence.sh trust:*)`, `…approve:*`, `…check:*` and
+   the `Edit(...)` asks on the evidence-chain files (`scripts/evidence.sh`,
+   `precommit-gitleaks.sh`, `harness-report.sh`, the five v4 hooks,
+   `.claude/agents/checker.md`, `settings.json`, `settings.local.json`);
+   add the `permissions.allow` rules for `evidence.sh` `run`, `status`,
+   `show`, `start`, `done`, `close`, `lint` and `task-pair.sh` `check`,
+   `wait`; set the Stop hook timeout to 30.
+4. **Customized `INDEX.md`:** replace the Active-task row and the
+   `tasks/<slug>/` rows with the template's card / notes / donelog rows,
+   keep `pair/*`, add the `knowledge/lessons/`, scoreboard-v4/defects and
+   `.claude/evidence/` rows, set `<!-- schema: v4 -->`; stay ≤4 KB.
+5. **Customized `.pre-commit-config.yaml`:** add `tasks/.+/donelog`,
+   `scoreboard-v4.csv`, `defects.csv` and `.claude/done-lanes.trust` to
+   the append-only hook's `files` regex (keep `gatelog|spawnlog`);
+   re-run `pre-commit install`.
+6. **CLAUDE.md:** replace the `## Long-horizon tasks` body with your
+   kind's template text and delete any `Task profile:` lines (sync never
+   edits CLAUDE.md; it prints the reminder).
+7. **Declare and trust lanes** (only if the project uses `/task`): open
+   Claude and run `/setup` — it writes `.claude/skills/verify/SKILL.md`
+   from the template, declares `.claude/done-lanes` (≤3 lanes; `smoke` on
+   paths `.`), runs `bash scripts/evidence.sh trust <lane>` for each (you
+   confirm; the canary must fail), then runs each lane once.
+8. **Ignore what your lanes write.** A run that leaves an untracked,
+   unignored file inside its lane's paths is voided ("lane files changed
+   during the run", paths named), and a canary that does so is refused.
+   The template `.gitignore` now lists common caches (`__pycache__/`,
+   `.pytest_cache/`, `node_modules/`, `.coverage`, …); sync does not add
+   those to an existing project — add your stack's own.
+9. **Pair mode users:** add `@pair codex` to `.claude/done-lanes` (then
+   re-trust a lane — `@` lines are part of the trust); delete `AGENTS.md`
+   and `AGENTS.override.md` or make them identical to `CLAUDE.md` (the
+   judge refuses to start otherwise). v3 pair state in
+   `tasks/*/pair/judge` and `pair/.fp-*` is no longer read — delete it
+   once no v3 run is in flight; a herdr pane named `judge-<slug>` is not
+   reused (v4 opens `judge-<repo id>-<slug>`), so close it.
+10. **Restart** running Claude sessions — hooks and settings load at start.
+11. **Smoke:**
+    `printf '{"tool_input":{"command":"git push --force"}}' | bash .claude/hooks/bash-guard.sh; echo "rc=$? (want 2)"`,
+    `printf '{}' | bash .claude/hooks/stop-gate.sh; echo "rc=$? (want 0 with no task active)"`,
+    `bash scripts/evidence.sh status`, `bash scripts/harness-report.sh .`.
+
+Old task directories (`plan.md`, `gatelog`, `spawnlog`, …) stay as
+history; nothing in v4 reads or deletes them. v3 scoreboard rows stay in
+`.ai_context/scoreboard.csv`, now read-only; v4 rows go to
+`.ai_context/scoreboard-v4.csv`, whose header the first `--row` writes;
+`harness-report.sh` reads both. A project-owned `.ai_context/defects.csv`
+with another header is reported and skipped, and `--defect` refuses to
+append to it until you migrate its rows. Optional: to scan commits with
+the lane-log rules too, add a repo-root `.gitleaks.toml` containing
+`[extend]` / `path = ".claude/gitleaks.toml"`.
+
+### Upgrade caveats
+
+- **Re-trust is part of the job.** Changing a lane's line, a repo file its
+  command or canary names (a wrapper script), an `@` line or
+  `.claude/gitleaks.toml` makes `run` refuse the lane until you run
+  `evidence.sh trust` again; a later sync that replaces
+  `.claude/gitleaks.toml` does the same. One trust after an `@`-line or
+  gitleaks change re-validates every lane.
+- **Pre-release v4 state.** Lanes trusted with a v4 pre-release checkout
+  need one re-trust (the command hash now folds in the files it names),
+  and run records written by a pre-release are stale (records bind
+  content ids, no longer git tree ids) — re-run the lanes. Also fixed
+  since the pre-releases: the gate reads the card as bytes (`LC_ALL=C`),
+  so a line in another encoding no longer hides the lines after it, and a
+  run hashes its tree from a copy of the real index instead of rebuilding
+  one every time.
+- **assume-unchanged / skip-worktree.** Files with these marks are now
+  hashed from the worktree, by `status` and `run` alike; in a repo that
+  uses them, records made before go stale once.
+- **Coverage is strict.** `done` refuses a slice that changed a file
+  outside its lanes' paths, and `close` anything changed since the card's
+  base outside the cited lanes' paths — give `smoke` the paths `.`.
+- **Nothing is checked after `/wrap`.** Between `close` and `/wrap` any
+  change outside `.ai_context/` makes the `Closed:` line stale and the gate
+  blocks; once `/wrap` clears `CURRENT`, the gate checks nothing.
+- **`bypassPermissions` drops hook asks.** There only the `settings.json`
+  rules stop for you (step 3); bash-guard's task-time git asks, ledger and
+  donelog write asks, `run --escalated` and `--over-estimate` do not fire.
+- **Codex and herdr.** The dialog handling was recorded on Codex 0.165.0
+  and herdr 0.9.0; a dialog it does not know stops the run for you
+  (exit 4).
+
+### Rollback
+
+- **Template:** `git revert --no-commit v3-final..v4.0 && git commit -m "revert: v4.0 → v3-final"`
+  — one new commit, no force-push (`--no-edit` instead would make one
+  revert commit per v4 commit); tag it (e.g. `v4.0-rollback`).
+- **A project synced to v4:** revert its sync commit or merge
+  (`git revert -m 1 <merge>` for a merged sync PR). Or re-run
+  `sync-project.sh --update-stock` from the rolled-back template: stock
+  v4 files match the template history and are replaced by their v3
+  versions, and the retired v3 files come back through
+  `copy_if_missing`; v4-only files (`evidence.sh`, `checker.md`, the new
+  skills, `.claude/gitleaks.toml`, `NOTICE`) stay inert — remove them by hand.
+- Cards, donelogs and `.claude/evidence/` stay as history; v3 reads none
+  of them.
+
+---
+
+## -8. claude-starter v3.14.5 → v3-final
+
+The last v3 release, tagged `v3-final` at `776624a` (2026-10-28). Eight
+changes landed after v3.14.5 without a version number; they are grouped
+here, text unchanged. v3 maintenance after v4.0 happens on branches cut
+from `v3-final`.
+
+| Change | Main files |
+|---|---|
+| In-flight deferral reads the Stop payload | `stop-gate.sh`, task `reference.md` |
+| Templates, /setup, TUTORIAL | `templates/CLAUDE.md.research`, `/setup`, TUTORIAL §7 |
+| Pair ledger rulings | `pair.md` |
+| Sharper checker prompts | agents, task skill |
+| Checker audits | `harness-report.sh`, `settings.json`, `global/CLAUDE.md` |
+| /number-check | new skill |
+| pair-codex: transport, judge wiring, plan loop, intake critique | `task-pair.sh`, `pair.md`, `task-profile.sh`, `tests/fake-herdr.sh` |
+| Completion and profile fixes | `stop-gate.sh`, `task-profile.sh` |
+
+To reach v3-final: `git -C <claude-starter> checkout v3-final`, then
+`./sync-project.sh --update-stock <project>`; each part below says what a
+customized copy must merge by hand. To go straight to v4.0, see -9 — the
+v4 sync upgrades any v3.x project directly.
+
+### In-flight deferral reads the Stop payload
 
 `stop-gate.sh` used to defer a milestone's verify once per executor
 spawnlog row younger than 45 minutes. That proxy broke. An executor
@@ -101,16 +316,14 @@ with its `agent_type`; the field is present since at least CC 2.1.292.
   and the `harness-report.sh` depth audit. Its `executor` rows now count
   spawns plus re-wakes.
 
-### Migrating
+#### Migrating
 
 `sync-project.sh --update-stock <project>` updates `stop-gate.sh` and the
 task skill's `reference.md`. A customized gate needs its in-flight block
 replaced by the payload check by hand. No data migration: old
 `WAITING … since <ts>` rows stay valid history.
 
----
-
-## Unreleased — templates, /setup, TUTORIAL
+### Templates, /setup, TUTORIAL
 
 - **`templates/CLAUDE.md.research`** (new spawns only — sync never edits
   CLAUDE.md): a hypothesis built into the question is one candidate, not
@@ -127,14 +340,12 @@ replaced by the payload check by hand. No data migration: old
   the quoted prefixes in step with the strings the hooks print and the
   two tables the same length.
 
-### Migrating
+#### Migrating
 
 `sync-project.sh --update-stock <project>` for `/setup`. Nothing else
 reaches existing projects automatically.
 
----
-
-## Unreleased — pair ledger rulings
+### Pair ledger rulings
 
 `pair.md` text and one packet line; no script logic changes.
 
@@ -157,14 +368,12 @@ reaches existing projects automatically.
   `noted` at any stage — fixed, or `open` with the refuting evidence
   attached; open blocker/major rows hold completion.
 
-### Migrating
+#### Migrating
 
 `sync-project.sh --update-stock <project>`. A ledger begun before this
 keeps its six-column header; new ledgers use seven.
 
----
-
-## Unreleased — sharper checker prompts
+### Sharper checker prompts
 
 Stock agent and task-skill text only — no hook, setting or schema changes.
 Each item replaces a judgment the checker used to make by reasoning with
@@ -203,14 +412,12 @@ cursor/plugins pstack, 2026-10-18).
   differently"; the completion report gives each `[ASSUMED]` as call /
   why / risk if wrong / what changes if vetoed.
 
-### Migrating
+#### Migrating
 
 `sync-project.sh --update-stock <project>`. Customized agent files: diff
 against the template and merge by hand — nothing else depends on them.
 
----
-
-## Unreleased — checker audits
+### Checker audits
 
 Two things the harness recorded but nobody read, now surfaced by
 `harness-report.sh` under `== integrity` (report layer — nothing blocks):
@@ -243,7 +450,7 @@ Two things the harness recorded but nobody read, now surfaced by
   the box" tree. The trees were missing `final-verifier`, `task/pair.md`
   and `wrap/reference.md`; fixed.
 
-### Migrating
+#### Migrating
 
 `sync-project.sh --update-stock <project>` updates `harness-report.sh`,
 `spawn-log.sh`, `final-verifier.md`, the task skill and — if untouched —
@@ -251,9 +458,7 @@ Two things the harness recorded but nobody read, now surfaced by
 `"verifier"` SubagentStart matcher calling `spawn-log.sh verifier`, and
 drop `verifier` from the crew matcher (`final-verifier` stays there).
 
----
-
-## Unreleased — /number-check
+### /number-check
 
 A new stock skill, `.claude/skills/number-check/SKILL.md`: seven questions
 a measured number must answer from runs before it is reported or acted on
@@ -272,16 +477,14 @@ directly.
   printed as a suggestion — once, on the sync that installs the skill, and
   only when CLAUDE.md does not already mention it.
 
-### Migrating
+#### Migrating
 
 `sync-project.sh <project>` installs the skill. If the project reports
 measured numbers, paste the suggested line into its Definition of done;
 otherwise ignore it. Nothing else changes: no hook, setting, or schema is
 touched.
 
----
-
-## Unreleased — pair-codex: transport, judge wiring, plan loop, intake critique
+### pair-codex: transport, judge wiring, plan loop, intake critique
 
 `/task --profile=pair-codex` (workshop ADR-028): a Codex judge in a sibling
 herdr pane takes the checker seats at every stage; Claude keeps executing.
@@ -384,7 +587,7 @@ and the final panel, the plan convergence loop, and the intake critique.
 - `.gitignore`: `.ai_context/tasks/*/pair/.fp-*` (in-flight fingerprints);
   `sync-project.sh` appends the line to synced projects.
 
-### Migrating
+#### Migrating
 
 Sync stock `scripts/task-profile.sh`, the task skill files and tests with
 `sync-project.sh --update-stock <project>`; `scripts/task-pair.sh` and
@@ -396,9 +599,7 @@ carries a `.codex/hooks.json` imported from `.claude/`, leave it — the
 judge is started with hooks off; only a judge the script did not start is
 refused.
 
----
-
-## Unreleased — completion and profile fixes
+### Completion and profile fixes
 
 Three fixes to the v3.14.5 task contracts:
 
@@ -422,7 +623,7 @@ Three fixes to the v3.14.5 task contracts:
   protocol to re-cut remaining milestones, update the header and record
   the switch in lessons.
 
-### Migrating
+#### Migrating
 
 Sync stock `stop-gate.sh`, `scripts/task-profile.sh`, task/wrap reference
 files and tests with `sync-project.sh --update-stock <project>`.
