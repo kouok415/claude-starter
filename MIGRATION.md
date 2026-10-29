@@ -298,6 +298,19 @@ the lane-log rules too, add a repo-root `.gitleaks.toml` containing
   lane changed (`auto re-trust after <S> changed <files> failed`). The
   checker reviews each such diff, and `close` prints `lanes re-trusted
   automatically during this task — review before merging: …` for you.
+- **Lanes are timed to the millisecond; `min_secs` may be a decimal.**
+  `run` times a lane with `EPOCHREALTIME` (bash 5), else `date +%s%3N`,
+  else perl's `Time::HiRes`, else whole seconds as before. `min_secs` takes
+  up to three decimals, at least 0.1; anything else is a format error
+  (`min_secs must be a number >= 0.1 (got '<x>')`). Integer lines are
+  unchanged and stay trusted. A run under its `min_secs` fails with why
+  `too-fast:<seconds.ms><<min_secs>` and `too fast — 0.412s is under
+  min_secs 1; the work was skipped`; the run line shows `secs=` to the ms,
+  while the record's `secs` stays whole seconds. Whole-second timing
+  counted wall-clock boundaries crossed, so a lane under about 2 s could
+  pass and then fail `too-fast:0<1` on the same content. If a lane now fails
+  too-fast, time its command once and set `min_secs` to about half the wall
+  time (a lane-line change: re-trust it).
 - **Pre-release v4 state.** Lanes trusted with a v4 pre-release checkout
   need one re-trust (the command hash now folds in the files it names),
   and run records written by a pre-release are stale (records bind

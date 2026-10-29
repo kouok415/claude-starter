@@ -77,13 +77,15 @@ Verify and DoD; those two carry the intent everything downstream enforces.
    command on paths `.` (the whole repo, so doc and config edits are
    proven too); each slow path (VM, full backtest, remote target) is its
    own lane naming its own paths. A run must leave no untracked, unignored
-   file inside its paths: gitignore the caches it writes. Add
-   `@pair codex|off` from the interview and
-   `@verify-paths <dirs holding test or probe code>`.
+   file inside its paths: gitignore the caches it writes. Time each
+   lane's cmd once (e.g. `time bash scripts/verify.sh`) and set `min_secs`
+   to about half the measured wall time, at least 0.1 (decimals allowed;
+   runs are timed to the millisecond). Add `@pair codex|off` from the
+   interview and `@verify-paths <dirs holding test or probe code>`.
 5. Trust each lane: `bash scripts/evidence.sh trust <lane>` — the human
    approves the prompt and the canary must go red. A refusal (static
-   command, empty expect, `min_secs` 0) means fix the lane, never the
-   script.
+   command, empty expect, `min_secs` under 0.1) means fix the lane, never
+   the script.
 6. First run: `bash scripts/evidence.sh run <lane>` per lane, then
    `bash scripts/evidence.sh show <lane>`. It must pass today, even if it
    only proves a hello-world skeleton. Stamp the verify skill's `Proven:`

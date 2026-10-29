@@ -31,15 +31,15 @@ Over 16 KB: move narratives to `journal/`, keep the facts.
 
 ## Lanes
 
-    # name | paths | min_secs | expect (; separated, all must match) | canary | cmd
+    # name | paths | min_secs (>= 0.1, decimals ok) | expect (; separated, all must match) | canary | cmd
     @pair codex
     @verify-paths tests/ probes/
     smoke | . | 4 | ^verify: [1-9][0-9]* passed, 0 failed$ | <cmd that must fail> | bash scripts/verify.sh
 
 1. A lane runs the product the way its user does. `trust` refuses static
    commands (`bash -n`, `--help`, `--list-*`, shellcheck, py_compile,
-   grep/test/ls only), `min_secs` 0 and an empty `expect`. No `|` in a
-   cmd or canary: pipes and multi-step commands go in a wrapper script.
+   grep/test/ls only), `min_secs` under 0.1 and an empty `expect`. No `|`
+   in a cmd or canary: pipes and multi-step commands go in a wrapper script.
 2. `expect` matches the run's own verdict line, including a nonzero work
    count (rows, trades, files, requests) — never a bare exit 0.
 3. `canary` runs the check against a known-bad input or a reverted line

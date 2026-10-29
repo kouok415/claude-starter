@@ -114,7 +114,8 @@ load_lanes() { # -> L_NAME L_PATHS L_MIN L_EXP L_CAN L_CMD L_LINE, EXT[i], PAIR,
           case "$p" in /*|*..*) bad $n "bad path '$p'" ;; esac
         done
         lane_ix "${S[0]}" && bad $n "duplicate lane '${S[0]}'"
-        [[ "${S[2]}" =~ ^[1-9][0-9]*$ ]] || bad $n "min_secs must be an integer >= 1 (got '${S[2]}')"
+        [[ "${S[2]}" =~ ^[0-9]+(\.[0-9]{1,3})?$ ]] && ms_of "${S[2]}" && [ "$MS" -ge 100 ] ||
+          bad $n "min_secs must be a number >= 0.1 (got '${S[2]}')"
         [ -n "${S[3]// /}" ] || bad $n "expect is empty: a lane needs at least one marker the product prints"
         L_NAME+=("${S[0]}"); L_PATHS+=("${S[1]}"); L_MIN+=("${S[2]}")
         L_EXP+=("${S[3]}"); L_CAN+=("${S[4]}"); L_CMD+=("${S[5]}"); L_LINE+=("$ln")
@@ -496,8 +497,25 @@ defect() { # a row harness-report.sh --defect refused is never silent: the check
 
 # --- judging a lane or canary log ------------------------------------------------
 
-judge() { # $1 log, $2 expect, $3 exit, $4 secs, $5 min_secs (0 = canary) -> J_WHY J_EXEC J_SKIP J_MK J_MKS J_SCAN
-  local i=0 k=0 re ln o
+clock_ms() { # -> CLK: epoch ms from EPOCHREALTIME (bash 5; . or , by locale), date +%s%3N (GNU: 13 digits; uutils ignores
+  # the 3: 19, ns), perl Time::HiRes (macOS: bash 3.2, BSD date), else SECONDS x 1000 (whole seconds, as before)
+  local t="${EPOCHREALTIME:-}"
+  if [[ "$t" =~ ^([0-9]+)[.,]([0-9]{3}) ]]; then CLK="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+  elif t="$(date +%s%3N 2>/dev/null)" && [[ "$t" =~ ^([0-9]{13})([0-9]{6})?$ ]]; then CLK="${BASH_REMATCH[1]}"
+  elif t="$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000' 2>/dev/null)" && [[ "$t" =~ ^[0-9]{13}$ ]]; then CLK="$t"
+  else CLK=$((SECONDS * 1000))
+  fi
+}
+ms_of() { # $1 = a min_secs as load_lanes accepts it (^[0-9]+(\.[0-9]{1,3})?$) -> MS: its int part x 1000 + the fraction padded to 3
+  local fr="${1#*.}000"
+  [ "${1#*.}" != "$1" ] || fr=000
+  MS=$((10#${1%%.*} * 1000 + 10#${fr:0:3}))
+}
+
+judge() { # $1 log, $2 expect, $3 exit, $4 elapsed ms, $5 min_secs (0 = canary) -> J_WHY J_EXEC J_SKIP J_MK J_MKS J_SCAN J_EL
+  local i=0 k=0 re ln o e="$4"
+  [ "$e" -ge 0 ] || e=0   # clock reads that disagree count as no time: never a pass, and (min 0) never a red canary
+  printf -v J_EL '%d.%03d' $((e / 1000)) $((e % 1000))   # the elapsed seconds, to the ms
   J_WHY=- J_EXEC="" J_MKS=""
   [ "$3" != 0 ] && J_WHY="exit=$3"
   split ' ; ' "$2"
@@ -518,7 +536,8 @@ judge() { # $1 log, $2 expect, $3 exit, $4 secs, $5 min_secs (0 = canary) -> J_W
   J_MK="$k/$i"
   J_MKS="[${J_MKS#,}]"
   [ "$J_WHY" = - ] && [ "$J_EXEC" -le 0 ] && J_WHY=executed=0
-  [ "$J_WHY" = - ] && [ "$4" -lt "$5" ] && J_WHY="too-fast:$4<$5"
+  ms_of "$5"
+  [ "$J_WHY" = - ] && [ "$e" -lt "$MS" ] && J_WHY="too-fast:$J_EL<$5"   # in whole ms: 0.412 < 1
   J_SKIP="$(grep -Eo '[0-9]{1,9} (skipped|xfailed|deselected)' "$1" | awk '{s += $1} END {print s + 0}')"
   o="$(bash scripts/precommit-gitleaks.sh --scan-file "$1" 2>/dev/null)"
   case "$?:$o" in
@@ -538,11 +557,12 @@ canary_red() { # $1 = lane index, $2 = refusal prefix, $3 = its tail -> CRES red
   t0="$(TREE_DUMP="$TDUMP" lane_tree "$i")"
   case "$t0" in error:*) die 6 "$2: git could not hash the lane's paths (an unmerged index or an unreadable file?)$3" ;; esac
   log="$EV/logs/${L_NAME[i]}-canary-$(date -u +%Y%m%dT%H%M%SZ).log"
-  s0=$SECONDS
+  clock_ms; s0=$CLK
   ( umask 077; exec bash -c "$c" </dev/null >"$log" 2>&1 )
   rc=$?
+  clock_ms
   chmod 600 "$log"
-  judge "$log" "${L_EXP[i]}" "$rc" $((SECONDS - s0)) 0
+  judge "$log" "${L_EXP[i]}" "$rc" $((CLK - s0)) 0
   [ "${J_SCAN#clean}" != "$J_SCAN" ] ||
     die 3 "$2: the canary log hit a secret or internal-IP rule (${J_SCAN#hit:}): mask the output before trusting (log kept at $log, mode 600)$3"
   [ "$t0" = "$(TREE_DUMP="${TDUMP:+$TDUMP.after}" lane_tree "$i")" ] ||
@@ -675,12 +695,13 @@ cmd_run() { # run <lane> [--escalated]: the only way a lane result enters the le
   fi
   ts="$(now)"
   log="$EV/logs/$l-$(date -u +%Y%m%dT%H%M%SZ).log"
-  s0=$SECONDS
+  clock_ms; s0=$CLK
   ( umask 077; exec bash -c "${L_CMD[IX]}" </dev/null >"$log" 2>&1 )   # review #22: the log is 600 from its first byte
   rc=$?
-  secs=$((SECONDS - s0))
+  clock_ms
   chmod 600 "$log"
-  judge "$log" "${L_EXP[IX]}" "$rc" "$secs" "${L_MIN[IX]}"
+  judge "$log" "${L_EXP[IX]}" "$rc" $((CLK - s0)) "${L_MIN[IX]}"
+  secs="${J_EL%.*}"   # the record keeps whole seconds (its readers want an integer); why and the messages carry the ms
   why="$J_WHY"
   [ "$why" = - ] && [ "$ext" = invalid ] && why=ext
   case "$J_SCAN" in
@@ -697,7 +718,7 @@ cmd_run() { # run <lane> [--escalated]: the only way a lane result enters the le
     executed:$J_EXEC skipped:$J_SKIP scan="$J_SCAN" log="$log" log_sha="$(sha < "$log")" \
     verdict=$v why="$why" ack:$esc markers@"$J_MKS"
   [ -n "$DLOG" ] && donelog_row "$DLOG" RUN "$slice" "$l" "${t0:0:12}" "$RID" "$v"
-  echo "evidence: $l $(printf '%s' "$v" | tr a-z A-Z) id=$RID exit=$rc secs=$secs executed=$J_EXEC markers=$J_MK scan=$J_SCAN"
+  echo "evidence: $l $(printf '%s' "$v" | tr a-z A-Z) id=$RID exit=$rc secs=$J_EL executed=$J_EXEC markers=$J_MK scan=$J_SCAN"
   [ $v = pass ] && exit 0
   case "$why" in
     changed-during-run) w="lane files changed during the run$(changed_paths "$TDUMP" "$TDUMP.after") — record voided. A file the run writes itself (a cache, build output) must be gitignored; otherwise re-run once edits stop" ;;
@@ -705,7 +726,7 @@ cmd_run() { # run <lane> [--escalated]: the only way a lane result enters the le
     leak:*|scan-error) w="the log hit a secret or internal-IP rule (${why#leak:}) — the run failed; never paste this log" ;;
     expect=*) split ' ; ' "${L_EXP[IX]}"; w="expect not matched — pattern ${why#expect=} ('${S[${why#expect=} - 1]}') found no line" ;;
     executed=0) w="executed=0 — nothing ran (zero tests, rows or requests): unproven, not passed" ;;
-    too-fast:*) w="too fast — ${secs}s is under min_secs ${L_MIN[IX]}; the work was skipped" ;;
+    too-fast:*) w="too fast — ${J_EL}s is under min_secs ${L_MIN[IX]}; the work was skipped" ;;
     *) w="@ext printed no commit id" ;;
   esac
   printf 'evidence: why: %s\nevidence: log: %s\n' "$w" "$log"

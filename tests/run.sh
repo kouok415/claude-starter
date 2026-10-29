@@ -44,12 +44,11 @@ mkproj() { # $1 = dir: git repo on task/demo, evidence.sh and what it reads, fix
   git -C "$d" init -q -b task/demo 2>/dev/null || { git -C "$d" init -q && git -C "$d" checkout -qb task/demo; }
   printf '# ok\n## Commands\n- Test: `true`\n' > "$d/CLAUDE.md"; echo a > "$d/src/a.txt"
   # src/mode picks the behaviour; absent = pass (with a coverage line for LANE_MULTI)
-  # tick: sleep to just past the next wall-clock second. evidence.sh counts whole
-  # seconds (bash SECONDS steps on the wall clock), so the run still counts >= 1 s
-  # (min_secs 1) without sleeping a full second.
+  # tick: at least 1 s (evidence.sh times runs to the ms, so min_secs 1 needs a real second)
+  # and past the next wall-clock second (a whole-second stamp after a run is later than its start).
   cat > "$d/scripts/verify.sh" <<'EOF'
 #!/usr/bin/env bash
-tick() { python3 -I -c 'import time; time.sleep(1.02 - time.time() % 1)'; }
+tick() { python3 -I -c 'import time; time.sleep(max(1.0, 1.02 - time.time() % 1))'; }
 n="$(ls src | wc -l | tr -d ' ')"
 case "$(cat src/mode 2>/dev/null)" in
   broken) echo "verify: 0 passed, 1 failed"; exit 1 ;;
@@ -186,7 +185,7 @@ mkfakes
 P="$WORK/l125"; mkproj "$P"; mklanes "$P" "$LANE_SMOKE"; TRF="$P/.claude/done-lanes.trust"
 # A size guard, not a budget: evidence.sh is executed, never injected into model context, so it
 # is written for reading; the guard only catches the file roughly doubling.
-n="$(wc -l < "$EV" | tr -d ' ')"; [ "$n" -le 1600 ] && ok "evidence.sh has not run away ($n lines, guard 1600)" || no "evidence.sh is $n lines (guard 1600) — find out why it grew before raising the guard"
+n="$(wc -l < "$EV" | tr -d ' ')"; [ "$n" -le 1800 ] && ok "evidence.sh has not run away ($n lines, guard 1800)" || no "evidence.sh is $n lines (guard 1800) — find out why it grew before raising the guard"
 mklanes "$P" "$LANE_SMOKE" "${LANE_SMOKE/smoke/l2}" "${LANE_SMOKE/smoke/l3}" "${LANE_SMOKE/smoke/l4}"
 rc=$(ev "$P" trust smoke); { [ "$rc" = 2 ] && grep -qF 'declares 4 lanes (max 3)' "$WORK/ev.err"; } && ok "four lanes refused (max 3, exit 2)" || no "four lanes not refused (rc=$rc)"
 for c in 'bash -n scripts/verify.sh' 'python3 -m py_compile src/x.py' 'shellcheck scripts/verify.sh' 'bash scripts/verify.sh --help' 'bash scripts/verify.sh --list-tests' \
@@ -196,7 +195,7 @@ for c in 'bash -n scripts/verify.sh' 'python3 -m py_compile src/x.py' 'shellchec
     && ok "trust refuses a static-only lane: $c" || no "static-only lane not refused (rc=$rc): $c"
 done
 mklanes "$P" "${LANE_SMOKE/| 1 |/| 0 |}"; rc=$(ev "$P" trust smoke)
-{ [ "$rc" = 2 ] && grep -qF 'min_secs must be an integer >= 1' "$WORK/ev.err"; } && ok "min_secs 0 is a done-lanes format error (exit 2)" || no "min_secs 0 accepted (rc=$rc)"
+{ [ "$rc" = 2 ] && grep -qF "min_secs must be a number >= 0.1 (got '0')" "$WORK/ev.err"; } && ok "min_secs 0 is a done-lanes format error (exit 2)" || no "min_secs 0 accepted (rc=$rc)"
 mklanes "$P" 'smoke | src/ scripts/ | 1 |  | bash scripts/canary.sh | bash scripts/verify.sh'; rc=$(ev "$P" trust smoke)
 { [ "$rc" = 2 ] && grep -qF 'expect is empty' "$WORK/ev.err"; } && ok "an empty expect is a format error (exit 2)" || no "empty expect accepted (rc=$rc)"
 # A canary that passes, spelled differently from cmd (a canary equal to cmd is refused earlier as trivial).
@@ -2206,6 +2205,51 @@ mv "$P/.ai_context/tasks/CURRENT" "$WORK/l151cur"; rc=$(ev "$P" status); rc2=$(e
 { [ "$rc" = 0 ] && [ "$rc2" = 0 ] && grep -qxF "  - lane smoke: ${W}the human runs: bash scripts/evidence.sh trust smoke — nothing in its paths is proven at this content" "$WORK/ev.out" && ! grep -qF 're-trusts it while' "$WORK/ev.out"; } \
   && ok "hint control: no task -> status still works, show keeps the plain 'the human runs: … trust smoke'" || no "hint control (status rc=$rc, show rc=$rc2): $(grep 'lane smoke' "$WORK/ev.out")"
 
+echo "=== L1-52 · evidence.sh: millisecond lane timing and a decimal min_secs (>= 0.1)"
+# bash SECONDS steps on the wall clock: a 0.3-1.4 s lane got pass, then too-fast:0<1 on the same content.
+# Runs are timed to the ms now, and min_secs may be a decimal down to 0.1.
+mkfakes
+P="$WORK/l152"; mkproj "$P"; printf '#!/usr/bin/env bash\nsleep 0.3; echo "nap: 1 done"\n' > "$P/scripts/nap.sh"; git -C "$P" add -A; git -C "$P" commit -qm nap
+nap() { echo "nap | src/ scripts/ | $1 | ^nap: [1-9] | bash scripts/canary.sh | bash scripts/nap.sh"; }
+jf52() { python3 -I -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); print(r["verdict"], r["why"], type(r["secs"]).__name__, r["secs"])' "$P/.claude/evidence/nap.jsonl" 2>/dev/null; }
+bad=""; for m in 0.1 0.25 1 12.5; do mklanes "$P" "$(nap "$m")"; rc=$(ev "$P" trust nap); [ "$rc" = 0 ] || bad="$bad $m(rc=$rc)"; done
+[ -z "$bad" ] && ok "min_secs 0.1, 0.25, 1 and 12.5 are accepted (trust)" || no "min_secs refused:$bad $(head -c 200 "$WORK/ev.err")"
+bad=""; for m in 0 0.0 0.05 .5 1.2345 -1 abc; do
+  mklanes "$P" "$(nap "$m")"; rc=$(ev "$P" trust nap); { [ "$rc" = 2 ] && grep -qF "min_secs must be a number >= 0.1 (got '$m')" "$WORK/ev.err"; } || bad="$bad $m(rc=$rc)"
+done
+[ -z "$bad" ] && ok "min_secs 0, 0.0, 0.05, .5, 1.2345, -1 and abc: exit 2, min_secs must be a number >= 0.1 (got '<x>')" || no "min_secs accepted or wrong message:$bad $(head -c 200 "$WORK/ev.err")"
+mklanes "$P" "$(nap 0.2)"; ev "$P" trust nap >/dev/null; n=0; for _ in 1 2 3 4 5; do
+  rc=$(ev "$P" run nap); { [ "$rc" = 0 ] && grep -Eq '^evidence: nap PASS id=[0-9a-f]{8} exit=0 secs=0\.[0-9]{3} ' "$WORK/ev.out" && [ "$(jf52)" = 'pass - int 0' ]; } && n=$((n + 1))
+done
+[ "$n" = 5 ] && ok "sleep 0.3 under min_secs 0.2 passes 5 of 5 (the line shows secs to the ms; the record keeps an integer secs)" || no "min 0.2: $n of 5 passed: $(jf52) $(head -c 200 "$WORK/ev.out")"
+re='^fail too-fast:0\.[0-9]{3}<0\.5 int 0$'   # a quoted regex: in bash's ERE an escaped < is a word boundary
+mklanes "$P" "$(nap 0.5)"; ev "$P" trust nap >/dev/null; n=0; for _ in 1 2 3 4 5; do
+  rc=$(ev "$P" run nap); r="$(jf52)"
+  { [ "$rc" = 1 ] && [[ "$r" =~ $re ]] &&
+    grep -Eqx 'evidence: why: too fast — 0\.[0-9]{3}s is under min_secs 0\.5; the work was skipped' "$WORK/ev.out"; } && n=$((n + 1))
+done
+[ "$n" = 5 ] && ok "sleep 0.3 under min_secs 0.5 fails too-fast 5 of 5: why too-fast:0.<ms><0.5, too fast — 0.<ms>s is under min_secs 0.5" || no "min 0.5: $n of 5: $r $(grep 'why:' "$WORK/ev.out")"
+# control: an integer min_secs keeps its line, its lane_sha and its verdicts
+mklanes "$P" "$LANE_SMOKE" "$(nap 2)"; ev "$P" trust smoke >/dev/null; ev "$P" trust nap >/dev/null; rc=$(ev "$P" run smoke); rc2=$(ev "$P" run nap)
+re='^fail too-fast:[0-9.]+<2 int 0$'
+{ [ "$rc" = 0 ] && [ "$rc2" = 1 ] && [[ "$(jf52)" =~ $re ]] &&
+  awk -F'\t' -v h="$(printf '%s' "$LANE_SMOKE" | sha256sum | cut -c1-12)" '$2 == "smoke" && $4 == h' "$P/.claude/done-lanes.trust" | grep -q .; } \
+  && ok "control: integer min_secs lanes as before (min 1 passes, min 2 is too-fast, lane_sha = sha256 of the same line)" || no "integer lanes (smoke rc=$rc, nap rc=$rc2): $(jf52)"
+# the clock, through clock_ms itself: its sources replaced by shell functions, one at a time
+CF="$WORK/l152clock.sh"; sed -n '/^clock_ms() {/,/^}/p' "$EV" > "$CF"
+clk() { bash -c '. "$1" && eval "$2" && clock_ms && echo "$CLK"' _ "$CF" "$1" 2>/dev/null; }
+now="$(python3 -I -c 'import time; print(int(time.time() * 1000))')"; near() { [[ "${1:-}" =~ ^[0-9]{13}$ ]] && [ "$1" -ge $((now - 10000)) ] && [ "$1" -le $((now + 10000)) ]; }
+a="$(clk :)"; b="$(clk 'unset EPOCHREALTIME; EPOCHREALTIME=1700000000,123456')"; c="$(clk 'unset EPOCHREALTIME; EPOCHREALTIME=1700000000.123456')"
+{ near "$a" && [ "$b" = 1700000000123 ] && [ "$c" = 1700000000123 ]; } && ok "clock: EPOCHREALTIME first, its separator . or , (got $a)" || no "clock EPOCHREALTIME: '$a' '$b' '$c'"
+a="$(clk 'unset EPOCHREALTIME')"; b="$(clk 'unset EPOCHREALTIME; date() { echo 1700000000456; }')"; c="$(clk 'unset EPOCHREALTIME; date() { echo 1700000000456789012; }')"
+{ near "$a" && [ "$b" = 1700000000456 ] && [ "$c" = 1700000000456 ]; } && ok "clock: no EPOCHREALTIME -> date +%s%3N (GNU 13 digits, uutils' 19 ns digits cut to ms)" || no "clock date: '$a' '$b' '$c'"
+if command -v perl >/dev/null 2>&1; then
+  a="$(clk 'unset EPOCHREALTIME; date() { echo 17000000003N; }')"; b="$(clk 'unset EPOCHREALTIME; date() { echo 17000000003N; }; perl() { echo 1700000000789; }')"
+  { near "$a" && [ "$b" = 1700000000789 ]; } && ok "clock: date without %N (BSD) -> perl Time::HiRes" || no "clock perl: '$a' '$b'"
+else skp "clock perl fallback (perl not installed)"; fi
+a="$(clk 'unset EPOCHREALTIME; date() { echo 3N; }; perl() { return 127; }; SECONDS=42')"
+{ [ "$a" = 42000 ] || [ "$a" = 43000 ]; } && ok "clock: neither -> SECONDS x 1000 (whole seconds, as before)" || no "clock SECONDS: '$a'"
+
 echo "=== L1-14 · pre-commit guards: append-only + S2 bulk"
 D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$D/.ai_context/knowledge/lessons"
 printf 'preamble\n' > "$D/.ai_context/decisions.md"
@@ -3587,7 +3631,7 @@ PY
   # a regression. (Where coreutils' timeout polls every 100 ms — uutils — the gate's two timeouts
   # round each stop up to the next 100 ms.) #7 session-start injects the card and the evidence
   # line; #8-9 lab's .gitignore hides the ledger and tracks the trust file (R31).
-  printf '#!/usr/bin/env bash\npython3 -I -c "import time; time.sleep(1.02 - time.time() %% 1)"\necho "verify: $(ls src | wc -l | tr -d " ") passed, 0 failed"\necho "coverage: ok"\n' > "$P/scripts/verify.sh"
+  printf '#!/usr/bin/env bash\npython3 -I -c "import time; time.sleep(max(1.0, 1.02 - time.time() %% 1))"\necho "verify: $(ls src | wc -l | tr -d " ") passed, 0 failed"\necho "coverage: ok"\n' > "$P/scripts/verify.sh"
   printf '#!/usr/bin/env bash\necho "verify: 0 passed, 1 failed"; exit 1\n' > "$P/scripts/canary.sh"
   mkdir -p "$P/src"; echo a > "$P/src/a.txt"; chmod +x "$P/scripts/verify.sh" "$P/scripts/canary.sh"
   mklanes "$P" "$LANE_SMOKE" "${LANE_SMOKE/smoke | src\/ scripts\//unit | src\/}" "${LANE_SMOKE/smoke | src\/ scripts\//lint | src\/ scripts\/}"
@@ -3668,7 +3712,7 @@ else
   grep -q "What we don't know" "$R/CLAUDE.md" && grep -q 'An empty search is a finding' "$R/CLAUDE.md" && ok "research DoD requires a What-we-don't-know section + empty-search records" || no "research epistemics lines missing from the spawned CLAUDE.md"
   # A research lane proves the deliverable exists and prints its own work
   # marker (U8: executed=0 is unproven); trust reads only the top command.
-  printf '#!/usr/bin/env bash\npython3 -I -c "import time; time.sleep(1.02 - time.time() %% 1)"   # past the next wall second: min_secs 1\ntest -s reports/x.md || exit 1\necho "report: $(grep -c . reports/x.md) lines checked"\n' > "$R/scripts/check-report.sh"
+  printf '#!/usr/bin/env bash\npython3 -I -c "import time; time.sleep(max(1.0, 1.02 - time.time() %% 1))"   # >= 1 s (min_secs 1) and past the next wall second\ntest -s reports/x.md || exit 1\necho "report: $(grep -c . reports/x.md) lines checked"\n' > "$R/scripts/check-report.sh"
   printf '#!/usr/bin/env bash\necho "report: 0 lines checked"\nexit 1\n' > "$R/scripts/canary.sh"
   chmod +x "$R/scripts/check-report.sh" "$R/scripts/canary.sh"
   mklanes "$R" 'report | reports/ scripts/ | 1 | ^report: [1-9][0-9]* lines checked$ | bash scripts/canary.sh | bash scripts/check-report.sh'
