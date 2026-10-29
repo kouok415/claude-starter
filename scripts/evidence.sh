@@ -215,10 +215,12 @@ tree_of() { # $@ = paths ('.' = whole repo) -> one content id; .ai_context/ and 
   # A nested repository or submodule adds its own worktree content, not only its HEAD (#15). Any git failure
   # (an unreadable file, no git top level) gives "error:<unique>", which equals nothing (#3). status shares one
   # scratch index (SIDX, share_index) across its trees; every other command hashes afresh per call.
+  # TREE_DUMP=<file>: the hashed listing is written there too, so changed_paths can name what moved.
   local idx="$SIDX" out
   [ -n "$idx" ] || idx="$(mktemp "${TMPDIR:-/tmp}/evidence-idx.XXXXXX")" || { echo "error:${BASHPID:-$$}.$RANDOM"; return 1; }
   if [ -z "$NOGIT" ] && out="$(
     [ $# -gt 0 ] || exit 0
+    [ -n "$SIDX" ] || ri="$(git rev-parse --git-path index)" || exit 1   # the real index, before GIT_INDEX_FILE names the copy
     export GIT_INDEX_FILE="$idx"
     X=(':(exclude).ai_context' ':(exclude).claude/evidence')
     if [ -n "$SIDX" ] && [ -z "$SNEST" ]; then   # share_index saw no untracked repository: none to list
@@ -227,7 +229,8 @@ tree_of() { # $@ = paths ('.' = whole repo) -> one content id; .ai_context/ and 
       l="$(git -c core.quotepath=false ls-files -co --exclude-standard -- "$@" "${X[@]}")" || exit 1
       case $'\n'"$l" in *$'\n"'*) l="$(git ls-files -z -co --exclude-standard -- "$@" "${X[@]}" | tr '\0' '\n')" || exit 1 ;; esac
     else
-      cp "$(git rev-parse --git-path index)" "$idx" 2>/dev/null || rm -f "$idx"
+      cp "$ri" "$idx" 2>/dev/null || rm -f "$idx"
+      unmark "$idx"
       l="$(git ls-files -z -co --exclude-standard -- "$@" "${X[@]}" | tr '\0' '\n')" || exit 1
       printf '%s\n' "$l" | tr '\n' '\0' | git update-index --add --remove --info-only -z --stdin 2>/dev/null || exit 1
     fi
@@ -237,9 +240,9 @@ tree_of() { # $@ = paths ('.' = whole repo) -> one content id; .ai_context/ and 
     case "$l"$'\n' in */$'\n'*) g=1 ;; esac
     case $'\n'"$s" in *$'\n'"160000 "*) g=1 ;; esac
     [ -z "$g" ] || { grep '/$' <<<"$l"; awk -F'\t' '$1 ~ /^160000 / {print $2}' <<<"$s"; } | while IFS= read -r g; do
-      s="$(unset GIT_INDEX_FILE; cd "$g" && SIDX="" tree_of .)" && [ "${s#error:}" = "$s" ] && echo "${g%/} $s" || exit 1
+      s="$(unset GIT_INDEX_FILE TREE_DUMP; cd "$g" && SIDX="" tree_of .)" && [ "${s#error:}" = "$s" ] && echo "${g%/} $s" || exit 1
     done
-  )" && out="$(printf '%s\n' "$out" | git hash-object --stdin)"; then echo "$out"
+  )" && { [ -z "${TREE_DUMP:-}" ] || printf '%s\n' "$out" > "$TREE_DUMP"; } && out="$(printf '%s\n' "$out" | git hash-object --stdin)"; then echo "$out"
   else echo "error:${BASHPID:-$$}.${idx##*.}"; fi
   [ -n "$SIDX" ] || rm -f "$idx"
 }
@@ -249,10 +252,24 @@ share_index() { # status (H2): one scratch index of the whole worktree; on any f
   [ -z "$NOGIT" ] && SIDX="$(mktemp "${TMPDIR:-/tmp}/evidence-idx.XXXXXX")" || return 0
   trap 'rm -f "$SIDX"' EXIT
   cp "$(git rev-parse --git-path index)" "$SIDX" 2>/dev/null || rm -f "$SIDX"
+  unmark "$SIDX"
   SNEST="$(GIT_INDEX_FILE="$SIDX" git ls-files -z -co --exclude-standard -- . ':(exclude).ai_context' ':(exclude).claude/evidence' |
     GIT_INDEX_FILE="$SIDX" git update-index --add --remove --info-only -z --stdin 2>&1 >/dev/null)" || { rm -f "$SIDX"; SIDX=""; }
 }
 
+unmark() { # $1 = a scratch index: its assume-unchanged and skip-worktree marks cleared, so every tracked file is
+  # hashed from the worktree — status and run alike (the real index's copy carries the marks; git status skips them)
+  [ -n "$(GIT_INDEX_FILE="$1" git ls-files -v 2>/dev/null | grep -m 1 '^[a-zS] ')" ] || return 0
+  GIT_INDEX_FILE="$1" git ls-files -z | GIT_INDEX_FILE="$1" git update-index --no-assume-unchanged -z --stdin 2>/dev/null
+  GIT_INDEX_FILE="$1" git ls-files -z | GIT_INDEX_FILE="$1" git update-index --no-skip-worktree -z --stdin 2>/dev/null
+  return 0
+}
+changed_paths() { # $1 $2 = a lane's TREE_DUMP listings before and after -> " (<up to 5 paths that differ>)", or nothing
+  [ -s "${1:-}" ] && [ -s "${2:-}" ] || return 0
+  sort "$1" "$2" | uniq -u | awk -F'\t' 'NF > 1 {print $2; next} {sub(/ [^ ]+$/, ""); print}' | sort -u |
+    awk 'NR <= 5 {o = o (NR > 1 ? ", " : "") $0} END {if (NR > 5) o = o ", …"; if (NR) printf " (%s)", o}'
+}
+dump_init() { TDUMP="$(mktemp "${TMPDIR:-/tmp}/evidence-tree.XXXXXX" 2>/dev/null)" || TDUMP=""; }   # for changed_paths
 lane_tree() { tree_of ${L_PATHS[$1]}; }
 lane_memo() { # $1 = lane index -> MEMO[$1]: its tree, hashed once per call (H2) and shared by lanes with the same paths
   local j
@@ -510,7 +527,8 @@ cmd_trust() { # trust <lane> [--skip-canary]: the human approves one lane defini
     first="$(trivial "$c")"   # review #20: spacing, parentheses and a path do not hide a trivial canary
     { [ "$first" = "$(trivial "$cmd")" ] || static_only "$c" || [[ "$first" =~ ^(false|true|:|exit( [0-9]+)?|return( [0-9]+)?|!( .*)?)$ ]]; } &&
       die 3 "TRUST REFUSED — $l: canary is trivial ('$c'): it must run the same check against a known-broken state"
-    t0="$(lane_tree "$IX")"
+    dump_init; trap 'rm -f ${TDUMP:+"$TDUMP" "$TDUMP.after"}' EXIT
+    t0="$(TREE_DUMP="$TDUMP" lane_tree "$IX")"
     case "$t0" in error:*) die 6 "TRUST REFUSED — $l: git could not hash the lane's paths (an unmerged index or an unreadable file?)" ;; esac
     log="$EV/logs/$l-canary-$(date -u +%Y%m%dT%H%M%SZ).log"
     s0=$SECONDS
@@ -520,8 +538,8 @@ cmd_trust() { # trust <lane> [--skip-canary]: the human approves one lane defini
     judge "$log" "${L_EXP[IX]}" "$rc" $((SECONDS - s0)) 0
     [ "${J_SCAN#clean}" != "$J_SCAN" ] ||
       die 3 "TRUST REFUSED — $l: the canary log hit a secret or internal-IP rule (${J_SCAN#hit:}): mask the output before trusting (log kept at $log, mode 600)"
-    [ "$t0" = "$(lane_tree "$IX")" ] ||
-      die 3 "TRUST REFUSED — $l: the canary left the lane's content changed: a canary must restore whatever it breaks"
+    [ "$t0" = "$(TREE_DUMP="${TDUMP:+$TDUMP.after}" lane_tree "$IX")" ] ||
+      die 3 "TRUST REFUSED — $l: the canary left the lane's content changed$(changed_paths "$TDUMP" "$TDUMP.after"): a canary must restore whatever it breaks, and a cache it writes must be gitignored"
     [ "$J_WHY" = - ] &&
       die 3 "TRUST REFUSED — $l: the canary passed (exit 0, every marker, executed=$J_EXEC): this lane cannot tell broken from working; fix the canary or tighten expect"
     res="red:$J_WHY"
@@ -571,9 +589,9 @@ cmd_run() { # run <lane> [--escalated]: the only way a lane result enters the le
   fi
   ( set -C; printf '%s\trun\t%s\t%s\t%s\n' $$ "$l" "$slice" "$(now)" > "$LOCK" ) 2>/dev/null ||
     die 4 "RUN REFUSED — lane $l is already running — wait for its notification; do not start a second run"
-  trap 'rm -f "$LOCK"' EXIT
+  dump_init; trap 'rm -f "$LOCK" ${TDUMP:+"$TDUMP" "$TDUMP.after"}' EXIT
   trap 'exit 130' INT TERM HUP
-  t0="$(lane_tree "$IX")"
+  t0="$(TREE_DUMP="$TDUMP" lane_tree "$IX")"
   case "$t0" in error:*) die 6 "RUN REFUSED — lane $l: git could not hash the lane's paths (${L_PATHS[IX]}): resolve the merge, make every file readable, then re-run" ;; esac
   head="$(git rev-parse -q --verify HEAD || echo -)"
   if [ -n "${EXT[IX]:-}" ]; then
@@ -595,7 +613,7 @@ cmd_run() { # run <lane> [--escalated]: the only way a lane result enters the le
     scan-error) J_MKS='["withheld: scan hit"]' why=scan-error ;;
     *) J_MKS='["withheld: scan hit"]' why="leak:${J_SCAN#hit:}" ;;
   esac
-  [ "$t0" = "$(lane_tree "$IX")" ] || why=changed-during-run
+  [ "$t0" = "$(TREE_DUMP="${TDUMP:+$TDUMP.after}" lane_tree "$IX")" ] || why=changed-during-run
   v=pass
   [ "$why" = - ] || v=fail
   [ "$why" = changed-during-run ] && v=void
@@ -607,7 +625,7 @@ cmd_run() { # run <lane> [--escalated]: the only way a lane result enters the le
   echo "evidence: $l $(printf '%s' "$v" | tr a-z A-Z) id=$RID exit=$rc secs=$secs executed=$J_EXEC markers=$J_MK scan=$J_SCAN"
   [ $v = pass ] && exit 0
   case "$why" in
-    changed-during-run) w="lane files changed during the run — record voided; re-run once edits stop" ;;
+    changed-during-run) w="lane files changed during the run$(changed_paths "$TDUMP" "$TDUMP.after") — record voided. A file the run writes itself (a cache, build output) must be gitignored; otherwise re-run once edits stop" ;;
     exit=*) w="exit ${why#exit=}" ;;
     leak:*|scan-error) w="the log hit a secret or internal-IP rule (${why#leak:}) — the run failed; never paste this log" ;;
     expect=*) split ' ; ' "${L_EXP[IX]}"; w="expect not matched — pattern ${why#expect=} ('${S[${why#expect=} - 1]}') found no line" ;;

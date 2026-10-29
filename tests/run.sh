@@ -227,6 +227,8 @@ mklanes "$P" "${LANE_SMOKE/bash scripts\/canary.sh/false}"; rc=$(ev "$P" trust s
 { [ "$rc" = 3 ] && grep -qF 'canary is trivial' "$WORK/ev.err"; } && ok "canary 'false' is trivial" || no "trivial canary accepted (rc=$rc)"
 mklanes "$P" "${LANE_SMOKE/bash scripts\/canary.sh/echo y >> src/a.txt; bash scripts/canary.sh}"; rc=$(ev "$P" trust smoke); echo a > "$P/src/a.txt"
 { [ "$rc" = 3 ] && grep -qF "the canary left the lane's content changed" "$WORK/ev.err"; } && ok "a canary that leaves the lane changed is refused" || no "dirty canary accepted (rc=$rc)"
+grep -qF "the canary left the lane's content changed (src/a.txt): a canary must restore whatever it breaks, and a cache it writes must be gitignored" "$WORK/ev.err" \
+  && ok "B3 ...naming the changed path, and that a cache it writes must be gitignored" || no "B3 trust refusal: $(head -c 300 "$WORK/ev.err")"
 mklanes "$P" "$LANE_SMOKE" '@verify-paths src/'; rc=$(ev "$P" run smoke); grep -qF '@ directives or scan rules changed since trust' "$WORK/ev.err"; m=$?
 ev "$P" trust smoke >/dev/null; rc2=$(ev "$P" run smoke)
 { [ "$rc" = 3 ] && [ "$m" = 0 ] && [ "$rc2" = 0 ]; } && ok "a new @ line needs a re-trust before run" || no "@ line change not caught (rc=$rc, after trust rc=$rc2)"
@@ -295,6 +297,8 @@ echo b > "$P/src/a.txt"; ev "$P" status --line >/dev/null; echo a > "$P/src/a.tx
 grep -qF 'smoke stale' "$WORK/ev.out" && ok "an edit inside the lane's paths makes it stale" || no "status --line missed 'smoke stale': $(cat "$WORK/ev.out")"
 echo mutate > "$P/src/mode"; rc=$(ev "$P" run smoke); rm -f "$P/src/mode" "$P/src/b.txt"
 { [ "$(jf smoke.jsonl verdict)" = void ] && [ "$(jf smoke.jsonl why)" = changed-during-run ] && grep -qF 'changed during the run' "$WORK/ev.out"; } && ok "lane files changed during the run void the record" || no "mid-run change not voided (rc=$rc)"
+grep -qF 'lane files changed during the run (src/b.txt) — record voided. A file the run writes itself (a cache, build output) must be gitignored' "$WORK/ev.out" \
+  && ok "B3 the void names the changed path and says a file the run writes must be gitignored" || no "B3 void message: $(grep -F 'why:' "$WORK/ev.out")"
 echo leak > "$P/src/mode"; echo 'token FAKE-LEAK-0123' > "$P/src/emit.txt"; rc=$(EVPATH="$WORK/fakebin:$PATH" ev "$P" run smoke)
 { [ "$(jf smoke.jsonl scan)" = hit:fake-leak ] && [ "$(jf smoke.jsonl why)" = leak:fake-leak ] && [ "$(jf smoke.jsonl markers)" = "['withheld: scan hit']" ]; } && ok "a secret in the log fails the run and withholds the markers" || no "secret scan not applied (rc=$rc, scan=$(jf smoke.jsonl scan))"
 printf 'connect 10.%s.30.40:443\n' 20 > "$P/src/emit.txt"; EVPATH="$WORK/nogl-bin" ev "$P" run smoke >/dev/null
@@ -1685,9 +1689,10 @@ printf '#!/usr/bin/env bash\nprintf "TREE\\t0123456789ab\\nSLICE\\tS1\\tnoref\\t
 # M2 — gate state never under the project; an unwritable counter yields; the supervisor never blocks mute
 P2="$WORK/l146s"; ready "$P2"; mkdir -p "$P2/.tmp"
 sed -i.bak 's/^- \[ \] S2 second — lanes: smoke ; codex: no$/& ✓ smoke@0badc0de check@0badc0df/; s/^- \[ \] S2 /- [x] S2 /' "$P2/.ai_context/tasks/demo/card.md"; rm -f "$P2/.ai_context/tasks/demo/card.md.bak"
-r=""; for _ in 1 2 3; do printf '{"session_id":"tsuite-l146m2"}' | TMPDIR="$P2/.tmp" CLAUDE_PROJECT_DIR="$P2" bash "$GATE" >/dev/null 2>&1; r="$r$?"; done
+M2SID="tsuite-l146m2-$$"   # the gate moves this state to /tmp, shared by every suite run: one id per run
+r=""; for _ in 1 2 3; do printf '{"session_id":"%s"}' "$M2SID" | TMPDIR="$P2/.tmp" CLAUDE_PROJECT_DIR="$P2" bash "$GATE" >/dev/null 2>&1; r="$r$?"; done
 { [ "$r" = 220 ] && [ "$(dl "$P2" demo STUCK)" = 1 ] && [ -z "$(ls -A "$P2/.tmp")" ]; } && ok "M2 TMPDIR inside the project: state goes elsewhere, the third stop yields (STUCK)" || no "M2 in-project TMPDIR: rcs $r, STUCK $(dl "$P2" demo STUCK), .tmp: $(ls -A "$P2/.tmp" | head -3)"
-rm -f /tmp/claude-gate-red-tsuite-l146m2-* /tmp/claude-gate-stuck-tsuite-l146m2-* /tmp/claude-gate-line-tsuite-l146m2-*
+rm -f /tmp/claude-gate-red-"$M2SID"-* /tmp/claude-gate-stuck-"$M2SID"-* /tmp/claude-gate-line-"$M2SID"-*
 if [ "$(id -u)" = 0 ]; then skp "M2 unwritable TMPDIR (root writes everywhere)"
 else
   mkdir -p "$WORK/l146ro"; chmod 555 "$WORK/l146ro"; n0="$(dl "$P2" demo GATE-ERROR)"
@@ -1794,6 +1799,40 @@ git -C "$F48" config core.quotepath false; f2="$(cd "$F48" && bash scripts/task-
 { [ -n "$f0" ] && [ "$f0" = "$r0" ] && [ "$f1" = "$r1" ] && [ "$f2" = "$r2" ] && [ "$f1" != "$f0" ] && [ "$f2" != "$f1" ]; } \
   && ok "fingerprint is byte-identical to the per-file one (spaces, quotes, backslash, CR, UTF-8 and invalid bytes, -x, empty, 1 MiB edge, links, unreadable, nested repo, quotepath off)" \
   || no "fingerprint drifted: $f0/$r0 $f1/$r1 $f2/$r2"
+
+echo "=== L1-49 · fix(evidence): the scratch index, marked files, a card in another encoding"
+# Pre-existing issues the perf pass and the W3 e2e dry run found; each assertion fails before the fix.
+# B1: a run hashes its lane on a copy of the real index (whose stat cache spares unchanged files a
+# rehash), never on an empty one: a git shim notes whether the index update-index fills has entries.
+P="$WORK/l149"; mkproj "$P"; echo b > "$P/src/b.txt"; git -C "$P" add src/b.txt; git -C "$P" commit -qm b
+mklanes "$P" "$LANE_SMOKE"; ev "$P" trust smoke >/dev/null; mkcard "$P" demo off '- [~] S1 first — lanes: smoke ; codex: no'
+mkdir -p "$WORK/l149-bin"
+printf '#!/usr/bin/env bash\ncase "$*" in *update-index*--info-only*) if [ -s "${GIT_INDEX_FILE:-/nonexistent}" ]; then echo seeded; else echo empty; fi >> "%s" ;; esac\nexec "%s" "$@"\n' \
+  "$WORK/l149.calls" "$(command -v git)" > "$WORK/l149-bin/git"; chmod +x "$WORK/l149-bin/git"
+: > "$WORK/l149.calls"; rc=$(EVPATH="$WORK/l149-bin:$WORK/fakebin:$PATH" ev "$P" run smoke)
+{ [ "$rc" = 0 ] && [ "$(grep -c seeded "$WORK/l149.calls")" -ge 2 ] && ! grep -q empty "$WORK/l149.calls"; } \
+  && ok "B1 run hashes its lane on a copy of the real index, not on an empty one" || no "B1 scratch index (rc=$rc): $(sort "$WORK/l149.calls" | uniq -c | tr '\n' ' ')"
+# B2: assume-unchanged / skip-worktree marks in the real index. status (one shared scratch index)
+# and --tree (an index per call, as run hashes) read those files from the worktree alike.
+tf() { (cd "$P" && bash scripts/evidence.sh status --tree final 2>/dev/null); }
+t0="$(porc "$P" TREE | cut -f2)"; f0="$(tf)"
+git -C "$P" update-index --assume-unchanged src/a.txt; git -C "$P" update-index --skip-worktree src/b.txt
+echo a2 > "$P/src/a.txt"; echo b2 > "$P/src/b.txt"; t1="$(porc "$P" TREE | cut -f2)"; f1="$(tf)"
+echo a > "$P/src/a.txt"; echo b > "$P/src/b.txt"; t2="$(porc "$P" TREE | cut -f2)"
+git -C "$P" update-index --no-assume-unchanged src/a.txt; git -C "$P" update-index --no-skip-worktree src/b.txt
+{ [ -n "$t0" ] && [ "$t0" = "$f0" ] && [ "$t1" = "$f1" ] && [ "$t1" != "$t0" ] && [ "$t2" = "$t0" ]; } \
+  && ok "B2 assume-unchanged and skip-worktree files: status and per-call trees agree, and both see their edits" || no "B2 marked files: porcelain $t0 / $t1 / $t2, --tree $f0 / $f1"
+# B4: a card line in another encoding under a UTF-8 locale: the gate reads the card as evidence.sh
+# does (LC_ALL=C), so an unreferenced [x] on that line blocks on the gate's own check — even with an
+# evidence.sh that fails (the gate would otherwise fail open).
+u8="$(locale -a 2>/dev/null | grep -m 1 -iE '^(c|en_us)\.utf-?8$')"
+if [ -z "$u8" ]; then skp "B4 no UTF-8 locale installed"
+else
+  Pu="$WORK/l149u"; mkproj "$Pu"; mklanes "$Pu" "$LANE_SMOKE"; mkcard "$Pu" demo off "$(printf -- '- [x] S1 caf\351 first — lanes: smoke ; codex: no')"
+  cp "$WORK/stub-ev-fail.sh" "$Pu/scripts/evidence.sh"; rc=$(LC_ALL="$u8" gt "$Pu" tsuite-l149u)
+  { [ "$rc" = 2 ] && grep -qF 'S1 is marked [x] without an evidence reference' "$WORK/g.err"; } \
+    && ok "B4 an [x] line with invalid UTF-8 under $u8: the gate still reads it (noref blocks)" || no "B4 invalid-UTF-8 [x] line under $u8 (rc=$rc): $(head -c 200 "$WORK/g.err")"
+fi
 
 echo "=== L1-14 · pre-commit guards: append-only + S2 bulk"
 D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$D/.ai_context/knowledge/lessons"

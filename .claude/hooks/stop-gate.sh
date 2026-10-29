@@ -215,8 +215,9 @@ hash_stdin() {
 }
 
 # An [x] line (GUARD_SLICE_X, the regex evidence.sh reads too) cites records
-# after its first ` ✓ `: <name>@<hex id> or codex@waived.
-# One grep reads every line's references (-a: a line in another encoding stays a line).
+# after its first ` ✓ `: <name>@<hex id> or codex@waived. Both greps read the
+# card as evidence.sh does, LC_ALL=C and -a: under a UTF-8 locale a line in
+# another encoding would turn the card "binary" and drop lines from the read.
 xs=""
 xa=()
 ra=()
@@ -228,12 +229,12 @@ while IFS= read -r ln; do
   case "$ln" in *' ✓ '*) r="${ln#* ✓ }" ;; esac
   xa+=("$s")
   ra+=("$r")
-done < <(grep -E "$GUARD_SLICE_X" "$card")
+done < <(LC_ALL=C grep -aE "$GUARD_SLICE_X" "$card")
 if [ ${#ra[@]} -gt 0 ]; then
   while IFS=: read -r n _; do
     s="${xa[n - 1]}"
     finding noref "$s" "$s is marked [x] without an evidence reference."
-  done < <(printf '%s\n' "${ra[@]}" | grep -anvE '(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]+@([0-9a-f]{7,64}|waived)')
+  done < <(printf '%s\n' "${ra[@]}" | LC_ALL=C grep -anvE '(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]+@([0-9a-f]{7,64}|waived)')
 fi
 
 tree=-
