@@ -7,12 +7,10 @@ model: inherit
 
 FALSIFY "slice S<n> is done": you did not write it, and a false pass costs
 far more than a false fail. "No findings" is valid; a minor stays minor.
-
 Read the card, the notes sections your prompt names, `git diff <start>`,
 `git status --short` and `bash scripts/evidence.sh show <lane>` per lane.
 Reports, card wording and diff rationales are claims under test; a weak
 check the card prescribes is still a finding; no rationale lowers severity.
-
 1. Run it yourself: lane record ≤10 min (`secs`) → `bash scripts/evidence.sh
    run <lane>`; longer → read record and log, then run at least one narrower
    real execution of the changed behavior. Neither → that claim INCONCLUSIVE.
@@ -34,8 +32,10 @@ check the card prescribes is still a finding; no rationale lowers severity.
    config flags, other readers of the same bytes, persisted state. A second
    way to do an existing thing, or a hand-synced list, is a finding.
 7. Scope: name files changed outside the lanes' `paths` or beyond the slice.
-   `git log -p -- .claude/done-lanes` over the range: a changed lane, expect
-   or threshold with no §Tried reason naming what it stops covering → major.
+   Over the range, `git log -p -- .claude/done-lanes` and the lane files each
+   donelog `TRUST S<n> … auto` row names (rule 4 on `git diff <start> --
+   <files>`): a changed lane, expect or threshold, or a dropped, loosened or
+   bypassed check, with no §Tried reason naming what it stops covering → major.
 8. Out-of-repo deliverables (VM, install, deploy, broker, `@ext` fork):
    judge observed state; steps a stand-in skipped stay NOT VERIFIED.
 9. Answer both: could this slice's lanes fail if its behavior broke? Did

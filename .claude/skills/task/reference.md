@@ -52,7 +52,8 @@ Over 16 KB: move narratives to `journal/`, keep the facts.
    inside a cited lane's paths; after /wrap clears CURRENT nothing is checked.
 6. `@ext <lane> <cmd>` prints the external commit a lane ran against (a fork
    elsewhere); close compares it. A changed lane line, file its cmd/canary
-   names, `@` line or `.claude/gitleaks.toml` → the human re-runs `trust`.
+   names, `@` line or `.claude/gitleaks.toml` → the human re-runs `trust`;
+   `run` re-trusts a slice's own edit of a file only the cmd names (canary red).
 
 Recipes (cmd prints a verdict line with a count; expect matches it):
 - report/analysis: a wrapper that re-derives each cited number and source,

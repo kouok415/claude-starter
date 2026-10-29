@@ -98,7 +98,7 @@ uncommitted change in the directory within the last 7 days.
 |---|---|---|
 | `spec.md` + `plan.md` + `brief.md` + `lessons.md`; scout, 1–3 planners, plan critic | one `card.md` (≤4 KB, injected, approved by you) + `notes.md` (never injected); lessons that pass a counterfactual test go to `knowledge/lessons/`, one per file | synthesis grew plans ~30%; L plans median 43.7 KB; 45 of 57 briefs and 36 of 57 lessons files over their caps |
 | Stop gate re-ran the milestone verify at turn end (PASS cache, sweep/UNARMED, integrity and branch checks, forbidden-verify denylist) | the gate runs no lane: each `[x]` must cite passing records with a matching `DONE` row, a `Closed:` line must be fresh; otherwise one status line. It reads evidence only through `evidence.sh status --porcelain`, and its own errors never block (`GATE-ERROR`) | 40% of done milestones never met the gate; three releases fixed gate-caused stalls |
-| one `- verify:` command per milestone, written by the planner | ≤3 lanes per project in `.claude/done-lanes`, trusted once by you: static checks refused, the canary must fail; the lane's line, the repo files its command and canary name, the `@` lines and `.claude/gitleaks.toml` are hashed into `.claude/done-lanes.trust`, and any change needs a new trust | ~520 vacuous-verification incidents in 17 projects |
+| one `- verify:` command per milestone, written by the planner | ≤3 lanes per project in `.claude/done-lanes`, trusted once by you: static checks refused, the canary must fail; the lane's line, the repo files its command and canary name, the `@` lines and `.claude/gitleaks.toml` are hashed into `.claude/done-lanes.trust`, and any change needs a new trust — except a change, inside the started slice that cites the lane, to files only its command names: `run` re-trusts that itself while the canary still fails (trust row with an 8th field `auto:<slug>:<S>`, donelog row `TRUST <S> <lane> - - auto canary <result> cmd <sha> files <f1,f2>`), and `close` lists those lanes | ~520 vacuous-verification incidents in 17 projects; extending the verify script must not stall a slice |
 | the model flipped `[done]` | only `evidence.sh done S<n>` writes `[x]`: passing records for the slice's lanes made after `start` on the current content, every changed file inside those lanes' paths, a passing checker record (the slice's own result `VERIFIED` by running it), a `codex-slice` pass or your waiver when required, a current approval | "done" becomes a record, not a claim |
 | risk tiers; verifier at med/high; final-verifier three-lens panel | a fresh `checker` per slice (sees the card, the diff and the raw records, never the executor's summary; re-runs lanes ≤10 min); at close a final Codex check (pair on) or the checker's final pass (pair off) | 96% of milestones were tagged med/high; 40% of the low ones had vacuous gates |
 | escalation ladder (rungs 1–4, divergent worktrees, reframer) | `/debug`: two failed fixes → test their shared premise; three → stop; `evidence.sh run` asks before a fourth run of the same lane on the same slice (`ESCALATE`) | rung 3 rarely ran as designed |
@@ -281,6 +281,23 @@ the lane-log rules too, add a repo-root `.gitleaks.toml` containing
   `evidence.sh trust` again; a later sync that replaces
   `.claude/gitleaks.toml` does the same. One trust after an `@`-line or
   gitleaks change re-validates every lane.
+- **Auto re-trust inside a slice.** The exception: when the only change
+  since the trust is to files the lane's command names (not the canary),
+  made inside the `[~]` slice — started at a commit, citing the lane, on
+  the card you approved — `evidence.sh run` re-trusts the lane itself.
+  It takes the run lock first, runs the unchanged canary under trust's own
+  checks (not trivial, content restored, log clean, still red), then
+  appends a trust row with an 8th field `auto:<slug>:<S>` (your rows keep
+  7; a new trust file's header names both writers) and the donelog row
+  `TRUST <S> <lane> - - auto canary <result> cmd <sha> files <f1,f2>`, and
+  runs the lane. A second edit in the same slice re-trusts again. Anything
+  else still stops with `RUN REFUSED — … the human runs: bash
+  scripts/evidence.sh trust <lane>`: a file only the canary names changed
+  (`the canary's own file <f> changed`), a `skip:` canary, a change from
+  before the slice's start, or a canary that now passes or leaves the
+  lane changed (`auto re-trust after <S> changed <files> failed`). The
+  checker reviews each such diff, and `close` prints `lanes re-trusted
+  automatically during this task — review before merging: …` for you.
 - **Pre-release v4 state.** Lanes trusted with a v4 pre-release checkout
   need one re-trust (the command hash now folds in the files it names),
   and run records written by a pre-release are stale (records bind

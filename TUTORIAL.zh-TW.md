@@ -219,7 +219,11 @@ lanes。完整指南:[MIGRATION.md](./MIGRATION.md)。
 | `TRUST REFUSED —` … `static-only command` | 這條 lane 只證明原始碼存在 | 讓 lane 真的跑產品 |
 | `TRUST REFUSED —` … `the canary passed` | 餵已知壞的輸入,lane 還是綠的 | 修 lane 或它的 canary |
 | `TRUST REFUSED —` … `the canary left the lane's content changed` | canary 弄壞了 lane paths 裡的東西卻沒復原,或在那裡寫了檔(至多點名五個路徑) | 讓 canary 復原它弄壞的東西;把它寫的 cache 加進 gitignore |
-| `RUN REFUSED —` … `changed since trust` | trust 之後 lane 那行、它的命令或 canary 提到的檔、某個 `@` 行或 `.claude/gitleaks.toml` 變了 | 看過改動,再跑一次 `bash scripts/evidence.sh trust <lane>` |
+| `RUN REFUSED —` … `changed since trust` | trust 之後 lane 那行、它的命令或 canary 提到的檔、某個 `@` 行或 `.claude/gitleaks.toml` 變了 —— 而且不是 `run` 會自己重新 trust 的那一種(下一列) | 看過改動,再跑一次 `bash scripts/evidence.sh trust <lane>` |
+| `evidence: auto re-trusted lane` … `the canary still fails` | 已開始的 slice 只改了 lane 命令提到的檔案(它擴充的 verify 腳本);`run` 在 lock 下替這條 lane 重新 trust,接著照常跑 —— donelog 多一列 `TRUST <S>` … `auto`,trust 檔多一個第 8 欄 | 現在不用做什麼:checker 會審那段 diff,`close` 會列給你看 |
+| `RUN REFUSED —` … `auto re-trust after` … `failed` | `run` 試著這樣重新 trust,但 canary 太簡單、通過了、讓 lane 的內容留下改動,或 log 掃到祕密(後面接著原因) | 這次改動削弱了檢查,或 canary 不再咬得到:修掉改動,或看過 diff 後跑 `bash scripts/evidence.sh trust <lane>` |
+| `the canary's own file` … `only the human re-trusts a changed canary` | slice 改了只有 lane 的 canary 提到的檔案 | 看過改動,再跑 `bash scripts/evidence.sh trust <lane>` —— 或把它改回去 |
+| `lanes re-trusted automatically during this task — review before merging` | `close` 列出這個任務裡 `run` 自動重新 trust 過的每條 lane,附上 slice 與檔案 | 合併前審過那些 diff(`git diff <start> -- <files>`) |
 | `ESCALATE —` … `failed 3 times in a row` | 同一條 lane 在同一個 slice 連續失敗三次 | 停下來回報(`/debug`);只有你想再試時才確認 `run --escalated` |
 | `expect not matched` | 跑完了,但少了某個標記行 | 開它印出的 log 路徑;產品沒做到 lane 檢查的事 |
 | `executed=0` | 什麼都沒跑(零個測試、資料列或請求) | 未證明,不是通過 —— 修正選取範圍 |

@@ -74,7 +74,8 @@ and runs nothing. The checker never sees the executor's report.
 1. Every slice lane exists in `.claude/done-lanes` (≤3; format and
    recipes: `reference.md` §Lanes). Adding one is a Decision.
 2. Untrusted → `bash scripts/evidence.sh trust <lane>`: the human approves
-   the prompt; the canary must go red.
+   the prompt; the canary must go red. A slice's edit of a file the cmd
+   names is re-trusted by `run` itself while the canary stays red.
 3. Run each lane once (`evidence.sh run <lane>`) before any unattended run.
 4. `bash scripts/evidence.sh lint`. Pair on → `bash scripts/task-pair.sh
    check card` (`pair.md`); off → `checker` on "Check card" (`reference.md`
@@ -127,7 +128,7 @@ and runs nothing. The checker never sees the executor's report.
 3. Outside check: its named owner runs it; quote the verdict in §Rulings.
    Unattended → it heads the report as the open item.
 4. Report every `[own]`/`[ASSUMED]` call (Decisions + §Calls) per
-   `reference.md` §Close report.
+   `reference.md` §Close report; quote close's auto re-trust line verbatim.
 5. `/wrap` (row from `harness-report.sh --row`; clears CURRENT); offer to
    merge `task/<slug>` or open a PR.
 

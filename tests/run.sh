@@ -2081,6 +2081,131 @@ PY
   { [ "$rc" = 2 ] && grep -qF 'cannot prove stock without git history — run from a git checkout of the template' "$WORK/s50n.out" && [ -z "$(git -C "$P" status --porcelain)" ]; } \
     && ok "M6 --update-stock from a template without git history refuses (exit 2) and writes nothing" || no "M6 (rc=$rc): $(head -c 200 "$WORK/s50n.out")"
 fi
+echo "=== L1-51 · evidence.sh run: auto re-trust when a slice changes a file the lane's cmd names (canary-gated)"
+# A slice that extends scripts/verify.sh (named by smoke's cmd) changes cmd_sha; run re-trusts the lane itself,
+# under its lock, only while the canary still fails, and only for a change inside the started slice. Every
+# refusal below is followed by the same state with that one condition put back, which re-trusts.
+mkfakes
+trn() { grep -vc '^#' "$1/.claude/done-lanes.trust"; }   # rows in the trust file
+trl() { tail -n 1 "$1/.claude/done-lanes.trust"; }
+vedit() { printf '# %s\n' "$2" >> "$1/scripts/verify.sh"; }   # the slice's edit of the file the cmd names
+vsub() { sed "$2" "$1/scripts/verify.sh" > "$WORK/l151v.tmp" && cat "$WORK/l151v.tmp" > "$1/scripts/verify.sh"; }
+arow() { awk -F'\t' -v s="$2" -v l="${3:-smoke}" '$2 == "TRUST" && $3 == s && $4 == l && $7 ~ /^auto canary red:/' "$1/.ai_context/tasks/demo/donelog" 2>/dev/null | wc -l | tr -d ' '; }
+autook() { # $1 dir, $2 slice [, $3 lane]: the last run re-trusted and passed, the last trust row is that slice's auto row
+  grep -qF "evidence: auto re-trusted lane ${3:-smoke} for $2 — " "$WORK/ev.out" && grep -q "^evidence: ${3:-smoke} PASS id=" "$WORK/ev.out" &&
+    trl "$1" | awk -F'\t' -v a="auto:demo:$2" 'NF == 8 && $8 == a' | grep -q .
+}
+refused() { # $1 dir, $2 rows before, $3 message: rc 3 (in ev.rc), nothing re-trusted or run
+  [ "$(cat "$WORK/ev.rc")" = 3 ] && grep -qF -- "$3" "$WORK/ev.err" && [ "$(trn "$1")" = "$2" ] && ! grep -qF 'auto re-trusted' "$WORK/ev.out" && [ "$(arow "$1" S1)" = 0 ]
+}
+evr() { ev "$@" > "$WORK/ev.rc"; }
+B0="$WORK/l151b0"; mkproj "$B0"; mklanes "$B0" "$LANE_SMOKE"; ev "$B0" trust smoke >/dev/null
+mkcard "$B0" demo off '- [ ] S1 first — lanes: smoke ; codex: no' '- [ ] S2 second — lanes: smoke ; codex: no'; ev "$B0" approve >/dev/null
+B1="$WORK/l151b1"; cp -Rp "$B0" "$B1"; ev "$B1" start S1 >/dev/null
+nb() { rm -rf "$2"; cp -Rp "$1" "$2"; }
+[ "$(head -n 1 "$B0/.claude/done-lanes.trust")" = "$(printf '# ts\tlane\tcmd_sha\tlane_sha\tdir_sha\tcanary_sha\tcanary_result — written only by scripts/evidence.sh (trust; run%ss auto re-trust adds an 8th field); append-only' "'")" ] \
+  && ok "a new trust file's header names both writers, its 7-column prefix unchanged" || no "trust header: $(head -n 1 "$B0/.claude/done-lanes.trust")"
+trl "$B0" | awk -F'\t' 'NF == 7' | grep -q . && ok "control: a human trust row keeps 7 fields" || no "human trust row: $(trl "$B0")"
+
+# 1 + 9 + 10 + 11 — one task: S1 edits verify.sh twice, S2 once more after S1 committed; close lists both slices
+P="$WORK/l151a"; nb "$B1" "$P"; PD="$P/.ai_context/tasks/demo/donelog"; r0="$(trl "$P")"; n0="$(trn "$P")"
+vedit "$P" 'S1: one more check'; rc=$(ev "$P" run smoke)
+{ [ "$rc" = 0 ] && autook "$P" S1 && grep -qxF 'evidence: auto re-trusted lane smoke for S1 — scripts/verify.sh changed in this slice and the canary still fails (red:exit=1). The checker reviews that diff; close lists it for the human.' "$WORK/ev.out"; } \
+  && ok "#1 a slice's edit of the file the cmd names: run re-trusts the lane (canary red) and runs it" || no "#1 auto re-trust (rc=$rc): $(head -c 400 "$WORK/ev.err")"
+want="$(printf 'bash scripts/verify.sh\nscripts/verify.sh %s' "$(sha256sum < "$P/scripts/verify.sh" | cut -c1-64)" | sha256sum | cut -c1-12)"
+{ [ "$(trn "$P")" = $((n0 + 1)) ] && trl "$P" | awk -F'\t' -v w="$want" -v r="$r0" 'BEGIN {split(r, o, "\t")}
+    NF == 8 && $2 == "smoke" && $3 == w && $3 != o[3] && $4 == o[4] && $5 == o[5] && $6 == o[6] && $7 == "red:exit=1" && $8 == "auto:demo:S1"' | grep -q . && trl "$P" | cut -f1 | grep -Eq "$TS_RE"; } \
+  && ok "#1 one trust row: the new cmd_sha, line/dir/canary hashes as trusted, red:exit=1, 8th field auto:demo:S1" || no "#1 trust row: $(trl "$P")"
+{ dl7 "$P" demo && awk -F'\t' -v w="$want" '$2 == "TRUST" && $3 == "S1" && $4 == "smoke" && $5 == "-" && $6 == "-" && $7 == "auto canary red:exit=1 cmd " w " files scripts/verify.sh"' "$PD" | grep -q .; } \
+  && ok "#1 donelog: TRUST S1 smoke - - auto canary red:exit=1 cmd <sha> files scripts/verify.sh (7 fields)" || no "#1 TRUST row: $(grep TRUST "$PD" | tail -n 1)"
+{ [ "$(python3 -I -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["cmd_sha"])' "$P/.claude/evidence/smoke.jsonl")" = "$want" ] && ev "$P" status --line >/dev/null && grep -qF 'smoke fresh' "$WORK/ev.out"; } \
+  && ok "#1 the record carries the new cmd_sha and status shows the lane fresh" || no "#1 not fresh: $(cat "$WORK/ev.out")"
+vedit "$P" 'S1: a second check'; rc=$(ev "$P" run smoke)
+{ [ "$rc" = 0 ] && autook "$P" S1 && [ "$(trn "$P")" = $((n0 + 2)) ] && [ "$(arow "$P" S1)" = 2 ]; } && ok "#9 a second edit in the same slice re-trusts again (this slice's own auto row)" || no "#9 second edit (rc=$rc): $(head -c 300 "$WORK/ev.err")"
+rep S1 pass | ev "$P" check S1 --agent fx --source human >/dev/null; rc=$(ev "$P" "done" S1)
+{ [ "$rc" = 0 ] && grep -q '^- \[x\] S1 .* ✓ smoke@' "$P/.ai_context/tasks/demo/card.md"; } && ok "#1 done S1 takes the re-trusted lane's record with a checker pass" || no "#1 done S1 (rc=$rc): $(head -c 400 "$WORK/ev.out")"
+git -C "$P" add scripts/verify.sh; git -C "$P" commit -qm 'feat(demo): S1 first'; ev "$P" start S2 >/dev/null
+vedit "$P" 'S2: another check'; rc=$(ev "$P" run smoke)
+{ [ "$rc" = 0 ] && autook "$P" S2 && [ "$(arow "$P" S2)" = 1 ]; } && ok "#10 S2 after S1 committed its edit: verify.sh again re-trusts, for S2" || no "#10 S2 (rc=$rc): $(head -c 300 "$WORK/ev.err")"
+rep S2 pass | ev "$P" check S2 --agent fx --source human >/dev/null; ev "$P" "done" S2 >/dev/null
+rep final pass | ev "$P" check final --agent fx --source human >/dev/null; rc=$(ev "$P" close)
+{ [ "$rc" = 0 ] && grep -qxF 'evidence: lanes re-trusted automatically during this task — review before merging: smoke (S1: scripts/verify.sh; S2: scripts/verify.sh)' "$WORK/ev.out"; } \
+  && ok "#11 close lists the task's auto re-trusts, both slices" || no "#11 close (rc=$rc): $(grep -F 're-trusted' "$WORK/ev.out" || head -c 400 "$WORK/ev.out")"
+Pr="$WORK/l151r"; rm -rf "$Pr"; ready "$Pr"; ev "$Pr" start S2 >/dev/null; ev "$Pr" run smoke >/dev/null; rep S2 pass | ev "$Pr" check S2 --agent fx --source human >/dev/null
+ev "$Pr" "done" S2 >/dev/null; rep final pass | ev "$Pr" check final --agent fx --source human >/dev/null; rc=$(ev "$Pr" close)
+{ [ "$rc" = 0 ] && grep -q '^evidence: Closed: ' "$WORK/ev.out" && ! grep -qF 're-trusted automatically' "$WORK/ev.out"; } && ok "#11 control: a task without auto re-trusts closes with no such line" || no "#11 control (rc=$rc): $(head -c 300 "$WORK/ev.out")"
+
+# 2 — no task (control: unchanged behavior)
+P="$WORK/l151c"; nb "$B1" "$P"; n0="$(trn "$P")"; mv "$P/.ai_context/tasks/CURRENT" "$WORK/l151cur"; vedit "$P" x; evr "$P" run smoke
+refused "$P" "$n0" 'RUN REFUSED — lane smoke: command changed since trust' && ok "#2 control: no task -> rc 3 command changed since trust, nothing re-trusted" || no "#2 no task: rc=$(cat "$WORK/ev.rc") $(head -c 300 "$WORK/ev.err")"
+# 3 — slice not started; card changed since approval
+P="$WORK/l151d"; nb "$B0" "$P"; n0="$(trn "$P")"; vedit "$P" x; evr "$P" run smoke; refused "$P" "$n0" 'command changed since trust'; a=$?
+ev "$P" start S1 >/dev/null; rc=$(ev "$P" run smoke)
+{ [ $a = 0 ] && [ "$rc" = 0 ] && autook "$P" S1; } && ok "#3 no [~] slice started: refused; after start S1 the same edit re-trusts" || no "#3 not started (refused=$a, after start rc=$rc)"
+P="$WORK/l151e"; nb "$B1" "$P"; n0="$(trn "$P")"; C="$P/.ai_context/tasks/demo/card.md"; cp "$C" "$WORK/l151card"
+vedit "$P" x; sed 's/^Goal: .*/Goal: moved/' "$WORK/l151card" > "$C"; evr "$P" run smoke; refused "$P" "$n0" 'command changed since trust'; a=$?
+cp "$WORK/l151card" "$C"; rc=$(ev "$P" run smoke)
+{ [ $a = 0 ] && [ "$rc" = 0 ] && autook "$P" S1; } && ok "#3 card changed since approval: refused; the approved card back re-trusts" || no "#3 card changed (refused=$a, restored rc=$rc)"
+# 4, 5 — the lane line or an @ directive changed as well
+P="$WORK/l151f"; nb "$B1" "$P"; n0="$(trn "$P")"; vedit "$P" x; mklanes "$P" "${LANE_SMOKE/failed\$/failed}"; evr "$P" run smoke; refused "$P" "$n0" 'RUN REFUSED — lane smoke: '; a=$?
+mklanes "$P" "$LANE_SMOKE"; rc=$(ev "$P" run smoke)
+{ [ $a = 0 ] && [ "$rc" = 0 ] && autook "$P" S1; } && ok "#4 an expect edit as well: refused (the lane line is not the trusted one); the trusted line back re-trusts" || no "#4 lane line (refused=$a, restored rc=$rc)"
+P="$WORK/l151g"; nb "$B1" "$P"; n0="$(trn "$P")"; vedit "$P" x; mklanes "$P" "$LANE_SMOKE" '@verify-paths src/'; evr "$P" run smoke; refused "$P" "$n0" 'RUN REFUSED — lane smoke: '; a=$?
+mklanes "$P" "$LANE_SMOKE"; rc=$(ev "$P" run smoke)
+{ [ $a = 0 ] && [ "$rc" = 0 ] && autook "$P" S1; } && ok "#5 a new @ line too: refused; without it the edit re-trusts" || no "#5 @ line (refused=$a, restored rc=$rc)"
+# 6 — the canary's own file
+P="$WORK/l151h"; nb "$B1" "$P"; n0="$(trn "$P")"; echo '# S1: canary tweak' >> "$P/scripts/canary.sh"; evr "$P" run smoke
+refused "$P" "$n0" "RUN REFUSED — lane smoke: the canary's own file scripts/canary.sh changed — only the human re-trusts a changed canary — the human runs: bash scripts/evidence.sh trust smoke"; a=$?
+vedit "$P" x; evr "$P" run smoke; refused "$P" "$n0" "the canary's own file scripts/canary.sh changed"; b=$?
+{ [ $a = 0 ] && [ $b = 0 ]; } && ok "#6 a file only the canary names changed: refused, alone or with a verify.sh edit" || no "#6 canary file (alone=$a, with verify=$b): $(head -c 300 "$WORK/ev.err")"
+# 7 — verify.sh changed and committed between trust and START
+P="$WORK/l151i"; nb "$B0" "$P"; vedit "$P" 'before the task'; git -C "$P" commit -qam pre; ev "$P" start S1 >/dev/null; n0="$(trn "$P")"
+evr "$P" run smoke; refused "$P" "$n0" 'command changed since trust'; a=$?
+vedit "$P" 'S1: a check'; evr "$P" run smoke; refused "$P" "$n0" 'command changed since trust'; b=$?
+git -C "$P" show HEAD:scripts/verify.sh > "$P/scripts/verify.sh"; ev "$P" trust smoke >/dev/null; vedit "$P" 'S1: a check'; rc=$(ev "$P" run smoke)
+{ [ $a = 0 ] && [ $b = 0 ] && [ "$rc" = 0 ] && autook "$P" S1; } && ok "#7 a change from before START is not this slice's: refused; trusted at START's content, the slice's edit re-trusts" \
+  || no "#7 attribution (no edit=$a, edit=$b, after trust rc=$rc)"
+# 8, 14 — the canary runs verify.sh against a broken state: an edit that makes it pass, or leaves a file behind
+P="$WORK/l151j"; mkproj "$P"; printf '#!/usr/bin/env bash\necho broken > src/mode; bash scripts/verify.sh; r=$?; rm -f src/mode; exit $r\n' > "$P/scripts/canary.sh"
+git -C "$P" commit -qam canary; mklanes "$P" "$LANE_SMOKE"; ev "$P" trust smoke >/dev/null; cp "$P/scripts/verify.sh" "$WORK/l151v0"
+mkcard "$P" demo off '- [~] S1 first — lanes: smoke ; codex: no'; ev "$P" approve >/dev/null; ev "$P" start S1 >/dev/null; n0="$(trn "$P")"
+vsub "$P" 's/broken) echo "verify: 0 passed, 1 failed"; exit 1 ;;/broken) tick; echo "verify: 1 passed, 0 failed" ;;/'; evr "$P" run smoke
+{ refused "$P" "$n0" 'RUN REFUSED — lane smoke: auto re-trust after S1 changed scripts/verify.sh failed: the canary passed (exit 0, every marker, executed=1)' \
+  && grep -qF ' — the human runs: bash scripts/evidence.sh trust smoke' "$WORK/ev.err" && [ ! -e "$P/.claude/evidence/smoke.jsonl" ] && [ ! -e "$P/.claude/evidence/locks/run-smoke.lock" ]; } \
+  && ok "#8 the edit makes the canary pass: refused (auto re-trust … failed: the canary passed), no trust row, no run, lock gone" || no "#8 canary passes: rc=$(cat "$WORK/ev.rc") $(head -c 400 "$WORK/ev.err")"
+cp "$WORK/l151v0" "$P/scripts/verify.sh"; vsub "$P" 's/broken) echo/broken) echo x >> src\/b.txt; echo/'; evr "$P" run smoke; rm -f "$P/src/b.txt"
+refused "$P" "$n0" "RUN REFUSED — lane smoke: auto re-trust after S1 changed scripts/verify.sh failed: the canary left the lane's content changed (src/b.txt)" \
+  && ok "#14 the canary leaves the lane's content changed: refused, the path named" || no "#14 dirty canary: rc=$(cat "$WORK/ev.rc") $(head -c 400 "$WORK/ev.err")"
+cp "$WORK/l151v0" "$P/scripts/verify.sh"; vedit "$P" x; rc=$(ev "$P" run smoke)
+{ [ "$rc" = 0 ] && autook "$P" S1; } && ok "#8 #14 a verify.sh edit that keeps the canary red re-trusts in the same project" || no "#8 #14 benign edit (rc=$rc): $(head -c 300 "$WORK/ev.err")"
+# 12, 13 — a lane the slice does not cite; a skip: canary
+P="$WORK/l151k"; mkproj "$P"; mklanes "$P" "$LANE_SMOKE" "$LANE_MULTI" 'vm | src/ scripts/ | 1 | ^verify: [1-9][0-9]* passed, 0 failed$ | skip:needs the VM | bash scripts/verify.sh'
+ev "$P" trust smoke >/dev/null; ev "$P" trust multi >/dev/null; ev "$P" trust vm --skip-canary >/dev/null
+mkcard "$P" demo off '- [~] S1 first — lanes: smoke,vm ; codex: no'; ev "$P" approve >/dev/null; ev "$P" start S1 >/dev/null; n0="$(trn "$P")"; vedit "$P" x
+evr "$P" run multi; refused "$P" "$n0" 'RUN REFUSED — lane multi: command changed since trust'; a=$?
+evr "$P" run vm; refused "$P" "$n0" 'RUN REFUSED — lane vm: command changed since trust'; b=$?
+rc=$(ev "$P" run smoke); { [ $a = 0 ] && [ $b = 0 ] && [ "$rc" = 0 ] && autook "$P" S1; } && ok "#12 #13 a lane S1 does not cite and a skip: canary lane are refused; the cited lane re-trusts" \
+  || no "#12 #13 (uncited=$a, skip=$b, smoke rc=$rc)"
+C="$P/.ai_context/tasks/demo/card.md"; sed 's/lanes: smoke,vm ;/lanes: smoke,vm,multi ;/' "$C" > "$WORK/l151card" && cp "$WORK/l151card" "$C"; ev "$P" approve >/dev/null
+rc=$(ev "$P" run multi); { [ "$rc" = 0 ] && autook "$P" S1 multi; } && ok "#12 once S1 cites multi (re-approved), the same edit re-trusts multi" || no "#12 cited multi (rc=$rc): $(head -c 300 "$WORK/ev.err")"
+# 15 — a live run lock: rc 4 before any trust row
+P="$WORK/l151l"; nb "$B1" "$P"; n0="$(trn "$P")"; LK="$P/.claude/evidence/locks/run-smoke.lock"; vedit "$P" x
+mkdir -p "$WORK/l151fake"; printf 'while :; do sleep 0.2; done\n' > "$WORK/l151fake/evidence.sh"; bash "$WORK/l151fake/evidence.sh" & fp=$!
+printf '%s\trun\tsmoke\tS1\t%s\n' "$fp" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$LK"; rc=$(ev "$P" run smoke); kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
+{ [ "$rc" = 4 ] && grep -qF 'RUN REFUSED — lane smoke is already running (pid' "$WORK/ev.err" && [ "$(trn "$P")" = "$n0" ] && [ "$(arow "$P" S1)" = 0 ]; } \
+  && ok "#15 a live run lock: rc 4 and no trust row (the re-trust waits for the lock)" || no "#15 live lock (rc=$rc, rows $(trn "$P") vs $n0): $(head -c 300 "$WORK/ev.err")"
+rc=$(ev "$P" run smoke); { [ "$rc" = 0 ] && grep -qF 'removed stale lock run-smoke.lock' "$WORK/ev.err" && autook "$P" S1; } && ok "#15 once the lock is dead the same run re-trusts" || no "#15 after the lock (rc=$rc)"
+# the hint: after the slice's edit and before run, status and done name run as the way out; the human's trust stays last
+P="$WORK/l151m"; nb "$B1" "$P"; ev "$P" run smoke >/dev/null; vedit "$P" x; W='not trusted: command changed since trust (its text or a repo file it names) — '
+Hn="${W}if S1 changed a file only its cmd names, bash scripts/evidence.sh run smoke re-trusts it while the canary still fails; otherwise the human runs: bash scripts/evidence.sh trust smoke"
+rc=$(ev "$P" status); { [ "$rc" = 0 ] && grep -qxF "lane smoke: $Hn" "$WORK/ev.out" && grep '^lane smoke: ' "$WORK/ev.out" | grep -q 'the human runs: bash scripts/evidence.sh trust smoke$'; } \
+  && ok "hint: status names run as the re-trust for S1's edit and still ends with the human's trust" || no "hint in status (rc=$rc): $(grep '^lane smoke' "$WORK/ev.out")"
+rc=$(ev "$P" "done" S1); grep -qxF "  - lane smoke: $Hn" "$WORK/ev.out"; a=$?; rc2=$(ev "$P" close)
+{ [ "$rc" = 1 ] && [ $a = 0 ] && [ "$rc2" = 1 ] && grep -qxF "  - lane smoke: $Hn" "$WORK/ev.out"; } && ok "hint: done's and close's gaps carry the same words" || no "hint in done/close (rc=$rc/$rc2): $(grep 'lane smoke' "$WORK/ev.out")"
+mv "$P/.ai_context/tasks/CURRENT" "$WORK/l151cur"; rc=$(ev "$P" status); rc2=$(ev "$P" show smoke)
+{ [ "$rc" = 0 ] && [ "$rc2" = 0 ] && grep -qxF "  - lane smoke: ${W}the human runs: bash scripts/evidence.sh trust smoke — nothing in its paths is proven at this content" "$WORK/ev.out" && ! grep -qF 're-trusts it while' "$WORK/ev.out"; } \
+  && ok "hint control: no task -> status still works, show keeps the plain 'the human runs: … trust smoke'" || no "hint control (status rc=$rc, show rc=$rc2): $(grep 'lane smoke' "$WORK/ev.out")"
+
 echo "=== L1-14 · pre-commit guards: append-only + S2 bulk"
 D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$D/.ai_context/knowledge/lessons"
 printf 'preamble\n' > "$D/.ai_context/decisions.md"
@@ -2433,10 +2558,11 @@ if [ -f "$REPO/MIGRATION.md" ] && [ -f "$REPO/README.zh-TW.md" ]; then
   done
   first="$(grep -m 1 '^## ' "$REPO/MIGRATION.md")"
   sec="$(awk -v h="$first" '$0 == h {f = 1; next} f && /^## / {exit} f' "$REPO/MIGRATION.md")"
-  { printf '%s\n' "$first" | grep -qE '^## -?[0-9]+\. claude-starter v.* → v' &&
+  # here-strings, not printf | grep -q: under pipefail an early match can SIGPIPE the line-by-line printf (a flaky 141)
+  { grep -qE '^## -?[0-9]+\. claude-starter v.* → v' <<<"$first" &&
     grep -qxF '## -9. claude-starter v3-final → v4.0' "$REPO/MIGRATION.md" &&
-    printf '%s\n' "$sec" | grep -qxF '### What changed, and why' &&
-    printf '%s\n' "$sec" | grep -qE '^### (Migrating|Upgrade steps)'; } &&
+    grep -qxF '### What changed, and why' <<<"$sec" &&
+    grep -qE '^### (Migrating|Upgrade steps)' <<<"$sec"; } &&
     ok "MIGRATION opens with a numbered release section (what changed + migrating) and carries -9 v3-final → v4.0" ||
     no "MIGRATION: first section '$first' is not a numbered release with 'What changed, and why' + 'Migrating', or -9 v3-final → v4.0 is missing"
   grep -q '^## Unreleased' "$REPO/MIGRATION.md" && no "MIGRATION still has an '## Unreleased' section" || ok "MIGRATION has no '## Unreleased' section"

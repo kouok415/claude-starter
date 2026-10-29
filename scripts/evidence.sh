@@ -383,6 +383,19 @@ def_sha() { # $1 = a cmd or canary field -> sha256[:12] of it plus "LF<path> <sh
   def_texts "$1"
   h12 "${DT[0]}"
 }
+head_texts() { # $1 = commit, then cmd or canary fields -> DT[i]: def_texts' text, each word that is a file at that commit read from there
+  local h="$1" a w i=0
+  shift
+  DT=()
+  for a in "$@"; do
+    DT[i]="$a"
+    for w in ${a//$DEF_NP/$'\n'}; do
+      case "$w" in /*|*..*) continue ;; esac
+      [ "$(git cat-file -t "$h:$w" 2>/dev/null)" = blob ] && DT[i]="${DT[i]}"$'\n'"$w $(git cat-file blob "$h:$w" | sha)"
+    done
+    i=$((i + 1))
+  done
+}
 
 lane_defs() { # $1 = lane index -> HC HL HN [$1]: its cmd, line and canary hashes, once per call (H2); HD, TROW
   local a="" b="" c=""
@@ -429,7 +442,14 @@ trust_note() { # $1 = lane index -> TWHY: why its current definition is not trus
   else TWHY=""
   fi
 }
-trust_why() { trust_note "$1"; [ -z "$TWHY" ] || echo "$TWHY"; }
+retrust_hint() { # $1 = lane, $2 = why it is untrusted -> "if S<n> changed …; otherwise " when run may re-trust it (a hint, never dies)
+  local s
+  case "$2" in command*|canary*) [ -f "${CARD:-}" ] || return 0 ;; *) return 0 ;; esac   # an active task's card only
+  s="$(card_current_slice "$CARD")"
+  case " $(slice_lanes "$(slice_line "$s")") " in
+    *" $1 "*) printf 'if %s changed a file only its cmd names, bash scripts/evidence.sh run %s re-trusts it while the canary still fails; otherwise ' "$s" "$1" ;;
+  esac
+}
 
 lane_state() { # $1 = lane -> LS fresh|stale|fail|missing|untrusted|undeclared, LID, LSD, LSW (words for gaps, footers)
   # A declared lane's answer is kept for the rest of the call (H2), like its trees: no command here writes a lane record
@@ -446,7 +466,7 @@ lane_state() { # $1 = lane -> LS fresh|stale|fail|missing|untrusted|undeclared, 
     LS=undeclared LSD="not declared in .claude/done-lanes — declare it (the human trusts it) or fix the card"
     return 0
   elif lane_defs "$IX" && { [ -n "${TW[IX]+x}" ] || { trust_note "$IX"; TW[IX]="$TWHY"; }; } && [ -n "${TW[IX]}" ]; then
-    LS=untrusted LSD="not trusted: ${TW[IX]} — the human runs: bash scripts/evidence.sh trust $1"
+    LS=untrusted LSD="not trusted: ${TW[IX]} — $(retrust_hint "$1" "${TW[IX]}")the human runs: bash scripts/evidence.sh trust $1"
   elif [ -z "$r" ]; then
     LS=missing LSD=missing
   elif jv "$r" verdict; [ "$JV" != pass ]; then
@@ -509,8 +529,38 @@ judge() { # $1 log, $2 expect, $3 exit, $4 secs, $5 min_secs (0 = canary) -> J_W
   esac
 }
 
+canary_red() { # $1 = lane index, $2 = refusal prefix, $3 = its tail -> CRES red:<why>; else dies "$2: <why>$3" (trust, run's auto
+  # re-trust): a non-trivial canary that leaves the lane's content as it found it, logs nothing the scan flags, and fails
+  local i="$1" c="${L_CAN[$1]}" first t0 log rc s0
+  first="$(trivial "$c")"   # review #20: spacing, parentheses and a path do not hide a trivial canary
+  { [ "$first" = "$(trivial "${L_CMD[i]}")" ] || static_only "$c" || [[ "$first" =~ ^(false|true|:|exit( [0-9]+)?|return( [0-9]+)?|!( .*)?)$ ]]; } &&
+    die 3 "$2: canary is trivial ('$c'): it must run the same check against a known-broken state$3"
+  t0="$(TREE_DUMP="$TDUMP" lane_tree "$i")"
+  case "$t0" in error:*) die 6 "$2: git could not hash the lane's paths (an unmerged index or an unreadable file?)$3" ;; esac
+  log="$EV/logs/${L_NAME[i]}-canary-$(date -u +%Y%m%dT%H%M%SZ).log"
+  s0=$SECONDS
+  ( umask 077; exec bash -c "$c" </dev/null >"$log" 2>&1 )
+  rc=$?
+  chmod 600 "$log"
+  judge "$log" "${L_EXP[i]}" "$rc" $((SECONDS - s0)) 0
+  [ "${J_SCAN#clean}" != "$J_SCAN" ] ||
+    die 3 "$2: the canary log hit a secret or internal-IP rule (${J_SCAN#hit:}): mask the output before trusting (log kept at $log, mode 600)$3"
+  [ "$t0" = "$(TREE_DUMP="${TDUMP:+$TDUMP.after}" lane_tree "$i")" ] ||
+    die 3 "$2: the canary left the lane's content changed$(changed_paths "$TDUMP" "$TDUMP.after"): a canary must restore whatever it breaks, and a cache it writes must be gitignored$3"
+  [ "$J_WHY" = - ] &&
+    die 3 "$2: the canary passed (exit 0, every marker, executed=$J_EXEC): this lane cannot tell broken from working; fix the canary or tighten expect$3"
+  CRES="red:$J_WHY"
+}
+
+trust_row() { # $1 = lane index, $2 = canary result [, $3 = auto:<slug>:<S>, the 8th field only run's auto re-trust writes]
+  [ -f "$TR" ] ||
+    printf "# ts\tlane\tcmd_sha\tlane_sha\tdir_sha\tcanary_sha\tcanary_result — written only by scripts/evidence.sh (trust; run's auto re-trust adds an 8th field); append-only\n" > "$TR"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s%s\n' "$(now)" "${L_NAME[$1]}" "$(def_sha "${L_CMD[$1]}")" "$(h12 "${L_LINE[$1]}")" "$DIR_SHA" \
+    "$(def_sha "${L_CAN[$1]}")" "$2" "${3:+$TAB$3}" >> "$TR"
+}
+
 cmd_trust() { # trust <lane> [--skip-canary]: the human approves one lane definition (02 §0.2)
-  local l="${1:-}" c cmd t0 log rc s0 res first
+  local l="${1:-}" c cmd res
   load_lanes
   lane_ix "$l" || die 2 "no lane '$l' in .claude/done-lanes"
   c="${L_CAN[IX]}"
@@ -526,45 +576,67 @@ cmd_trust() { # trust <lane> [--skip-canary]: the human approves one lane defini
     [ "${2:-}" = --skip-canary ] ||
       die 3 "TRUST REFUSED — $l: canary is $c; nothing would show this lane can fail. If the human accepts that: bash scripts/evidence.sh trust $l --skip-canary"
   else
-    first="$(trivial "$c")"   # review #20: spacing, parentheses and a path do not hide a trivial canary
-    { [ "$first" = "$(trivial "$cmd")" ] || static_only "$c" || [[ "$first" =~ ^(false|true|:|exit( [0-9]+)?|return( [0-9]+)?|!( .*)?)$ ]]; } &&
-      die 3 "TRUST REFUSED — $l: canary is trivial ('$c'): it must run the same check against a known-broken state"
     dump_init; trap 'rm -f ${TDUMP:+"$TDUMP" "$TDUMP.after"}' EXIT
-    t0="$(TREE_DUMP="$TDUMP" lane_tree "$IX")"
-    case "$t0" in error:*) die 6 "TRUST REFUSED — $l: git could not hash the lane's paths (an unmerged index or an unreadable file?)" ;; esac
-    log="$EV/logs/$l-canary-$(date -u +%Y%m%dT%H%M%SZ).log"
-    s0=$SECONDS
-    ( umask 077; exec bash -c "$c" </dev/null >"$log" 2>&1 )
-    rc=$?
-    chmod 600 "$log"
-    judge "$log" "${L_EXP[IX]}" "$rc" $((SECONDS - s0)) 0
-    [ "${J_SCAN#clean}" != "$J_SCAN" ] ||
-      die 3 "TRUST REFUSED — $l: the canary log hit a secret or internal-IP rule (${J_SCAN#hit:}): mask the output before trusting (log kept at $log, mode 600)"
-    [ "$t0" = "$(TREE_DUMP="${TDUMP:+$TDUMP.after}" lane_tree "$IX")" ] ||
-      die 3 "TRUST REFUSED — $l: the canary left the lane's content changed$(changed_paths "$TDUMP" "$TDUMP.after"): a canary must restore whatever it breaks, and a cache it writes must be gitignored"
-    [ "$J_WHY" = - ] &&
-      die 3 "TRUST REFUSED — $l: the canary passed (exit 0, every marker, executed=$J_EXEC): this lane cannot tell broken from working; fix the canary or tighten expect"
-    res="red:$J_WHY"
+    canary_red "$IX" "TRUST REFUSED — $l" ""
+    res="$CRES"
   fi
-  [ -f "$TR" ] ||
-    printf '# ts\tlane\tcmd_sha\tlane_sha\tdir_sha\tcanary_sha\tcanary_result — written only by scripts/evidence.sh trust; append-only\n' > "$TR"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(now)" "$l" "$(def_sha "$cmd")" "$(h12 "${L_LINE[IX]}")" "$DIR_SHA" "$(def_sha "$c")" "$res" >> "$TR"
+  trust_row "$IX" "$res"
   task_ctx soft && donelog_row "$DLOG" TRUST - "$l" - - "canary $res cmd $(def_sha "$cmd")"
   echo "evidence: trusted lane $l — canary $res · cmd $(def_sha "$cmd") · lane $(h12 "${L_LINE[IX]}") · directives $DIR_SHA"
-  echo "evidence: re-trust whenever this lane's line, a repo file its cmd or canary names, or any @ directive changes; run refuses an untrusted definition"
+  echo "evidence: re-trust whenever this lane's line, a repo file its cmd or canary names, or any @ directive changes; run refuses an untrusted definition (a slice's own edit of a file only its cmd names: run re-trusts it while the canary still fails)"
 }
 
 trivial() { # $1 = a command -> it with ( ) { } ; dropped, spaces squeezed, the first word's directory stripped
   printf '%s' "$1" | tr -d '(){};' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//; s#^[^ ]*/##'
 }
 
+# Auto re-trust (user ruling): a slice may change a file its lane's cmd names (the verify script). run re-trusts the lane
+# itself, under its lock, only when the canary still fails; the checker reviews that diff and close lists it for the human.
+AS="" AF=""
+retrust_ok() { # $1 = lane index -> rc 0 when run may re-trust it: AS the [~] slice, AF the files changed since its START head
+  # (a) only named-file content moved since trust: line, @ lines and scan rules as trusted; never a skip: canary (g)
+  # (b) an approved card, AS started at a commit h; (c) AS cites the lane; (d) every file either field names that differs
+  # from h is named by the cmd, else a canary-only file dies; (e) the trust row is h's definition, or AS's own auto row
+  local i="$1" c l n a8 h c1 n1 c0 n0 f
+  IFS=$'\t' read -r _ _ c l _ n _ a8 <<<"${TROW[i]:-}"
+  [ -n "${TROW[i]:-}" ] && [ "$l $HD" = "${HL[i]} $DIR_SHA" ] && [ "$c $n" != "${HC[i]} ${HN[i]}" ] &&
+    [ "${L_CAN[i]#skip:}" = "${L_CAN[i]}" ] && task_ctx soft && [ "$A12" = "$D12" ] || return 1
+  AS="$(card_current_slice "$CARD")"
+  h="$(started_row "$AS" | cut -f5)"
+  [ "$AS" != - ] && [[ "$h" =~ ^[0-9a-f]{7,40}$ ]] && h="$(git rev-parse -q --verify "$h^{commit}")" || return 1
+  case " $(slice_lanes "$(slice_line "$AS")") " in *" ${L_NAME[i]} "*) ;; *) return 1 ;; esac
+  def_texts "${L_CMD[i]}" "${L_CAN[i]}"
+  c1="$(sed 1d <<<"${DT[0]}")" n1="$(sed 1d <<<"${DT[1]}")"   # "<path> <sha256>" per file each field names, now and at h
+  head_texts "$h" "${L_CMD[i]}" "${L_CAN[i]}"
+  c0="$(sed 1d <<<"${DT[0]}")" n0="$(sed 1d <<<"${DT[1]}")"
+  AF="$( { printf '%s\n' "$c1" "$n1" | sort -u; printf '%s\n' "$c0" "$n0" | sort -u; } | grep . | sort | uniq -u | sed 's/ [^ ]*$//' | sort -u)"
+  [ -n "$AF" ] || return 1
+  c1=$'\n'"$(printf '%s\n' "$c1" "$c0" | sed 's/ [^ ]*$//')"$'\n'   # the files the cmd names, now or at h
+  while IFS= read -r f; do
+    case "$c1" in *$'\n'"$f"$'\n'*) ;; *) die 3 "RUN REFUSED — lane ${L_NAME[i]}: the canary's own file $f changed — only the human re-trusts a changed canary — the human runs: bash scripts/evidence.sh trust ${L_NAME[i]}" ;; esac
+  done <<<"$AF"
+  [ "$c $n" = "$(h12 "${DT[0]}") $(h12 "${DT[1]}")" ] || [ "$a8" = "auto:$SLUG:$AS" ]
+}
+auto_retrust() { # $1 = lane index, under its run lock (f): canary_red as trust runs it (g), then the trust and donelog rows (h)
+  local i="$1" l="${L_NAME[$1]}" f="${AF//$'\n'/, }" p
+  p="RUN REFUSED — lane $l: auto re-trust after $AS changed $f failed"
+  canary_red "$i" "$p" " — the human runs: bash scripts/evidence.sh trust $l"
+  def_texts "${L_CMD[i]}" "${L_CAN[i]}"   # the definition (a)-(e) checked, not one an edit during the canary made
+  [ "$(h12 "${DT[0]}") $(h12 "${DT[1]}")" = "${HC[i]} ${HN[i]}" ] ||
+    die 3 "$p: the lane's files changed while its canary ran — the human runs: bash scripts/evidence.sh trust $l"
+  trust_row "$i" "$CRES" "auto:$SLUG:$AS"
+  donelog_row "$DLOG" TRUST "$AS" "$l" - - "auto canary $CRES cmd ${HC[i]} files ${AF//$'\n'/,}"
+  echo "evidence: auto re-trusted lane $l for $AS — $f changed in this slice and the canary still fails ($CRES). The checker reviews that diff; close lists it for the human."
+}
+
 cmd_run() { # run <lane> [--escalated]: the only way a lane result enters the ledger
-  local l="${1:-}" esc=0 slice=- n p t0 head ext=- ts log rc s0 secs v why="" w
+  local l="${1:-}" esc=0 slice=- n p t0 head ext=- ts log rc s0 secs v why="" w auto=""
   [ "${2:-}" = --escalated ] && esc=1
   load_lanes
   lane_ix "$l" || die 2 "no lane '$l' in .claude/done-lanes"
-  why="$(trust_why "$IX")"
-  [ -z "$why" ] || die 3 "RUN REFUSED — lane $l: $why — the human runs: bash scripts/evidence.sh trust $l"
+  trust_note "$IX"
+  [ -z "$TWHY" ] || { retrust_ok "$IX" && auto=1; } ||
+    die 3 "RUN REFUSED — lane $l: $TWHY — the human runs: bash scripts/evidence.sh trust $l"
   LOCK="$EV/locks/run-$l.lock"
   if [ -f "$LOCK" ]; then
     p="$(cut -f1 "$LOCK")"
@@ -593,6 +665,7 @@ cmd_run() { # run <lane> [--escalated]: the only way a lane result enters the le
     die 4 "RUN REFUSED — lane $l is already running — wait for its notification; do not start a second run"
   dump_init; trap 'rm -f "$LOCK" ${TDUMP:+"$TDUMP" "$TDUMP.after"}' EXIT
   trap 'exit 130' INT TERM HUP
+  [ -z "$auto" ] || auto_retrust "$IX"
   t0="$(TREE_DUMP="$TDUMP" lane_tree "$IX")"
   case "$t0" in error:*) die 6 "RUN REFUSED — lane $l: git could not hash the lane's paths (${L_PATHS[IX]}): resolve the merge, make every file readable, then re-run" ;; esac
   head="$(git rev-parse -q --verify HEAD || echo -)"
@@ -982,6 +1055,13 @@ cmd_close() { # close: every slice [x], every cited lane declared, trusted and f
   donelog_row "$DLOG" CLOSE - - "${w:0:12}" "$(tr ' ' , <<<"${tok# }")" ok
   echo "evidence: $x"
   not_proven "$(card_lanes)" "final card" 0
+  # (i) run's auto re-trusts in this task, by lane: "<lane> (<S>: <files its last auto row names>; …)"
+  x="$(awk -F'\t' '$2 == "TRUST" && $7 ~ /^auto / {f = $7; sub(/.* files /, "", f); gsub(/,/, ", ", f)
+      if (!($4 in s)) l[++n] = $4; if (!(($4, $3) in v)) s[$4] = s[$4] " " $3; v[$4, $3] = f}
+    END {for (i = 1; i <= n; i++) {k = split(substr(s[l[i]], 2), a, " "); o = ""
+      for (j = 1; j <= k; j++) o = o (j > 1 ? "; " : "") a[j] ": " v[l[i], a[j]]
+      printf "%s%s (%s)", (i > 1 ? ", " : ""), l[i], o}}' "$DLOG")"
+  [ -z "$x" ] || echo "evidence: lanes re-trusted automatically during this task — review before merging: $x"
   echo "evidence: next: /wrap — scoreboard row: bash scripts/harness-report.sh --row $SLUG"
 }
 
@@ -1170,6 +1250,8 @@ cmd_status() { # status [--line|--porcelain|--tree <S<n>|final>] (02 §0.9): --p
     p="$(cut -f1,5 "$EV/locks/run-$l.lock" 2>/dev/null)"
     if lock_alive "${p%%"$TAB"*}"; then
       x="running — running pid ${p%%"$TAB"*} since ${p#*"$TAB"}"
+    elif [ "$LS" = untrusted ]; then   # what to do about it: lane_state's words, as done and close print them
+      x="$LSD"
     elif [ -z "$r" ]; then
       x="$LS — no records"
     elif [ "$LS" = fail ]; then

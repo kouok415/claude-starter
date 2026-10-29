@@ -43,6 +43,10 @@ Rules:
   Never `git add -A/.`, `checkout -- <path>`, `restore`, `stash`.
 - **Hands off the evidence.** Never edit `card.md` marks, `.claude/done-lanes`,
   `.claude/done-lanes.trust`, `.claude/evidence/` or `donelog`.
+- **Lane files.** You may edit a file a lane's cmd names (the verify script):
+  `evidence.sh run` re-trusts the lane itself while its canary still fails.
+  Never edit a file only the canary names. A `RUN REFUSED` that says "the
+  human runs: … trust" → stop and report it; never work around it.
 - A failure with no proven cause → follow `/debug`; no fix without a repro.
 
 Return exactly (deltas only — never restate card or notes):
