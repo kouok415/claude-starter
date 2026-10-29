@@ -175,10 +175,22 @@ never overwritten — instead you get suggestions for the manual merges.
 Two extra modes: `--update-stock` also advances mechanism files that are
 provably unmodified stock copies (content matches a historical template
 version) and deletes stock copies of files the template retired
-(customized files are never touched; it refuses while a task started
-under v3 is still active), and `--adopt` onboards an existing non-starter
-repo (creates the skeleton, then `/setup` drafts the brief from the code).
-Full guide: [MIGRATION.md](./MIGRATION.md).
+(customized files are never touched; it refuses, exit 1, while a task
+started under v3 is still active), and `--adopt` onboards an existing
+non-starter repo (creates the skeleton, then `/setup` drafts the brief
+from the code). Run it from a git clone of the template: it ships the
+last commit, and `--update-stock` without git history refuses (exit 2).
+
+The v4 `/task` core (settings, the gate, session-start, spawn-log and
+bash-guard hooks, `guard-patterns.sh`, `evidence.sh`, `task-pair.sh`, the
+task skill, the executor and checker) moves as one unit: if you customized
+one of those files, the sync leaves the whole core as it was, says
+`MIGRATION INCOMPLETE — v4 /task is not safe until: <files> are merged by
+hand` and exits 2. Merge each named file with the template's version
+(keep every template line, add yours), re-run, and the core moves. Then
+open Claude and run `/setup`: on a configured project it does only §4–§5,
+declaring and trusting the lanes `/task` needs. Full guide:
+[MIGRATION.md](./MIGRATION.md).
 
 ## 7. Troubleshooting
 
@@ -207,6 +219,14 @@ Full guide: [MIGRATION.md](./MIGRATION.md).
   `.ai_context/tasks/CURRENT`; the task directory stays. Deleting
   `CURRENT` by hand disarms the harness too, but `harness-report.sh` then
   lists the task as an orphan. Write the slug back to resume later.
+- **Sync stamped `partial-sync:`** — it held the v4 core back (see §6); the
+  project still runs its old core and `harness-report.sh` keeps the
+  harness of the last `synced-to:` line. Merge the files the sync named,
+  then re-run it.
+- **A defect row is wrong** — never edit `defects.csv`: append a
+  retraction, `bash scripts/harness-report.sh --defect-retract <date>
+  <slug> <S<n>> <ref> --reason "…"` (the row's own date, slug, slice and
+  ref); neither the retraction nor the rows it names count.
 - **Hooks don't seem to fire** — hooks load at session start; restart the
   session after changing `settings.json`. Quickest check: INDEX/state
   injection at the top of a fresh session.
@@ -262,6 +282,7 @@ prefix; the ones you will meet:
 | Where does the task stand? | `bash scripts/evidence.sh status` |
 | Let a unit through without Codex | `bash scripts/evidence.sh approve --waive <S<n>\|card\|final> --reason "…"` |
 | Record a defect found after done | `/defect` |
+| Withdraw a wrong defect row | `bash scripts/harness-report.sh --defect-retract <date> <slug> <S<n>> <ref> --reason "…"` |
 | Prune old lane logs | `find .claude/evidence/logs -mtime +30 -delete` |
 | Status line (opt-in) | `"statusLine": {"type": "command", "command": "bash scripts/evidence.sh status --line"}` in `.claude/settings.local.json` |
 | Upgrade a project | `./sync-project.sh <path>` |

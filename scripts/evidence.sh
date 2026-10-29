@@ -467,9 +467,11 @@ rev_tail() { # $1 type, $2 unit, $3 lane, $4 tree, $5 result -> the donelog row 
   donelog_row "$DLOG" "$1" "$2" "$3" "${t:0:12}" "$RID" "$5"
 }
 
-defect() { # lands in C6 (harness-report.sh --defect); until then only a warning
-  bash scripts/harness-report.sh --defect "$SLUG" "$1" "$2" "$3" "$4" "$5" --n "$6" >/dev/null 2>&1 ||
-    echo "evidence: warning: defect not recorded (harness-report.sh --defect failed): $4" >&2
+DROW=""
+defect() { # a row harness-report.sh --defect refused is never silent: the check/codex output line says defect-row:failed
+  bash scripts/harness-report.sh --defect "$SLUG" "$1" "$2" "$3" "$4" "$5" --n "$6" >/dev/null 2>&1 && return 0
+  DROW=" defect-row:failed"
+  echo "evidence: warning: defect not recorded (harness-report.sh --defect failed): $4" >&2
 }
 
 # --- judging a lane or canary log ------------------------------------------------
@@ -1294,7 +1296,7 @@ cmd_check() { # check <S<n>|final|card|-> --agent <id|-> --source <src>: a check
   if [ $v = fail ] && [ "$nv" -gt 0 ] && [ "$u" != card ]; then
     defect "$u" checker unrated "checker $u: $nv NOT VERIFIED claim(s)" "check@$RID" "$nv"
   fi
-  echo "check $u $v $RID"
+  echo "check $u $v $RID$DROW"
 }
 
 # Provenance (pair review C1, M6): a Codex result counts as the judge's only when this run's transcript
@@ -1487,7 +1489,7 @@ cmd_codex() { # codex <packet> <result> <state> <reason>: one settled Codex run 
   if [ "$v" = none ] && [ "$(jget "$prev" verdict)" = none ] && [ "$(jget "$prev" tree)" = "$tree" ]; then
     echo "evidence: codex no verdict twice — $u at this content; the human must look (tasks/$SLUG/pair/). done/close stay refused until an approving run or a waiver (approve --waive)" >&2
   fi
-  echo "$RID"
+  echo "$RID$DROW"
 }
 
 case "${1:-}" in

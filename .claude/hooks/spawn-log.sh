@@ -11,11 +11,11 @@
 #
 # Rows in the active task's donelog (donelog_row, 7 TAB fields):
 #   SPAWN  <[~] slice> <executor|checker> <checker: the unit's tree12 | -> <agent_id> start
-#   RETURN <[~] slice> <executor|checker> - <agent_id> returned | checked <id> <verdict>
-# Why (2026-07-22 v_trader): the plan said a milestone was in progress while
+#   RETURN <[~] slice> <executor|checker> - <agent_id> returned | checked <id> <verdict>[ defect-row:failed]
+# Why (a v3 project, 2026-07-22): the plan said a milestone was in progress while
 # no executor had ever been spawned; after a compaction the two states look
 # the same unless spawning leaves a trace. SubagentStart also fires when a
-# background agent is re-woken (ADR-037), so one agent_id may own several
+# background agent is re-woken, so one agent_id may own several
 # SPAWN rows.
 #
 # checker stop: the report goes to `evidence.sh check` — the only checker
@@ -161,6 +161,7 @@ else
   if [ "$rc" = 0 ]; then
     out="$(printf '%s\n' "$out" | grep -E '^check ' | tail -n 1)"
     res="checked $(printf '%s' "$out" | cut -d' ' -f4) $(printf '%s' "$out" | cut -d' ' -f3)"
+    case "$out" in *' defect-row:failed') res="$res defect-row:failed" ;; esac   # the defects.csv row was refused
   else
     res="check-error rc=$rc"
   fi

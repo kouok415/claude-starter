@@ -14,7 +14,7 @@
 #   - no CURRENT, a v3 task (plan.md, no card.md) or a card idle 7+ days -> pass
 #   - a lane run or Codex send holding a live pid lock, or a background
 #     subagent in the Stop payload's background_tasks -> defer with a WAITING
-#     row: its end re-wakes the session (D3, ADR-037)
+#     row: its end re-wakes the session (D3)
 #   - an [x] slice without a ✓ reference (noref), one whose references do not
 #     hold (badref), or a Closed: line that is not fresh for the current
 #     content (closed) -> block
@@ -94,8 +94,8 @@ if [ "${CLAUDE_STARTER_GATE_INNER:-}" != 1 ]; then
 fi
 
 # --- 1. Setup gate (inner pass from here on) -----------------------------------
-# Sentinel + task helpers, one source with session-start.sh and bash-guard.sh
-# (ADR-004); the fallback keeps the setup gate armed on a partial sync.
+# Sentinel + task helpers, one source with session-start.sh and bash-guard.sh;
+# the fallback keeps the setup gate armed on a partial sync.
 case "${BASH_SOURCE[0]}" in */*) _GP="${BASH_SOURCE[0]%/*}/guard-patterns.sh" ;; *) _GP=./guard-patterns.sh ;; esac
 # shellcheck source=guard-patterns.sh
 [ -f "$_GP" ] && . "$_GP"
@@ -169,7 +169,7 @@ if [ ! -f "$card" ]; then
 fi
 task_idle "$ROOT" "$slug" && exit 0
 
-# --- 3. Still running -> defer (D3; ADR-037 widened) ----------------------------
+# --- 3. Still running -> defer (D3) ----------------------------------------------
 # A block now buys nothing: the run's end re-wakes the session. Only live pid
 # locks and background subagents (a background_tasks entry of "type":
 # "subagent") count — never a background shell command, and never the

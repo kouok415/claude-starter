@@ -6,8 +6,8 @@
 # packet in, `.result.md` out. herdr starts the agent, submits, waits and
 # reports `blocked`. The script decides only run_state and never prints a
 # verdict of its own; every settled run becomes an evidence record through
-# `scripts/evidence.sh codex` (workshop ADR-028, ADR-030, ADR-039), which
-# binds the result to the judge's own write in its Codex transcript.
+# `scripts/evidence.sh codex`, which binds the result to the judge's own
+# write in its Codex transcript.
 #
 #   ensure                                  find or start the judge
 #   check card                              write the card packet, send it
@@ -651,7 +651,7 @@ record_run() { # seq stage unit packet result statefile -> the summary line; rc 
 # --- pid lock: one run per task (D3) ---------------------------------------
 # .claude/evidence/locks/pair-<seq>.lock = "<pid> TAB pair TAB <stage> TAB
 # <unit> TAB <UTC ts>"; the Stop gate defers while it is alive. Alive is
-# guard-patterns.sh's lock_alive — one rule for every lock (R5, ADR-004).
+# guard-patterns.sh's lock_alive — one rule for every lock (R5).
 need_guard() {
   # shellcheck source=../.claude/hooks/guard-patterns.sh
   . .claude/hooks/guard-patterns.sh 2>/dev/null || true
@@ -840,7 +840,7 @@ send() {
        if [ -n "$s" ] && [ -f "$EVP/fp-$s" ]; then RC=5 die "judge is '$st' — seq $s is in flight: run 'task-pair.sh wait $s' in the background"; fi
        RC=5 die "judge is '${st:-gone}' and no run of this task is in flight${s:+ (the last one started: seq $s)} — let it finish, or stop it in its pane, then retry" ;;
   esac
-  # Every packet runs in a fresh thread (ADR-030): the judge's memory of
+  # Every packet runs in a fresh thread: the judge's memory of
   # earlier stages is anchoring, not evidence — packets carry what it needs.
   fresh_thread "$seq"
   make_scratch "$seq"

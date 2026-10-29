@@ -85,9 +85,12 @@ checker per slice. The last v3 release is tagged `v3-final` (§-8); it is
 the rollback point, and v4.0 rolls back in one revert commit (§Rollback).
 
 **Breaking:** a task started under v3 cannot continue under v4. Finish or
-abandon it before syncing — `sync-project.sh --update-stock` exits 1 while
-`tasks/CURRENT` names a `plan.md` task without `card.md` that has a commit
-or an uncommitted change within the last 7 days.
+abandon it before syncing — `sync-project.sh --update-stock` exits 1,
+before writing anything, while `tasks/CURRENT` names a task directory with
+no `card.md` and any of `spec.md`, `plan.md`, `brief.md`, `gatelog` that is
+still active: no `plan.md` yet (mid-intake), a `[pending]` or
+`[in_progress]` milestone in `plan.md` (whatever its age), or a commit or
+uncommitted change in the directory within the last 7 days.
 
 ### What changed, and why
 
@@ -107,7 +110,7 @@ or an uncommitted change within the last 7 days.
 | session-start injected the filtered plan, brief, lessons and spec (104–154 KB with a task) | INDEX + state + the card (cut at 4096 B) + one status line; nothing for a task idle > 7 days or a v3 task | 7 of 8 open tasks were idle and still injected |
 | bash-guard knew nothing about tasks | during a task: `git add -A`/`.`, `git checkout [ref] [--] <path>`, `git checkout .`/`-f`, `git switch --discard-changes`/`-f`, `git restore`, `git stash` ask (`git commit -a` does not); any time: touching the ledger or the trust file, a Bash write to a donelog, a `pair/` mailbox, Codex's session logs or the evidence-chain scripts and settings, and `evidence.sh trust`/`approve`/`check`/`codex` ask — `trust`/`approve`/`check` and the Edit asks on the chain files also as declarative `settings.json` rules, the only asks that survive `bypassPermissions` | ~67 broken-rule incidents; `git checkout` erased uncommitted work twice |
 | — | new skills `/prove`, `/debug`, `/backtest-check`, `/defect` (you invoke it); a `verify` skill template; `/number-check` adds range and outside-source cross-checks | each maps to a fleet failure class |
-| sync only added or replaced | `--update-stock` also deletes stock copies of retired files and advances `tests/run.sh`/`tests/fake-herdr.sh` only where they are stock copies (bringing `tests/fixtures/` along); `chmod +x` only on the scripts it ships; an active v3 task stops it | nine files retired; the blanket chmod flipped project scripts |
+| sync only added or replaced | `--update-stock` also deletes stock copies of retired files and advances `tests/run.sh`/`tests/fake-herdr.sh` only where they are stock copies (bringing `tests/fixtures/` along); `chmod +x` only on the scripts it ships; the v4 `/task` core moves as one unit (`MIGRATION INCOMPLETE`, exit 2, while part of it is customized); it ships the template's last commit, never writes through a symlink, and an active v3 task stops it | nine files retired; the blanket chmod flipped project scripts; half a core is a v4 `/task` that does not hold |
 | — | `NOTICE`: MIT notices for Superpowers, Compound Engineering, pstack; adapted files end with a `Source:` line | `/prove`, `/debug` and the verify template adapt their text |
 | — | `.claude/gitleaks.toml`: lane and canary logs are scanned with gitleaks defaults + internal-IPv4 (QEMU `10.0.2.0/24` allowed), tailnet-hostname and two URL-credential rules (`grep -E` on the IP rule without gitleaks); the pre-commit scan is unchanged | lane logs feed records and Codex packets; the four added rules cover leak kinds the default rules let past |
 
@@ -125,23 +128,30 @@ or an uncommitted change within the last 7 days.
   the task skill (`SKILL.md`, `reference.md`, `pair.md`),
   `scripts/task-pair.sh`, `agents/executor.md`, the wrap and setup skills,
   `/number-check`, `harness-report.sh` (now mode 100755, so it runs as
-  `scripts/harness-report.sh` too), `check-append-only.sh`,
-  `check-context-bulk.sh` (task donelogs exempt, like v3's
-  gatelogs/spawnlogs), `precommit-gitleaks.sh` (`--scan-file`),
-  `.pre-commit-config.yaml` (the append-only regex adds
-  `scoreboard-v4.csv`, `defects.csv`, `tasks/*/donelog` and
-  `.claude/done-lanes.trust`), seed `INDEX.md` (schema v4), the three
+  `scripts/harness-report.sh` too), `check-append-only.sh` (lines added at
+  the end only; committed journal entries immutable),
+  `check-context-bulk.sh` (task donelogs exempt at `tasks/<slug>/` while
+  every row is a log row, like v3's gatelogs/spawnlogs),
+  `precommit-gitleaks.sh` (`--scan-file`), `.pre-commit-config.yaml` (the
+  append-only regex adds `scoreboard-v4.csv`, `defects.csv`,
+  `tasks/*/donelog` and `.claude/done-lanes.trust`; the hook is
+  `always_run`), seed `INDEX.md` (schema v4), the three
   CLAUDE.md templates, the template `.gitignore`; `tests/run.sh`,
   `tests/fake-herdr.sh`.
 
 ### Migrating
 
 1. **Finish or abandon running v3 tasks.** If `tasks/CURRENT` points at a
-   directory with `plan.md`, finish it with a `v3-final` checkout of the
-   template, or delete `CURRENT` (the directory stays as history).
-   `sync-project.sh --update-stock` refuses (exit 1) while such a task
-   has a commit or an uncommitted change from the last 7 days; a plain
-   sync only warns.
+   v3 task directory (`spec.md`, `plan.md`, `brief.md` or `gatelog`, no
+   `card.md`), finish it with a `v3-final` checkout of the template, or
+   delete `CURRENT` (the directory stays as history).
+   `sync-project.sh --update-stock` refuses (exit 1, nothing written)
+   while such a task is active — mid-intake (no `plan.md` yet), a
+   `[pending]` or `[in_progress]` milestone, or a change within 7 days; a
+   plain sync only warns. An idle one does not stop the sync: it is
+   reported with the `git -C <project> checkout <ref> -- <files>` that
+   restores the v3 files the sync replaced or deleted, should you finish
+   it on `v3-final` after all.
 2. **Sync:** `./sync-project.sh --update-stock <project>` from a v4.0
    checkout (a full clone — replacement and retirement compare against the
    template's git history; without it they fall back to suggestions). It
@@ -154,8 +164,41 @@ or an uncommitted change within the last 7 days.
    `pair/.fp-*`) where they are the template's own text and none of those
    files exists; replaces `tests/run.sh` and `tests/fake-herdr.sh` only
    where they are stock copies, never adds them, and copies the missing
-   `tests/fixtures/` next to a stock `tests/run.sh`. It prints a
-   suggestion for each item below that still needs you.
+   `tests/fixtures/` next to a stock `tests/run.sh`; appends the
+   template's test and build caches block to `.gitignore` (only the
+   patterns it lacks). It prints a suggestion for each item below that
+   still needs you.
+
+   What ships is the template's last commit (`git show HEAD:<file>`; a
+   dirty template checkout is reported, its edits never ride), and a
+   version on any branch of its history counts as stock. Sync never
+   writes, deletes or `chmod`s through a symlink: a link it would have
+   followed is left alone and listed. The **v4 `/task` core** —
+   `settings.json`, `stop-gate.sh`, `session-start.sh`, `spawn-log.sh`,
+   `bash-guard.sh`, `guard-patterns.sh`, `scripts/evidence.sh`,
+   `scripts/task-pair.sh`, the task skill (`SKILL.md`, `reference.md`,
+   `pair.md`), `agents/executor.md`, `agents/checker.md` — moves as one
+   unit: while any of it is customized (or linked), `--update-stock`
+   adds, replaces and retires none of it, removes no ignore block, prints
+   `MIGRATION INCOMPLETE — v4 /task is not safe until: <files> are merged
+   by hand (diff against the template, then re-run)` and exits 2. Merge
+   each named file with the template's, then re-run; a file that keeps
+   every template line in order (indentation and a trailing comma aside)
+   plus your own lines counts as merged. A plain sync adds no core file
+   while any present one predates the template or is customized. Files
+   outside the core still sync in both cases.
+
+   The stamp in `.claude/.starter-version`: `synced-to:
+   claude-starter@<ref> on <date>` only when every core file is the
+   template's after the sync (or a finished merge); otherwise
+   `partial-sync: <ref> on <date> (<n> core files kept back)`, which
+   names no harness — `harness-report.sh` takes the harness from the last
+   `spawned-by:` or `synced-to:` line. Exit codes: 0 done; 1 usage, not a
+   project, or an active v3 task (under `--update-stock`); 2 `MIGRATION
+   INCOMPLETE`, or `--update-stock` from a template without git history
+   (a zip or a `git archive` cannot prove a file stock — run from a
+   clone). A sync stopped by an error prints what it had done by then,
+   and whether the stamp was written yet.
 3. **Customized `settings.json`:** replace the `SubagentStart` block with
    the template's `SubagentStart` + `SubagentStop` blocks (matchers
    `executor`, `checker` → `spawn-log.sh`); add the deny entries
@@ -178,13 +221,17 @@ or an uncommitted change within the last 7 days.
    `.claude/evidence/` rows, set `<!-- schema: v4 -->`; stay ≤4 KB.
 5. **Customized `.pre-commit-config.yaml`:** add `tasks/.+/donelog`,
    `scoreboard-v4.csv`, `defects.csv` and `.claude/done-lanes.trust` to
-   the append-only hook's `files` regex (keep `gatelog|spawnlog`);
+   the append-only hook's `files` regex (keep `gatelog|spawnlog`) and set
+   `always_run: true` on it — pre-commit never hands a hook a deleted
+   file, so without it a `git rm` or `git mv` of a protected file passes;
    re-run `pre-commit install`.
 6. **CLAUDE.md:** replace the `## Long-horizon tasks` body with your
    kind's template text and delete any `Task profile:` lines (sync never
    edits CLAUDE.md; it prints the reminder).
 7. **Declare and trust lanes** (only if the project uses `/task`): open
-   Claude and run `/setup` — it writes `.claude/skills/verify/SKILL.md`
+   Claude and run `/setup` — on a configured project (no `claude-starter:
+   UNCONFIGURED` sentinel in CLAUDE.md) it skips §1–§3 and does only
+   §4–§5, the lanes, without re-interviewing you. It writes `.claude/skills/verify/SKILL.md`
    from the template, declares `.claude/done-lanes` (≤3 lanes; `smoke` on
    paths `.`), runs `bash scripts/evidence.sh trust <lane>` for each (you
    confirm; the canary must fail), then runs each lane once.
@@ -192,8 +239,9 @@ or an uncommitted change within the last 7 days.
    unignored file inside its lane's paths is voided ("lane files changed
    during the run", paths named), and a canary that does so is refused.
    The template `.gitignore` now lists common caches (`__pycache__/`,
-   `.pytest_cache/`, `node_modules/`, `.coverage`, …); sync does not add
-   those to an existing project — add your stack's own.
+   `.pytest_cache/`, `node_modules/`, `.coverage`, …), and sync appends
+   that block to an existing project's `.gitignore` (the patterns it
+   lacks); add your stack's own.
 9. **Pair mode users:** add `@pair codex` to `.claude/done-lanes` (then
    re-trust a lane — `@` lines are part of the trust); delete `AGENTS.md`
    and `AGENTS.override.md` or make them identical to `CLAUDE.md` (the
@@ -213,7 +261,15 @@ history; nothing in v4 reads or deletes them. v3 scoreboard rows stay in
 `.ai_context/scoreboard-v4.csv`, whose header the first `--row` writes;
 `harness-report.sh` reads both. A project-owned `.ai_context/defects.csv`
 with another header is reported and skipped, and `--defect` refuses to
-append to it until you migrate its rows. Optional: to scan commits with
+append to it until you migrate its rows. `--defect` also refuses a slug
+without `tasks/<slug>/card.md` (`-` records a finding outside any task), a
+slice that is not on that card, and a `ref` already recorded with that
+severity; a wrong row is withdrawn by appending a retraction —
+`bash scripts/harness-report.sh --defect-retract <date> <slug> <slice>
+<ref> --reason "…"` writes a row with the same date, slug, slice and ref,
+severity `retracted`, n 0 and the reason in `summary`; neither it nor the
+earlier rows it names count anywhere (the report shows how many there
+are). Optional: to scan commits with
 the lane-log rules too, add a repo-root `.gitleaks.toml` containing
 `[extend]` / `path = ".claude/gitleaks.toml"`.
 
@@ -245,6 +301,10 @@ the lane-log rules too, add a repo-root `.gitleaks.toml` containing
 - **`bypassPermissions` drops hook asks.** There only the `settings.json`
   rules stop for you (step 3); bash-guard's task-time git asks, ledger and
   donelog write asks, `run --escalated` and `--over-estimate` do not fire.
+- **`partial-sync:` and v3 readers.** A v3-final `/wrap` takes the ref
+  after `claude-starter@` on the very last line of
+  `.claude/.starter-version`; after a `partial-sync:` line there is none.
+  Finish the core merge and re-sync before you finish a v3 task there.
 - **Codex and herdr.** The dialog handling was recorded on Codex 0.165.0
   and herdr 0.9.0; a dialog it does not know stops the run for you
   (exit 4).

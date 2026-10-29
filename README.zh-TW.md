@@ -104,15 +104,15 @@ v2 的核心原則:重要的規則都配一個機制。散文是規格,機制才
 | 「任務中的工作絕不整批 stage 或整批丟棄」 | 任務進行中,`bash-guard.sh` 在下列指令前發問:`git add -A`/`--all`/`.`/`:/`/`*`、`git checkout [ref] [--] <path>`(任何一個字指到既有路徑)、`git checkout .`、`git checkout -f`、`git switch --discard-changes`/`-f`、`git restore`(單獨的 `--staged` 除外)、`git stash`(`list`/`show` 除外);`git commit -a` 不問(它不會丟東西)。checker 被告知絕不改動 git 狀態(`checker.md`;它沒有 Edit 或 Write 工具)—— 這是 prompt 規則,不是鎖 |
 | 「`--local` 生成永不帶走本機狀態」 | 複製改用 `git archive HEAD` —— 只帶被追蹤的內容:gitignore 的憑證(`.secrets/`)、本機設定、未追蹤的草稿全部留在原地;未提交的模板修改也不會跟著走(先 commit)。非 git 來源退回 `cp -R` + 清除已知洩漏點(v3.10) |
 | 「失敗與放棄的任務也要進資料集」 | `harness-report.sh --row <slug>` 只從 card 與 donelog 算出記分板列 —— run 紀錄是每台機器各自的;只有 card 有 `Closed:` 行且有對應的 `CLOSE` 列時 `outcome` 才是 `success`,否則必須給定(`--outcome failed\|abandoned`,問你);`/wrap` 在每次收尾(包含放棄)把這列追加到 `.ai_context/scoreboard-v4.csv`,報表也會列出從沒進記分板的任務目錄 |
-| 「每筆記分板列都標明產生它的 harness 版本」 | `harness-report.sh --row` 從 `.claude/.starter-version` 最後一行的 `claude-starter@<ref>` 戳記填入 `harness` 欄;release 都打 git tag,ref→版本的對映是機械的。戳記說真話(v3.10):**任何**改動了機制的 sync 都追加 `synced-to:` 戳記(不再只限 `--update-stock`);GitHub 模式生成蓋的是實際 clone 到的 template head,不是可能過期的 spawner checkout |
+| 「每筆記分板列都標明產生它的 harness 版本」 | `harness-report.sh --row` 從 `.claude/.starter-version` 最後一行 `spawned-by:` 或 `synced-to:`(`claude-starter@<ref>`)填入 `harness` 欄;release 都打 git tag,ref→版本的對映是機械的。戳記說真話(v3.10):**任何**改動了機制的 sync 都追加戳記(不再只限 `--update-stock`)—— sync 後每個 v4 核心檔都是模板的(或已完成手動合併)才寫 `synced-to:`,否則寫 `partial-sync: <ref> on <date> (<n> core files kept back)`,它不標任何 harness,所以記分板列沿用最後一個完整戳記;GitHub 模式生成蓋的是實際 clone 到的 template head,不是可能過期的 spawner checkout |
 | 「harness 的摩擦是資料,不是體感」 | `/wrap` 只在機制真的出問題時把枚舉列(`area` × `severity`)寫進 `.ai_context/friction.csv`;`harness-report.sh` 把它們和 donelog 的 `STUCK`、`GATE-ERROR` 列並列報告 |
 | 「評分是算出來的,不是回憶出來的」 | `scripts/harness-report.sh`(CI 有測)按 harness 版本彙總 donelog、card、pair runlog、`scoreboard.csv`(v3 列,現在唯讀)、`scoreboard-v4.csv`、`defects.csv` 與 `friction.csv`;`--csv` v2 第一欄是 `csv_version`;N<5 不印百分比;刻意不存在綜合分數 |
-| 「評分資料要交叉核對,不是照單全收」 | `harness-report.sh` 的 `== integrity` 列出有 card 卻沒有記分板列的任務目錄、不是 `evidence.sh done` 寫的 `[x]` slice、沒有 `CLOSE` 列的 `Closed:` 行、記分板與 donelog 不一致(擋下數、STUCK 數、Codex run 數)與枚舉違規;`== defects` 列出任務結案後 30 天內、動到它的檔案的修復 commit —— 由你確認(`/defect`)或排除(`--defect-dismiss <sha>`)的候選。一律不自動修復 |
-| 「缺陷是數出來的,不是記得的」 | `.ai_context/defects.csv`(`date,slug,slice,finder,phase,severity,n,summary,fixed_in,ref`)的列來自:每筆帶 `NOT VERIFIED` 宣稱的失敗 checker 紀錄(severity `unrated`)與每筆有 blocker 或 major 的 Codex slice/final 紀錄 —— 這兩種由 `evidence.sh` 自己寫 —— 加上你確認的修復 commit 候選,以及你用 `/defect` 記下的負責人、正式環境或結案後審查發現;全部經過 `harness-report.sh --defect`,它推導 `phase`(pre-done、post-done、post-close),並拒收沒有對應帳本紀錄的 checker 或 Codex 列。標頭不同的 `defects.csv` 會被報告並略過,永不追加 |
+| 「評分資料要交叉核對,不是照單全收」 | `harness-report.sh` 的 `== integrity` 列出有 card 卻沒有記分板列的任務目錄、不是 `evidence.sh done` 寫的 `[x]` slice、沒有 `CLOSE` 列的 `Closed:` 行、記分板與 donelog 不一致(擋下數、STUCK 數、Codex run 數)與枚舉違規;`== defects` 列出任務結案後 30 天內、動到它的檔案的修復 commit(結案後才 merge、squash 或重放的任務自身工作不算,以 `git patch-id` 判定)—— 由你確認(`/defect`)或排除(`--defect-dismiss <sha>`)的候選。一律不自動修復 |
+| 「缺陷是數出來的,不是記得的」 | `.ai_context/defects.csv`(`date,slug,slice,finder,phase,severity,n,summary,fixed_in,ref`)的列來自:每筆帶 `NOT VERIFIED` 宣稱的失敗 checker 紀錄(severity `unrated`)與每筆有 blocker 或 major 的 Codex slice/final 紀錄 —— 這兩種由 `evidence.sh` 自己寫 —— 加上你確認的修復 commit 候選,以及你用 `/defect` 記下的負責人、正式環境或結案後審查發現;全部經過 `harness-report.sh --defect`,它推導 `phase`(pre-done、post-done、post-close),並拒收沒有對應帳本紀錄的 checker 或 Codex 列、沒有 `tasks/<slug>/card.md` 的 slug(任務之外用 slug `-`)、不在該 card 上的 slice,以及同一 severity 已記過的 `ref`。記錯的列以追加撤回列收回:`--defect-retract <date> <slug> <slice> <ref> --reason "…"`(severity `retracted`;撤回列與它撤回的列都不計入任何地方)。標頭不同的 `defects.csv` 會被報告並略過,永不追加 |
 | 「常駐注入的檔案必須保持小」 | card 4096 B(注入時截斷、`lint` 拒收)、INDEX 大小測試 + 超過 4 KB 時 session-start 警告、`state.md` 5 KB pre-commit 上限 + 警告(S7)、`notes.md` 超過 16 KB 警告、CLAUDE.md 超過 20 KB 警告 |
-| 「大塊資料外部化」(S2) | `check-context-bulk.sh` pre-commit:任何 staged 的 `.ai_context` 檔案超過 100 KB 即擋下 —— dump 用引用,不用貼上。任務 donelog(與 v3 的 gatelog/spawnlog)豁免:它們是機器 log、append-only,長任務本來就會超過上限 |
+| 「大塊資料外部化」(S2) | `check-context-bulk.sh` pre-commit:任何 staged 的 `.ai_context` 檔案超過 100 KB 即擋下 —— dump 用引用,不用貼上。任務 donelog(與 v3 的 gatelog/spawnlog)只在 `tasks/<slug>/` 這一層、且每一列都是 log 列時豁免:它們是機器 log、append-only,長任務本來就會超過上限 |
 | 「記分板數字必須是真的」 | `scoreboard-v4.csv` 每一欄都來自 card 或 donelog(`harness-report.sh --row`);`interventions` 在專案內一律是 `-` —— 它只能從 session transcript 數出來,不能靠記憶 |
-| 「append-only 檔案永不改寫」(decisions、journal、兩份記分板、friction、defects、任務 donelog、`.claude/done-lanes.trust`、v3 的 gatelog/spawnlog) | `check-append-only.sh` pre-commit:staged 變更若修改或刪除既有行 —— 或刪掉檔案本身 —— 即拒絕;更正靠追加。`knowledge/lessons/*` 依設計就地更新 —— 一個 lesson 一個檔 |
+| 「append-only 檔案永不改寫」(decisions、journal、兩份記分板、friction、defects、任務 donelog、`.claude/done-lanes.trust`、v3 的 gatelog/spawnlog) | `check-append-only.sh` pre-commit(`always_run`:pre-commit 從不把被刪的檔交給 hook):staged 變更只能在檔尾新增行 —— 改動、刪除或插在中間的行,以及刪除、改名或換成連結的檔,一律拒絕;已提交的 journal 條目永不修改(用一則新的日期條目更正);更正靠追加。`knowledge/lessons/*` 依設計就地更新 —— 一個 lesson 一個檔 |
 | 「證據只由腳本寫入」 | `settings.json` 對 `.claude/evidence/**`、`.claude/done-lanes.trust`、`.claude/gitleaks.toml`、`tasks/**/donelog`、`tasks/**/pair/**`、`~/.codex/sessions/**` 與 v3 凍結的 `gatelog`/`spawnlog` 禁用 `Edit(...)`(Edit 規則也涵蓋 Write),並在 Edit 證據鏈信任的腳本、hooks、checker agent 與設定檔前發問;`bash-guard.sh` 在下列情況發問:提到帳本或 trust 檔、但不是單一一個允許的 `evidence.sh run\|status\|show\|start\|done\|close\|lint` 呼叫的指令;用 Bash 寫 donelog、`pair/` mailbox、Codex 的 session log 或上述腳本與設定檔;以及 `evidence.sh trust`、`approve`、`check`、`codex` 與 `run --escalated`。`bypassPermissions` 下 Claude Code 會丟掉 hook 的 ask:那時只剩 `settings.json` 的規則會攔你 —— Edit 的 deny 與 ask,以及 `evidence.sh trust`、`approve`、`check` 的宣告式 ask。append-only pre-commit 替 donelog 與 trust 檔做後盾。這是防捷徑與失手的絆索,不是防蓄意繞過的沙箱:用 glob、變數或 symlink 指向腳本就能繞過 bash-guard —— 最後一道防線是 checker 與 Codex 重跑 lane |
 | 「沒跑 /wrap 就死掉的 session」 | session-start 偵測 commit 比 `state.md` 新時發出警告 |
 
@@ -167,8 +167,22 @@ repo 是自足的:`global/CLAUDE.md` 就在裡面。之後重跑會顯示 diff�
 
 只補上缺少的機制檔案(絕不覆寫),其餘以建議清單印出。`--update-stock`
 還會把可證明未被客製的 stock 檔推進到新版,並刪除模板已退役檔案的 stock
-副本(v4 退役了九個);客製過的檔案絕不碰。專案裡若有在 v3 下開始的
-`/task`,要先做完或放棄 —— 有進行中的 v3 任務時 `--update-stock` 會拒絕。
+副本(v4 退役了九個);客製過的檔案絕不碰。它送出的是模板的最後一個
+commit(未提交的模板修改不會跟著走)、絕不穿過 symlink 寫檔,並把模板的
+test 與 build 快取規則追加到 `.gitignore`。
+
+v4 `/task` 核心 —— `settings.json`、`stop-gate.sh`、`session-start.sh`、
+`spawn-log.sh`、`bash-guard.sh`、`guard-patterns.sh`、`evidence.sh`、
+`task-pair.sh`、task skill、executor 與 checker agent —— 整組一起移動。只要
+其中有檔案被客製,`--update-stock` 就一個都不新增、不取代、不退役,印出
+`MIGRATION INCOMPLETE — v4 /task is not safe until: <files> are merged by
+hand` 並以 exit 2 結束;手動合併那些檔案後重跑(依序保留模板每一行、再加上
+自己內容的檔案,算已合併)。一般 sync 也絕不只裝半組核心。把核心留在原地的
+sync 蓋的是 `partial-sync:` 戳記,不是 `synced-to:`。專案裡若有在 v3 下開始的
+`/task`,要先做完或放棄:只要它仍在進行(還沒有 `plan.md`、有 `[pending]`
+或 `[in_progress]` 里程碑,或 7 天內有變動),`--update-stock` 在寫任何東西
+之前就以 exit 1 結束。結束碼:0 完成 · 1 用法錯誤、不是專案或有進行中的 v3
+任務 · 2 `MIGRATION INCOMPLETE`,或從沒有 git 歷史的模板跑 `--update-stock`。
 詳見 [MIGRATION.md](./MIGRATION.md)。
 
 ---

@@ -5,7 +5,7 @@ session in a sibling herdr pane checks, on the user's own Codex default.
 It reads one frozen packet per run and writes one result file; it never
 edits the tree, marks a slice or writes memory. Every run that settles
 becomes an evidence record (`evidence.sh codex`); only `evidence.sh done`
-/ `close` decide what counts. Design: workshop ADR-028, ADR-030, ADR-039.
+/ `close` decide what counts.
 
 ## When pair is on
 

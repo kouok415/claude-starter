@@ -22,6 +22,10 @@ repos:
         entry: scripts/check-append-only.sh
         language: system
         files: ^(\.ai_context/(decisions\.md|scoreboard(-v4)?\.csv|friction\.csv|defects\.csv|journal/.+\.md|tasks/.+/(donelog|gatelog|spawnlog))|\.claude/done-lanes\.trust)$
+        # pre-commit never lists a deleted file: without always_run a commit
+        # that only deletes or renames one of these never reaches the check
+        # (the script reads the staged diff itself).
+        always_run: true
         pass_filenames: false
 
       - id: ai-context-bulk

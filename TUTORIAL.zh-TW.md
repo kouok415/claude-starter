@@ -155,9 +155,19 @@ cd claude-starter && ./sync-project.sh ../my-older-project
 只增不改:缺的機制檔補上,已存在的絕不覆寫——改以建議清單提示手動
 合併。兩個進階模式:`--update-stock` 會連「可證明未被客製的 stock 檔」
 一起前進(內容與模板任一歷史版本逐位元相同才換),並刪除模板已退役檔案的
-stock 副本(客製檔照樣絕不碰;有在 v3 下開始、仍在進行的任務時它會拒絕);
-`--adopt` 收編既有的非 starter repo(先建骨架,再由 `/setup` 從既有
-程式碼起草簡報)。完整指南:[MIGRATION.md](./MIGRATION.md)。
+stock 副本(客製檔照樣絕不碰;有在 v3 下開始、仍在進行的任務時它會拒絕,
+exit 1);`--adopt` 收編既有的非 starter repo(先建骨架,再由 `/setup` 從既有
+程式碼起草簡報)。請從模板的 git clone 執行:它送出的是最後一個 commit,
+沒有 git 歷史時 `--update-stock` 會拒絕(exit 2)。
+
+v4 `/task` 核心(settings、閘門、session-start、spawn-log 與 bash-guard
+hooks、`guard-patterns.sh`、`evidence.sh`、`task-pair.sh`、task skill、
+executor 與 checker)整組一起移動:只要其中有檔案被你客製過,sync 就讓整組
+核心維持原樣,印出 `MIGRATION INCOMPLETE — v4 /task is not safe until:
+<files> are merged by hand` 並以 exit 2 結束。把列出的每個檔與模板版本合併
+(保留模板的每一行,再加上你的),重跑,核心就會移動。接著開 Claude 跑
+`/setup`:在已設定好的專案上它只做 §4–§5,宣告並 trust `/task` 需要的
+lanes。完整指南:[MIGRATION.md](./MIGRATION.md)。
 
 ## 7. 疑難排解
 
@@ -180,6 +190,13 @@ stock 副本(客製檔照樣絕不碰;有在 v3 下開始、仍在進行的任�
   failed)寫進 `scoreboard-v4.csv`,並刪掉 `.ai_context/tasks/CURRENT`;任務
   目錄留著。手動刪 `CURRENT` 也會解除 harness,但 `harness-report.sh` 之後會
   把這個任務列為孤兒。想續跑再把 slug 寫回去。
+- **sync 蓋的是 `partial-sync:` 戳記** —— 它把 v4 核心留在原地(見 §6);
+  專案仍跑舊核心,`harness-report.sh` 沿用最後一行 `synced-to:` 的 harness。
+  合併 sync 列出的檔案後再重跑。
+- **某筆缺陷列記錯了** —— 永遠別手改 `defects.csv`:追加一筆撤回,
+  `bash scripts/harness-report.sh --defect-retract <date> <slug> <S<n>>
+  <ref> --reason "…"`(填那一列自己的 date、slug、slice 與 ref);撤回列與
+  它指到的列都不再計數。
 - **hooks 好像沒生效** —— hooks 在 session 啟動時載入;改過
   `settings.json` 要重開 session。最快自檢:新 session 開頭有沒有
   INDEX/state 注入。
@@ -234,6 +251,7 @@ stock 副本(客製檔照樣絕不碰;有在 v3 下開始、仍在進行的任�
 | 任務進行到哪了? | `bash scripts/evidence.sh status` |
 | 不經 Codex 讓一個單元過關 | `bash scripts/evidence.sh approve --waive <S<n>\|card\|final> --reason "…"` |
 | 記下 done 之後才發現的缺陷 | `/defect` |
+| 撤回一筆記錯的缺陷列 | `bash scripts/harness-report.sh --defect-retract <date> <slug> <S<n>> <ref> --reason "…"` |
 | 清掉舊的 lane log | `find .claude/evidence/logs -mtime +30 -delete` |
 | 狀態行(選用) | 在 `.claude/settings.local.json` 加 `"statusLine": {"type": "command", "command": "bash scripts/evidence.sh status --line"}` |
 | 舊專案升級 | `./sync-project.sh <path>` |

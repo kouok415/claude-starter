@@ -10,6 +10,11 @@ reviewed the two lines that encode intent (**Verify** and **Definition of
 done**), and the mechanisms are live. You do the writing; the human does a
 2-minute review.
 
+**Already configured** (CLAUDE.md has no `claude-starter: UNCONFIGURED`
+sentinel — e.g. a project `sync-project.sh` brought to v4): skip §1–§3;
+never re-interview or re-draft its documents. Do §4–§5 only, asking just
+what the lanes need (what proves the product works, `@pair`).
+
 ## 1 · Interview — one round, batched
 
 Ask only what the code cannot tell you, in ONE message:
@@ -86,7 +91,8 @@ Verify and DoD; those two carry the intent everything downstream enforces.
 
 ## 5 · Commit and hand off
 
-- `chore: set up project (interview + scaffold + lanes)` — stage by path:
+- `chore: set up project (interview + scaffold + lanes)` (lanes only:
+  `chore: declare lanes`) — stage by path:
   CLAUDE.md, README.md, .ai_context/, .claude/done-lanes,
   .claude/done-lanes.trust, .claude/skills/verify/, the run skill; never
   `git add -A`.

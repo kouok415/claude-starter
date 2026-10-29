@@ -15,19 +15,29 @@ git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
 CAP=102400
 bad=0
-while IFS= read -r f; do
+# Every row of a machine log: an ISO timestamp, then TAB-separated fields.
+log_rows() { # $1 = staged path
+  git cat-file -p ":$1" | LC_ALL=C awk -F'\t' '/^(#|$)/ {next}
+    NF < 3 || $1 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]/ {exit 1}'
+}
+while IFS= read -r -d '' f; do
   case "$f" in .ai_context/*) ;; *) continue ;; esac
+  sz="$(git cat-file -s ":$f" 2>/dev/null || echo 0)"
+  [ "${sz:-0}" -gt "$CAP" ] || continue
   # The harness's own machine logs are not dumps: scripts and hooks append one
   # row per event (the append-only guard protects them) and long tasks outgrow
-  # the cap (v3 gatelogs reached 137 KB on one project).
-  case "$f" in .ai_context/tasks/*/donelog|.ai_context/tasks/*/gatelog|.ai_context/tasks/*/spawnlog) continue ;; esac
-  sz="$(git cat-file -s ":$f" 2>/dev/null || echo 0)"
-  if [ "${sz:-0}" -gt "$CAP" ]; then
-    echo "S2 violation: $f is ${sz} bytes staged (cap ${CAP})."
-    echo "  Externalize bulk: keep the artifact outside .ai_context/ (or outside"
-    echo "  git) and reference it by path, commit hash, or link."
-    bad=1
-  fi
-done < <(git diff --cached --name-only --diff-filter=ACMR)
+  # the cap (v3 gatelogs reached 137 KB on one project). Exempt only at their
+  # own place, tasks/<slug>/{donelog,gatelog,spawnlog}, and only while every
+  # row is a log row.
+  case "$f" in
+    .ai_context/tasks/*/*/*) ;;
+    .ai_context/tasks/*/donelog|.ai_context/tasks/*/gatelog|.ai_context/tasks/*/spawnlog)
+      if log_rows "$f"; then continue; fi ;;
+  esac
+  echo "S2 violation: $f is ${sz} bytes staged (cap ${CAP})."
+  echo "  Externalize bulk: keep the artifact outside .ai_context/ (or outside"
+  echo "  git) and reference it by path, commit hash, or link."
+  bad=1
+done < <(git -c core.quotePath=false diff --cached --name-only -z --diff-filter=ACMR)
 
 exit "$bad"

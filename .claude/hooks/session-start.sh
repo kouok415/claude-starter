@@ -17,8 +17,8 @@ set -uo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-.}"
 CTX="$ROOT/.ai_context"
 
-# Setup-sentinel pattern shared with stop-gate.sh (ADR-004: two layers of
-# one mechanism); helper absent (partial sync) = the same literal inline.
+# Setup-sentinel pattern shared with stop-gate.sh (two layers of one
+# mechanism); helper absent (partial sync) = the same literal inline.
 # The same file provides the task helpers (task_slug, task_idle).
 _GP="$(dirname "${BASH_SOURCE[0]}")/guard-patterns.sh"
 # shellcheck source=guard-patterns.sh

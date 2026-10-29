@@ -20,6 +20,12 @@ argument-hint: "<what broke, where you saw it>"
 5. Record: `bash scripts/harness-report.sh --defect <slug|-> <S<n>|final|->
    <finder> <severity> "<summary>" <ref|-> [--n N] [--fixed-in SHA]`
    — ref is a journal file, issue or commit; the script derives the phase
-   (pre-done, post-done, post-close). Never edit `defects.csv` by hand.
+   (pre-done, post-done, post-close) and refuses a slug without a card, a
+   slice not on it, or a ref already recorded.
+   Never edit `defects.csv` by hand.
 6. Show the row it printed. Then fix it through `/debug` — the defect row
    stays even when the fix is quick.
+7. A row recorded by mistake (not a defect, wrong task) is retracted, never
+   edited: `bash scripts/harness-report.sh --defect-retract <date> <slug>
+   <slice> <ref> --reason "<why>"` — the row's own date, slug, slice and
+   ref; both rows then count nowhere.

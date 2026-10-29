@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # guard-patterns.sh — the ONE source of the matchers and task helpers shared
-# by the hooks (ADR-004):
+# by the hooks:
 #
 #   bash-guard.sh     PreToolUse tiers (deny: force-push / sudo / rm -rf on
 #                     the root; ask: rm -rf leaving the tree, the evidence
@@ -66,7 +66,7 @@ GUARD_RM_RF_ROOT="${_G_RM}/([[:space:]]|\*|[\"']|$)|(^|[[:space:];&|(])rm[[:spac
 # exemption whenever the command contains `..`. bash-guard ONLY.
 GUARD_SCRATCHPAD='/tmp/claude-[[:alnum:]_.-]+/[[:alnum:]_.-]+/[[:alnum:]_.-]+/scratchpad[[:alnum:]_./@+~-]*'
 
-# Anything one level below /tmp (v3.14.5, ADR-026): on a dev box /tmp is
+# Anything one level below /tmp (v3.14.5): on a dev box /tmp is
 # disposable by definition, and every /tmp/<name> the fleet's subagents
 # ever deleted was their own temp dir. At least one real path character,
 # no glob — `rm -rf /tmp`, `/tmp/` and `/tmp/*` keep asking. Known edge:
@@ -74,7 +74,7 @@ GUARD_SCRATCHPAD='/tmp/claude-[[:alnum:]_.-]+/[[:alnum:]_.-]+/[[:alnum:]_.-]+/sc
 # not catch that either.
 GUARD_TMP_SUBDIR='/tmp/[[:alnum:]_.-]+[[:alnum:]_./@+~-]*'
 
-# Setup-gate sentinel (ADR-004): the newborn-project trigger shared by
+# Setup-gate sentinel: the newborn-project trigger shared by
 # session-start.sh (instruction layer) and stop-gate.sh (blocking layer) —
 # two layers of ONE mechanism, so they must agree on the trigger domain.
 # Sentinel first (v3.3 templates); legacy placeholder tokens kept for
@@ -157,7 +157,7 @@ GUARD_SLICE_X='^- \[x\] S[0-9]+([[:space:]]|$)'
 # --- v4 task helpers (claude-starter v4) ------------------------------------
 # Shared with scripts/evidence.sh, which sources this file and refuses to run
 # (exit 6) without all five and GUARD_SLICE_X — one copy of the static-command
-# matcher, of the donelog writer and of the done-slice regex (ADR-004).
+# matcher, of the donelog writer and of the done-slice regex.
 
 # A command that only lints, parses or lists the code: each segment (split
 # on && || ; |, leading VAR=x dropped) starts with a static tool or carries

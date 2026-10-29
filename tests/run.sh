@@ -632,7 +632,7 @@ awk -F'\t' '$2 == "WAITING" && $4 ~ /subagent:executor/' "$T/donelog" | grep -q 
 grep -qF 'in flight; evidence check deferred until it reports' "$WORK/g.out" && ok "deferral surfaces a systemMessage" || no "deferral systemMessage missing"
 rc=$(gt "$D" tsuite-sl1 "$BT_EXEC"); ck 0 "$rc" "still running at the next stop => deferred again (no per-spawn cap)"
 [ "$(dl "$D" demo WAITING)" = 2 ] && ok "one WAITING row per deferred stop" || no "WAITING rows: want 2 got $(dl "$D" demo WAITING)"
-# codex_desktop 2026-10-21 replay: a fresh SPAWN row but nothing listed => the
+# A fleet project's 2026-10-21 replay: a fresh SPAWN row but nothing listed => the
 # gate checks. Row freshness never defers — background agents log a row per re-wake.
 rc=$(gt "$D" tsuite-sl1b ',"background_tasks":[]'); ck 2 "$rc" "finished executor + fresh SPAWN row => the gate checks (no dark deferral)"
 rc=$(gt "$D" tsuite-sl1c "$(bgt "$FX/stop-background.json")"); ck 2 "$rc" "a running background shell (recorded CC 2.1.309 payload) does not defer (D3)"
@@ -807,26 +807,27 @@ if [ ! -f "$REPO/sync-project.sh" ]; then
 elif git -C "$REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
   skp "update-stock history test (shallow clone — set fetch-depth: 0)"
 else
+  # Sync ships the template's last commit (M1), so results compare with HEAD.
+  hd() { git -C "$REPO" show "HEAD:$1"; }
   OLD_SHA="$(git -C "$REPO" log --format=%H -- .claude/hooks/stop-gate.sh | tail -1)"
   D="$WORK/l14"; mkdir -p "$D/.ai_context" "$D/.claude/hooks"
   printf '# project ignores\nnode_modules/\n' > "$D/.gitignore"
   cp "$REPO/.ai_context/INDEX.md" "$D/.ai_context/"
   git -C "$REPO" show "$OLD_SHA:.claude/hooks/stop-gate.sh" > "$D/.claude/hooks/stop-gate.sh"
-  printf '{"custom": true}\n' > "$D/.claude/settings.json"
+  printf '#!/usr/bin/env bash\n# custom post-edit\n' > "$D/.claude/hooks/post-edit.sh"   # not a core file: the core still moves
   out=$("$REPO/sync-project.sh" --update-stock "$D" 2>&1)
-  cmp -s "$D/.claude/hooks/stop-gate.sh" "$REPO/.claude/hooks/stop-gate.sh" && ok "historical stock file advanced" || no "stock file not advanced"
-  echo "$out" | grep -q 'settings.json differs from every known template version' && ok "customized file flagged, untouched" || no "customized handling wrong"
-  grep -q custom "$D/.claude/settings.json" && ok "customized content preserved" || no "customized content clobbered"
+  hd .claude/hooks/stop-gate.sh | cmp -s - "$D/.claude/hooks/stop-gate.sh" && ok "historical stock file advanced" || no "stock file not advanced"
+  echo "$out" | grep -q 'post-edit.sh differs from every known template version' && ok "customized file flagged, untouched" || no "customized handling wrong"
+  grep -q 'custom post-edit' "$D/.claude/hooks/post-edit.sh" && ok "customized content preserved" || no "customized content clobbered"
   grep -q 'synced-to: claude-starter@' "$D/.claude/.starter-version" 2>/dev/null && ok "synced-to stamp appended on --update-stock" || no "synced-to stamp missing"
   [ -x "$D/scripts/harness-report.sh" ] && ok "new stock file (harness-report.sh) installed by sync" || no "harness-report.sh not installed — copy_if_missing pair missing"
   grep -q '^\.secrets/\*' "$D/.gitignore" && grep -q '^node_modules/' "$D/.gitignore" && ok "sync appends the .secrets/ gitignore block (project lines kept)" || no "sync .gitignore appender missed .secrets/"
   ! grep -qF 'pair/.fp-' "$D/.gitignore" && ok "sync no longer appends the legacy pair/.fp-* ignore (v4 pair run state lives under .claude/evidence/)" || no "sync still appends the legacy pair/.fp-* ignore"
   [ -f "$D/.secrets/.gitkeep" ] && ok "sync installs .secrets/.gitkeep" || no "sync did not create .secrets/"
   D5="$WORK/l14b"; mkdir -p "$D5/.ai_context" "$D5/.claude"
-  cp -r "$REPO/.claude/hooks" "$REPO/.claude/skills" "$REPO/.claude/agents" "$REPO/.claude/settings.json" "$D5/.claude/"
+  git -C "$REPO" archive HEAD .claude/hooks .claude/skills .claude/agents .claude/settings.json .pre-commit-config.yaml \
+    scripts/check-state-size.sh scripts/precommit-gitleaks.sh | tar -x -C "$D5"
   cp "$REPO/.ai_context/INDEX.md" "$D5/.ai_context/"
-  cp "$REPO/.pre-commit-config.yaml" "$D5/"
-  mkdir -p "$D5/scripts"; cp "$REPO/scripts/check-state-size.sh" "$REPO/scripts/precommit-gitleaks.sh" "$D5/scripts/"
   "$REPO/sync-project.sh" --update-stock "$D5" >/dev/null 2>&1
   grep -q 'synced-to: claude-starter@' "$D5/.claude/.starter-version" 2>/dev/null && ok "added-only sync still appends the synced-to stamp (attribution integrity)" || no "added-only sync left no stamp — harness column would mis-attribute"
   # F15: the DEFAULT (no-flag) invocation also mutates mechanisms — it must
@@ -926,10 +927,10 @@ else
   rc=$(sy "$T"); { [ "$rc" = 0 ] && grep -qF "tasks/CURRENT names v3 task 'old' (plan.md, no card.md) — v4 ignores it" "$WORK/sy.out"; } \
     && ok "#8 an idle v3 task (last commit 8 days ago): the sync runs and says v4 ignores it" || no "#8 idle v3 task (rc=$rc)"
   T="$WORK/l136s"; t136 "$T"; mkdir -p "$T/.claude"; hist .claude/settings.json > "$T/.claude/settings.json"; rc=$(sy --update-stock "$T")
-  cmp -s "$T/.claude/settings.json" "$REPO/.claude/settings.json" && ok "#9 a historical stock settings.json advances to the template's" || no "#9 settings.json not advanced (rc=$rc)"
+  git -C "$REPO" show HEAD:.claude/settings.json | cmp -s - "$T/.claude/settings.json" && ok "#9 a historical stock settings.json advances to the template's" || no "#9 settings.json not advanced (rc=$rc)"
   # #10-12, #16, X1: exec bits, the evidence ignore, NOTICE, AGENTS.md
   T="$WORK/l136x"; t136 "$T"; mkdir -p "$T/scripts" "$T/.claude"; printf '#!/bin/sh\necho own\n' > "$T/scripts/own.sh"; chmod 644 "$T/scripts/own.sh"
-  cp "$REPO/scripts/evidence.sh" "$T/scripts/"; chmod 644 "$T/scripts/evidence.sh"; printf '# project ignores\nbuild/\n' > "$T/.gitignore"
+  git -C "$REPO" show HEAD:scripts/evidence.sh > "$T/scripts/evidence.sh"; chmod 644 "$T/scripts/evidence.sh"; printf '# project ignores\nbuild/\n' > "$T/.gitignore"
   printf '# p\n' > "$T/CLAUDE.md"; printf '# other agents doc\n' > "$T/AGENTS.md"; printf '@pair codex\nsmoke | . | 1 | ^ok$ | bash c.sh | bash v.sh\n' > "$T/.claude/done-lanes"
   rc=$(sy "$T")
   [ ! -x "$T/scripts/own.sh" ] && ok "#10 a project-owned script keeps its mode (exec bits only on template files)" || no "#10 sync chmodded scripts/own.sh"
@@ -942,7 +943,7 @@ else
   { ! grep -qE 'gate-cache|STATUS\.md|last-verify|pair/\.fp-' "$T/.gitignore" && grep -qx 'build/' "$T/.gitignore" && grep -qxF '.claude/settings.local.json' "$T/.gitignore" \
       && grep -qxF '  - .gitignore: v3 task-runtime block' "$WORK/sy.out"; } && ok "#13 --update-stock drops the verbatim v3 template ignores (PASS cache, STATUS view, legacy pair/.fp-*), project lines kept" || no "#13 .gitignore (rc=$rc): $(grep -nE 'gate-cache|STATUS|last-verify|fp-' "$T/.gitignore" | head -3)"
   T="$WORK/l136h"; t136 "$T"; pick .gitignore '.ai_context/tasks/*/.gate-cache' > "$T/.gitignore"
-  pick sync-project.sh 'pair-codex in-flight tree fingerprints (claude-starter, ADR-028)' > "$WORK/sync-v3.sh"; bash "$WORK/sync-v3.sh" "$T" >/dev/null 2>&1
+  pick sync-project.sh 'pair-codex in-flight tree fingerprints (claude-starter, ADR-' > "$WORK/sync-v3.sh"; bash "$WORK/sync-v3.sh" "$T" >/dev/null 2>&1
   n0="$(grep -cE 'STATUS\.md|pair/\.fp-' "$T/.gitignore")"; rc=$(sy --update-stock "$T")
   { [ "$n0" = 2 ] && ! grep -qE 'gate-cache|STATUS\.md|last-verify|pair/\.fp-' "$T/.gitignore"; } && ok "#13b ...and the blocks a v3 sync appended (STATUS view, pair/.fp-*)" || no "#13b v3-sync blocks (before: $n0 lines, rc=$rc): $(grep -nE 'gate-cache|STATUS|last-verify|fp-' "$T/.gitignore" | head -3)"
   T="$WORK/l136k"; t136 "$T"; mkdir -p "$T/.ai_context/tasks/x"; echo view > "$T/.ai_context/tasks/x/STATUS.md"; pick .gitignore '.ai_context/tasks/*/pair/.fp-*' > "$T/.gitignore"
@@ -957,16 +958,18 @@ else
   printf '# p\n\n## Definition of done\n\n- tests pass\n\n## Long-horizon tasks\n\n<!-- Task profile: mixed -->\n' > "$T/CLAUDE.md"; printf 'Our own notices.\n' > "$T/NOTICE"
   printf '{"hooks": {"SubagentStart": []}}\n' > "$T/.claude/settings.json"; printf 'pane_id=w1:p1\n' > "$T/.ai_context/tasks/old/pair/judge"
   printf 'repos:\n  - repo: local\n    hooks:\n      - id: append-only\n        files: ^\\.ai_context/tasks/.+/(gatelog|spawnlog)$\n' > "$T/.pre-commit-config.yaml"
-  rc=$(sy "$T"); o="$WORK/sy.out"
+  rc=$(sy "$T"); o="$WORK/l136q.out"; cp "$WORK/sy.out" "$o"
   grep -qF "NOTICE exists but lacks claude-starter's third-party notices" "$o" && ok "#17 a project's own NOTICE without the marker gets the append suggestion" || no "#17 NOTICE suggestion missing (rc=$rc)"
   grep -qF 'settings.json has no SubagentStop wiring' "$o" && ok "#18 settings.json without SubagentStop gets S2" || no "#18 S2 missing"
-  grep -qF 'v4 /task needs declared lanes' "$o" && ok "#19 the sync that installs evidence.sh, with no .claude/done-lanes, points at /setup (S5)" || no "#19 S5 missing"
-  grep -qF 'CLAUDE.md still pins a v3 task profile' "$o" && ok "#20 a CLAUDE.md 'Task profile:' pin gets S6" || no "#20 S6 missing"
+  grep -qF 'CLAUDE.md still names a v3 task profile' "$o" && ok "#20 a CLAUDE.md 'Task profile:' pin gets S6" || no "#20 S6 missing"
   grep -qF "append-only hook does not cover tasks/*/donelog" "$o" && ok "#21 a pre-commit config without donelog gets S8 (gatelog|spawnlog alone is v3)" || no "#21 S8 missing"
   { grep -qF 'lacks the v4 pair-codex denies' "$o" && grep -qF '"Edit(./.ai_context/tasks/**/pair/**)"' "$o" && grep -qF '"Edit(~/.codex/sessions/**)"' "$o"; } \
     && ok "pair fix: a customized settings.json is told both pair-codex denies" || no "pair-codex deny suggestion missing"
   { grep -qF 'lacks the v4 Edit asks' "$o" && grep -qF '"Edit(./scripts/evidence.sh)"' "$o" && grep -qF '"Edit(./.claude/settings.local.json)"' "$o"; } \
     && ok "pair fix: ...and the template's Edit asks it lacks" || no "Edit-ask suggestion missing"
+  # #19 on a project the core can move into (a customized settings.json above holds it back, H2)
+  T5="$WORK/l136l"; t136 "$T5"; rc=$(sy "$T5")
+  { [ -f "$T5/scripts/evidence.sh" ] && grep -qF 'v4 /task needs declared lanes' "$WORK/sy.out"; } && ok "#19 the sync that installs evidence.sh, with no .claude/done-lanes, points at /setup (S5)" || no "#19 S5 missing (rc=$rc)"
   { [ -f "$T/.ai_context/tasks/old/pair/judge" ] && grep -qF 'v3 pair-codex state left in tasks/*/pair/: .ai_context/tasks/old/pair/judge' "$o" \
       && grep -qF 'an existing herdr pane named judge-<slug> is not reused' "$o"; } && ok "pair fix: a v3 pair/judge record is noted, never deleted; the old judge pane is not reused" || no "v3 pair/judge leftover not reported"
   miss=""
@@ -975,8 +978,8 @@ else
   [ -z "$miss" ] && ok "#22 every copy_if_missing path exists in the template and no retire path does" || no "#22 manifest drift:$miss"
   { [ ! -e "$WORK/l136/tests" ] && [ ! -e "$WORK/l136q/tests" ]; } && ok "#23 neither sync adds tests/ (a project's tests/ may be its own; stock-only, R32)" || no "#23 sync added tests/"
   T="$WORK/l136r"; t136 "$T"; mkdir -p "$T/tests"; hist tests/run.sh > "$T/tests/run.sh"; rc=$(sy --update-stock "$T")
-  cmp -s "$T/tests/run.sh" "$REPO/tests/run.sh" && ok "#24 a historical stock tests/run.sh advances to the template's" || no "#24 tests/run.sh not advanced (rc=$rc)"
-  miss=""; for f in $(cd "$REPO" && find tests/fixtures -type f); do cmp -s "$REPO/$f" "$T/$f" || miss="$miss $f"; done
+  git -C "$REPO" show HEAD:tests/run.sh | cmp -s - "$T/tests/run.sh" && ok "#24 a historical stock tests/run.sh advances to the template's" || no "#24 tests/run.sh not advanced (rc=$rc)"
+  miss=""; for f in $(git -C "$REPO" ls-files tests/fixtures); do git -C "$REPO" show "HEAD:$f" | cmp -s - "$T/$f" || miss="$miss $f"; done
   [ -z "$miss" ] && ok "#24b ...and the fixtures it reads come with it (R32)" || no "#24b fixtures missing:$miss"
   { hist tests/run.sh; echo '# local'; } > "$T/tests/run.sh"; cp "$T/tests/run.sh" "$WORK/rs136"; rc=$(sy --update-stock "$T")
   cmp -s "$T/tests/run.sh" "$WORK/rs136" && ok "#25 a customized tests/run.sh is never replaced" || no "#25 customized tests/run.sh changed (rc=$rc)"
@@ -1038,7 +1041,7 @@ done
 fb_gp=$(grep -o "GUARD_SETUP_SENTINEL='[^']*'" "$REPO/.claude/hooks/guard-patterns.sh" | head -1)
 fb_ss=$(grep -o "GUARD_SETUP_SENTINEL='[^']*'" "$SS" | head -1)
 fb_sg=$(grep -o "GUARD_SETUP_SENTINEL='[^']*'" "$GATE" | head -1)
-{ [ -n "$fb_gp" ] && [ "$fb_ss" = "$fb_gp" ] && [ "$fb_sg" = "$fb_gp" ]; } && ok "sentinel pattern identical: helper + both hook fallbacks (F13)" || no "sentinel pattern drift between the two layers (ADR-004)"
+{ [ -n "$fb_gp" ] && [ "$fb_ss" = "$fb_gp" ] && [ "$fb_sg" = "$fb_gp" ]; } && ok "sentinel pattern identical: helper + both hook fallbacks (F13)" || no "sentinel pattern drift between the two layers"
 
 mkdir -p "$D/.claude/hooks"
 cp "$REPO/.claude/hooks/post-edit.sh" "$D/.claude/hooks/"
@@ -1221,7 +1224,7 @@ out=$(bgp 'rm -rf /var/scratch' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "absolute-path rm -rf downgraded to ask" || no "absolute rm -rf not asked"
 out=$(bgp 'rm -rf build/' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "relative rm -rf passes silently" || no "relative rm -rf flagged"
-# v3.14.3: with the settings.json rm rule gone (ADR-023), the hook is the only
+# v3.14.3: with the settings.json rm rule gone, the hook is the only
 # rm tier — home-relative and parent-traversal spellings join the ask tier.
 out=$(bgp 'rm -rf ~/projects/x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "home-relative rm -rf (~/) asks (v3.14.3)" || no "home-relative rm -rf passes silently (guard hole)"
@@ -1278,7 +1281,7 @@ out=$(bgp "rm -rf $SP/x;rm -rf /etc/nginx" | CLAUDE_PROJECT_DIR="$D" bash "$BG" 
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "chained absolute rm -rf after a scratchpad path still asks" || no "scrub swallowed a chained rm -rf"
 out=$(bgp 'rm -rf /tmp/claude-1000/scratchpad' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "shallow /tmp/claude-* lookalike passes (v3.14.5: any /tmp/<name> does)" || no "/tmp/<name> lookalike still asks"
-# v3.14.5 (ADR-026): /tmp/<name> is disposable by definition; the wholesale wipe still asks.
+# v3.14.5: /tmp/<name> is disposable by definition; the wholesale wipe still asks.
 out=$(bgp 'rm -rf /tmp/zzac5' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "rm -rf /tmp/<name> passes silently (v3.14.5)" || no "/tmp/<name> still asks"
 out=$(bgp 'rm -rf /tmp/zzac5/sub dir' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
@@ -1294,7 +1297,7 @@ out=$(bgp 'rm -rf /tmp/foo/../x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/nul
 out=$(bgp 'rm -rf /tmp/foo /var/x' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok "second target outside /tmp beside a /tmp/<name> still asks" || no "/tmp scrub swallowed a second target"
 out=$(bgp 'rm -rf /tmp/claude-1000' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
-{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "the whole /tmp/claude-<uid> tree passes (documented edge, ADR-026)" || no "/tmp/claude-<uid> handling changed — update the edge note"
+{ [ "$rc" -eq 0 ] && [ -z "$out" ]; } && ok "the whole /tmp/claude-<uid> tree passes (documented edge)" || no "/tmp/claude-<uid> handling changed — update the edge note"
 out=$(bgp 'cat .env' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
 { [ "$rc" -eq 0 ] && echo "$out" | grep -q '"permissionDecision":"ask"'; } && ok ".env access downgraded to ask (H1)" || no ".env access not asked"
 out=$(bgp 'cat .env.example' | CLAUDE_PROJECT_DIR="$D" bash "$BG" 2>/dev/null); rc=$?
@@ -1834,6 +1837,250 @@ else
     && ok "B4 an [x] line with invalid UTF-8 under $u8: the gate still reads it (noref blocks)" || no "B4 invalid-UTF-8 [x] line under $u8 (rc=$rc): $(head -c 200 "$WORK/g.err")"
 fi
 
+echo "=== L1-50 · C6/C7 review regressions: sync, the append-only and bulk guards, harness-report"
+HR50="$REPO/scripts/harness-report.sh"
+# --- the append-only guard (H5, LOW 1, LOW 2), run directly ---------------------
+A="$WORK/l150ao"; mkdir -p "$A/.ai_context/journal" "$A/.ai_context/tasks/t1" "$A/.claude"
+printf '# Decisions\n\n## ADR-001 use sqlite\n- **Status:** accepted\n- **Why:** one file\n---\n' > "$A/.ai_context/decisions.md"
+printf '# 2026-10-01 登入 incident\n- the gate blocked twice\n' > "$A/.ai_context/journal/2026-10-01-登入.md"
+printf '2026-10-01T00:00:00Z\tAPPROVE\t-\thuman\taaaaaaaaaaaa\t-\t-\n2026-10-01T00:01:00Z\tSTART\tS1\t-\tbbbbbbbbbbbb\t-\tstarted\n' > "$A/.ai_context/tasks/t1/donelog"
+printf '# t1\n' > "$A/.ai_context/tasks/t1/card.md"
+printf '# ts\tlane\n2026-10-01T00:00:05Z\tsmoke\t3f2a9c0d1e2b\n' > "$A/.claude/done-lanes.trust"
+printf '%s\n2026-10-02,t0,3,0,0,1,-,60,failed,abc1234' "$SB_V4" > "$A/.ai_context/scoreboard-v4.csv"   # no final newline
+git -C "$A" init -q && git -C "$A" add -A && git -C "$A" commit -qm base
+ao50() { ( cd "$A" && git add -A && bash "$REPO/scripts/check-append-only.sh" ) >/dev/null 2>&1; echo $?; }
+un50() { ( cd "$A" && git reset -q --hard && git clean -qfd ); }
+ed50() { python3 -I - "$A/$1" "$2" "$3" <<'PY'
+import sys; p, a, b = sys.argv[1:4]; s = open(p, encoding="utf-8").read(); open(p, "w", encoding="utf-8").write(s.replace(a, b, 1))
+PY
+}
+ed50 .ai_context/decisions.md '**Status:** accepted' '**Status:** rejected'; ck 1 "$(ao50)" "H5 an edited '- **Status:**' ADR bullet blocks (a removed '- …' line is a removed line)"; un50
+ed50 .ai_context/decisions.md $'- **Why:** one file\n---\n' ''; ck 1 "$(ao50)" "H5 deleting an ADR bullet and its --- rule blocks"; un50
+ed50 '.ai_context/journal/2026-10-01-登入.md' 'blocked twice' 'never blocked'; ck 1 "$(ao50)" "LOW 2 a journal entry under a non-ASCII name is covered (-z, core.quotePath=false)"; un50
+printf '\n2026-10-03,t2,1,0,0,0,-,5,success,abc1234\n' >> "$A/.ai_context/scoreboard-v4.csv"; ck 0 "$(ao50)" "LOW 1 appending to a file that lacked its final newline passes"; un50
+ed50 .ai_context/tasks/t1/donelog $'-\t-\n' $'-\t-\n2026-10-01T00:00:30Z\tDONE\tS1\t-\tcccccccccccc\tsmoke@11111111,check@22222222\tok\n'
+ck 1 "$(ao50)" "LOW 2 a row inserted mid-donelog blocks (machine logs grow at the end only)"; un50
+rm "$A/.ai_context/tasks/t1/donelog"; ln -s /dev/null "$A/.ai_context/tasks/t1/donelog"; ck 1 "$(ao50)" "H5 a donelog replaced by a symlink blocks"; un50
+git -C "$A" config color.ui always; ed50 .ai_context/decisions.md 'one file' 'two files'; ck 1 "$(ao50)" "LOW 2 color.ui=always does not blind the line check (--no-color)"; git -C "$A" config --unset color.ui; un50
+printf -- '- addendum\n' >> "$A/.ai_context/journal/2026-10-01-登入.md"; ck 1 "$(ao50)" "a committed journal entry is immutable — an append to it blocks too"; un50
+printf '# 2026-10-05 addendum\n' > "$A/.ai_context/journal/2026-10-05-x.md"; ck 0 "$(ao50)" "...a new dated journal entry passes"; un50
+printf '\n## ADR-001b x\n- **Status:** accepted\n---\n' >> "$A/.ai_context/decisions.md"
+printf '2026-10-02T00:00:00Z\tRUN\tS1\tsmoke\tdddddddddddd\t1a2b3c4d\tpass\n' >> "$A/.ai_context/tasks/t1/donelog"
+printf '2026-10-02T00:00:05Z\tsmoke\t3f2a9c0d1e2b\n' >> "$A/.claude/done-lanes.trust"; ck 0 "$(ao50)" "H5 control: appends to decisions.md, a donelog and the trust file pass"; un50
+# --- the bulk guard (LOW 2) -----------------------------------------------------
+B="$WORK/l150bk"; mkdir -p "$B/.ai_context/knowledge"; echo x > "$B/.ai_context/state.md"
+git -C "$B" init -q && git -C "$B" add -A && git -C "$B" commit -qm base
+bk50() { ( cd "$B" && git add -A && bash "$REPO/scripts/check-context-bulk.sh" ) >/dev/null 2>&1; echo $?; }
+ub50() { ( cd "$B" && git reset -q && git clean -qfd ); }
+python3 -I -c 'import sys; open(sys.argv[1], "w").write("y,1\n" * 40000)' "$B/.ai_context/knowledge/資料.csv"; ck 1 "$(bk50)" "LOW 2 a 160 KB file under a non-ASCII name blocks"; ub50
+mkdir -p "$B/.ai_context/tasks/dump"; python3 -I -c 'import sys; open(sys.argv[1], "w").write("Zm9vYmFy" * 20000 + "\n")' "$B/.ai_context/tasks/dump/donelog"; ck 1 "$(bk50)" "LOW 2 a 160 KB 'donelog' of no log rows is no machine log (blocks)"; ub50
+LR50='2026-11-02T01:07:00Z\tWAITING\tS1\tsubagent:executor\t-\t-\tdeferred\n'
+mkdir -p "$B/.ai_context/tasks/a/b"; python3 -I -c 'import sys; open(sys.argv[1], "w").write(sys.argv[2].encode().decode("unicode_escape") * 2600)' "$B/.ai_context/tasks/a/b/donelog" "$LR50"
+ck 1 "$(bk50)" "LOW 2 ...nor is a log-shaped donelog nested deeper than tasks/<slug>/"; ub50
+mkdir -p "$B/.ai_context/tasks/dump"; python3 -I -c 'import sys; open(sys.argv[1], "w").write(sys.argv[2].encode().decode("unicode_escape") * 2600)' "$B/.ai_context/tasks/dump/donelog" "$LR50"
+ck 0 "$(bk50)" "...while a 150 KB tasks/<slug>/donelog of log rows passes"; ub50
+# --- H4: deletions and renames reach the guard through pre-commit --------------
+grep -A8 'id: ai-context-append-only' "$REPO/.pre-commit-config.yaml" | grep -q '^ *always_run: true$' && ok "H4 the append-only hook is wired with always_run: true" || no "H4 append-only hook lacks always_run"
+if command -v pre-commit >/dev/null 2>&1; then
+  C="$WORK/l150pc"; mkdir -p "$C/scripts" "$C/.ai_context/tasks/t1" "$C/.claude"
+  cp "$REPO/.pre-commit-config.yaml" "$C/"; cp "$REPO"/scripts/check-*.sh "$REPO/scripts/precommit-gitleaks.sh" "$C/scripts/"; chmod +x "$C"/scripts/*.sh
+  printf '# Decisions\n## ADR-001 x\n' > "$C/.ai_context/decisions.md"; printf '# t1\n' > "$C/.ai_context/tasks/t1/card.md"
+  printf '2026-10-01T00:00:00Z\tDONE\tS1\t-\taaaaaaaaaaaa\tsmoke@11111111\tok\n' > "$C/.ai_context/tasks/t1/donelog"
+  printf '# ts\tlane\n2026-10-01T00:00:00Z\tsmoke\tabc\n' > "$C/.claude/done-lanes.trust"
+  git -C "$C" init -q && git -C "$C" add -A && git -C "$C" commit -qm base
+  pc50() { ( cd "$C" && PRE_COMMIT_HOME="$WORK/pc-home" pre-commit run ai-context-append-only ) > "$WORK/pc50.out" 2>&1; echo $?; }
+  git -C "$C" rm -q .ai_context/decisions.md; ck 1 "$(pc50)" "H4 pre-commit run: git rm decisions.md is blocked"; git -C "$C" reset -q --hard
+  git -C "$C" rm -q .claude/done-lanes.trust; ck 1 "$(pc50)" "H4 pre-commit run: git rm of the trust file is blocked"; git -C "$C" reset -q --hard
+  git -C "$C" mv .ai_context/tasks/t1/donelog .ai_context/tasks/t1/donelog.old; ck 1 "$(pc50)" "H4 pre-commit run: git mv of a donelog is blocked"; git -C "$C" reset -q --hard
+  printf '2026-10-02T00:00:00Z\tCLOSE\t-\t-\taaaaaaaaaaaa\tsmoke@11111111\tok\n' >> "$C/.ai_context/tasks/t1/donelog"; git -C "$C" add -A
+  ck 0 "$(pc50)" "H4 pre-commit run: an appended donelog row passes (control)"; git -C "$C" reset -q --hard
+else
+  skp "H4 pre-commit run (pre-commit not installed — the always_run wiring is checked above)"
+fi
+# --- harness-report (H3 stamp, M7, M8, M9, LOW 7-9) ------------------------------
+D="$WORK/l150hr"; mkdir -p "$D/.ai_context/tasks/t" "$D/.ai_context/tasks/Login-Fix" "$D/.ai_context/tasks/fix+登入" "$D/.ai_context/tasks/old" "$D/.claude/evidence"
+cd50() { printf '# %s\n<!-- card v4 ; pair: off ; base: 0000000 ; estimate: 1h 10L -->\n## Slices\n- [~] S1 a — lanes: smoke ; codex: no\n- [ ] S2 b — lanes: smoke ; codex: no\n' "$1" > "$D/.ai_context/tasks/$1/card.md"; }
+cd50 t; cd50 Login-Fix; cd50 'fix+登入'; printf '# Plan: old\n## M1: a [done]\n' > "$D/.ai_context/tasks/old/plan.md"
+printf 'spawned-by: claude-starter@aaa1111 on 2026-01-01\nsynced-to: claude-starter@bbb2222 on 2026-02-01\npartial-sync: ccc3333 on 2026-03-01 (13 core files kept back)\n' > "$D/.claude/.starter-version"
+echo '{"id":"cafe0001","lane":"codex-slice"}' > "$D/.claude/evidence/codex.jsonl"
+hr50() { ( cd "$D" && bash "$HR50" "$@" ) > "$WORK/hr50.out" 2>&1; echo $?; }
+rc=$(hr50 --row t --outcome abandoned .); [ "$rc:$(tail -n 1 "$WORK/hr50.out" | awk -F, '{print $NF}')" = 0:bbb2222 ] \
+  && ok "H3 stamp(): the last spawned-by:/synced-to: line names the harness (a partial-sync line names none)" || no "H3 stamp: rc=$rc $(tail -n 1 "$WORK/hr50.out")"
+rc=$(hr50 --defect Login-Fix S1 human major "case" -); { [ "$rc" = 0 ] && grep -qF ',Login-Fix,S1,human,pre-done,major,' "$WORK/hr50.out"; } && ok "M7 --defect takes any slug task_slug takes (Login-Fix)" || no "M7 Login-Fix: rc=$rc $(head -c 200 "$WORK/hr50.out")"
+rc=$(hr50 --row 'fix+登入' --outcome abandoned .); [ "$rc:$(tail -n 1 "$WORK/hr50.out" | cut -d, -f2)" = '0:fix+登入' ] && ok "M7 --row takes a + / CJK slug" || no "M7 --row fix+登入: rc=$rc $(tail -n 1 "$WORK/hr50.out")"
+rc=$(hr50 --row 'a b' .); ck 1 "$rc" "M7 ...and still refuses whitespace (task_slug strips it)"
+rc=$(hr50 --defect nosuch S1 human major "x" -); { [ "$rc" = 1 ] && grep -qF 'tasks/nosuch/card.md not found' "$WORK/hr50.out"; } && ok "M8 --defect refuses a slug without a task card" || no "M8 no card: rc=$rc"
+rc=$(hr50 --defect t S9 human major "x" -); { [ "$rc" = 1 ] && grep -qF 'S9 is not a slice on tasks/t/card.md' "$WORK/hr50.out"; } && ok "M8 --defect refuses a slice that is not on the card" || no "M8 slice: rc=$rc"
+r1=$(hr50 --defect t S1 codex blocker "c" codex@cafe0001); r2=$(hr50 --defect t S1 codex major "c" codex@cafe0001); r3=$(hr50 --defect t S1 codex blocker "again" codex@cafe0001)
+{ [ "$r1$r2$r3" = 001 ] && grep -qF 'is already recorded with severity blocker' "$WORK/hr50.out"; } && ok "M8 one row per finding: a ref already recorded with that severity is refused (blocker + major of one record both land)" || no "M8 duplicate ref: $r1$r2$r3"
+hr50 --defect t S1 human minor "h" - >/dev/null
+rc=$(hr50 .); grep -qxF 'pre-done: 4 (codex 2, human 2) · post-done: 0 · post-close: 0' "$WORK/hr50.out" && ok "M8 every bucket lists every finder in it (pre-done human counted in the breakdown)" || no "M8 buckets: $(grep -F 'pre-done' "$WORK/hr50.out")"
+rc=$(hr50 --defect-retract "$(date -u +%F)" t S1 codex@cafe0001 --reason "the judge misread the diff")
+{ [ "$rc" = 0 ] && tail -n 1 "$D/.ai_context/defects.csv" | awk -F, -v d="$(date -u +%F)" 'NF == 10 && $1 == d && $2 == "t" && $4 == "codex" && $6 == "retracted" && $7 == 0 && $8 ~ /^retracted [0-9-]+: the judge misread/ && $10 == "codex@cafe0001" {f = 1} END {exit !f}'; } \
+  && ok "M8 --defect-retract appends a 10-column retraction row (severity retracted, n 0)" || no "M8 retract row: rc=$rc $(tail -n 1 "$D/.ai_context/defects.csv")"
+rc=$(hr50 .); { grep -qxF 'pre-done: 2 (human 2) · post-done: 0 · post-close: 0' "$WORK/hr50.out" && grep -qF 'retracted rows: 1 (not counted)' "$WORK/hr50.out"; } && ok "M8 ...and the retracted rows count nowhere" || no "M8 counts after retract: $(grep -A1 '== defects' "$WORK/hr50.out" | tr '\n' '|')"
+r1=$(hr50 --defect t S1 codex blocker "re-recorded" codex@cafe0001); r2=$(hr50 --defect-retract "$(date -u +%F)" t S2 codex@cafe0001 --reason x)
+{ [ "$r1:$r2" = 0:1 ] && hr50 . >/dev/null && grep -qF 'pre-done: 3 (codex 1, human 2)' "$WORK/hr50.out"; } && ok "M8 a retracted ref can be recorded again and counts; retracting a row that does not exist is refused" || no "M8 re-record: $r1:$r2 $(grep -F 'pre-done' "$WORK/hr50.out")"
+rc=$(hr50 --row old .); { [ "$rc" = 3 ] && grep -qF 'tasks/old is a v3 task (plan.md, no card.md)' "$WORK/hr50.out" && grep -qF 'v3-final' "$WORK/hr50.out"; } && ok "LOW 9 --row on a v3 task explains: finish on v3-final or abandon (exit 3)" || no "LOW 9 v3 --row: rc=$rc $(head -c 200 "$WORK/hr50.out")"
+grep -qF -- '--row` exits 3 and says so' "$REPO/.claude/skills/wrap/reference.md" && ok "LOW 9 wrap reference: a v3 CURRENT is finished on v3-final or abandoned" || no "LOW 9 wrap reference lacks the v3 task branch"
+V="$WORK/l150cr"; mkdir -p "$V/.ai_context"
+printf '%s\r\n2026-11-01,a,3,0,0,1,-,60,success,v3.14\r\n' "$SB_V4" > "$V/.ai_context/scoreboard-v4.csv"
+printf 'date,harness,area,severity,summary,ref\r\n2026-11-01,v3.14,hooks,friction,slow,-\r\n' > "$V/.ai_context/friction.csv"
+csv=$(bash "$HR50" --csv "$V"); { [ "$(printf '%s\n' "$csv" | sed 1d | cut -d, -f3 | tr '\n' ' ')" = 'v3.14 ' ] && [ "$(csvget "$csv" v3.14 n_tasks friction_total)" = '1 1' ]; } \
+  && ok "LOW 8 CRLF rows: the harness value keeps no CR (scoreboard and friction land in one cell)" || no "LOW 8 CRLF: $(printf '%s' "$csv" | tr '\r\n' '^|')"
+Tw="$WORK/l150tw"; mkdir -p "$Tw/src" "$Tw/tests" "$Tw/.ai_context/tasks/t" "$Tw/.claude"; echo a > "$Tw/src/a.txt"
+git -C "$Tw" init -q && git -C "$Tw" add -A && git -C "$Tw" commit -qm base; b50="$(git -C "$Tw" rev-parse HEAD)"
+printf '@verify-paths tests/\n' > "$Tw/.claude/done-lanes"
+printf '# t\n<!-- card v4 ; pair: off ; base: %s ; estimate: 1h 1000L -->\n## Slices\n- [ ] S1 a — lanes: smoke ; codex: no\n' "$b50" > "$Tw/.ai_context/tasks/t/card.md"
+seq 1 10 > "$Tw/src/with space.txt"; seq 1 60 > "$Tw/tests/登入 1.py"; head -c 200000 /dev/urandom > "$Tw/src/blob.bin"
+tw1=$(cd "$Tw" && bash "$HR50" --tripwire t 2>&1); git -C "$Tw" add -A; tw2=$(cd "$Tw" && bash "$HR50" --tripwire t 2>&1)
+{ [ "${tw1%% lines*}" = 'tripwire: product +10 · verify +60' ] && [ "${tw2%% lines*}" = 'tripwire: product +10 · verify +60' ]; } \
+  && ok "LOW 7 tripwire: a binary counts 0 lines tracked or not; a CJK path under @verify-paths counts as verify" || no "LOW 7 tripwire: [$tw1] [$tw2]"
+# M9: the task's own work merged after the close is no fix
+F="$WORK/l150fc"; mkdir -p "$F/src"; echo a > "$F/src/a.txt"; git -C "$F" init -q -b main && git -C "$F" add -A && git -C "$F" commit -qm base; fb="$(git -C "$F" rev-parse HEAD)"
+git -C "$F" checkout -qb task/login-fix; echo b >> "$F/src/a.txt"; t1=$(( $(date +%s) - 300 ))
+GIT_AUTHOR_DATE="@$t1 +0000" GIT_COMMITTER_DATE="@$t1 +0000" git -C "$F" commit -qam "S1: handle the timeout"; fh="$(git -C "$F" rev-parse HEAD)"
+mkdir -p "$F/.ai_context/tasks/login-fix"; tc="$(date -u -d "@$((t1 + 60))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -r "$((t1 + 60))" '+%Y-%m-%dT%H:%M:%SZ')"
+printf '# login-fix\n<!-- card v4 ; pair: off ; base: %s ; estimate: 1h 10L -->\n## Slices\n- [x] S1 a — lanes: smoke ; codex: no ✓ smoke@33333333 check@44444444\nClosed: tree:aaaaaaaaaaaa head:%s ✓ smoke@33333333 — %s\n' "$fb" "${fh:0:12}" "$tc" > "$F/.ai_context/tasks/login-fix/card.md"
+printf '%s\tCLOSE\t-\t-\taaaaaaaaaaaa\tsmoke@33333333\tok\n' "$tc" > "$F/.ai_context/tasks/login-fix/donelog"
+git -C "$F" checkout -q main; git -C "$F" merge -q --squash task/login-fix >/dev/null; git -C "$F" commit -qm "fix(login): handle the timeout (task login-fix)"; sq="$(git -C "$F" rev-parse --short=7 HEAD)"
+echo c >> "$F/src/a.txt"; git -C "$F" commit -qam "fix: off by one in the timeout"; fx50="$(git -C "$F" rev-parse --short=7 HEAD)"
+out=$(bash "$HR50" "$F")
+{ ! printf '%s\n' "$out" | grep -qF "defect candidate: $sq " && printf '%s\n' "$out" | grep -qF "defect candidate: $fx50 "; } && ok "M9 a squash merge of the task's own work is no fix-commit candidate; a real fix still is" || no "M9 squash: $(printf '%s\n' "$out" | grep -F 'candidate')"
+git -C "$F" checkout -qb replay "$fb"; git -C "$F" cherry-pick "$fh" >/dev/null 2>&1; git -C "$F" commit -q --amend -m "fix: replay the timeout handling"; rp="$(git -C "$F" rev-parse --short=7 HEAD)"
+bash "$HR50" "$F" | grep -qF "defect candidate: $rp " && no "M9 a rebased/cherry-picked task commit listed as a candidate" || ok "M9 ...nor is a task commit replayed by a rebase or cherry-pick"
+# M7: a refused defect row is never silent
+Pe="$WORK/l150e"; mkproj "$Pe"; mklanes "$Pe" "$LANE_SMOKE"; mkcard "$Pe" demo off '- [~] S1 first — lanes: smoke ; codex: no'
+printf 'date,what,where\n' > "$Pe/.ai_context/defects.csv"
+rep S1 pass 'NOT VERIFIED (L2) a — b' | ev "$Pe" check S1 --agent fx --source human >/dev/null
+grep -qE '^check S1 fail [0-9a-f]{8} defect-row:failed$' "$WORK/ev.out" && ok "M7 evidence.sh check: a defect row harness-report refused shows on the check line (defect-row:failed)" || no "M7 check line: $(cat "$WORK/ev.out")"
+grep -qF 'echo "$RID$DROW"' "$EV" && ok "M7 ...and on the codex record line task-pair.sh keeps" || no "M7 codex line lacks the defect-row flag"
+Ps5="$WORK/l150s"; mkdir -p "$Ps5/.ai_context/tasks/demo" "$Ps5/scripts"; echo demo > "$Ps5/.ai_context/tasks/CURRENT"
+printf '# Demo\n<!-- card v4 ; pair: off ; base: - ; estimate: 1h 50L -->\n## Slices\n- [~] S1 first — lanes: smoke ; codex: no\n' > "$Ps5/.ai_context/tasks/demo/card.md"
+printf '#!/usr/bin/env bash\ncat >/dev/null; echo "check S1 fail deadbeef defect-row:failed"\n' > "$Ps5/scripts/evidence.sh"
+mktr "$WORK/t150" "$(rep S1 pass)" agent-checker-handback.jsonl; mkstop "$WORK/p150" "$WORK/t150"; sl "$Ps5" checker stop "$WORK/p150"
+[ "$(tail -n 1 "$Ps5/.ai_context/tasks/demo/donelog" | cut -f7)" = 'checked deadbeef fail defect-row:failed' ] && ok "M7 spawn-log keeps the flag in the RETURN row" || no "M7 RETURN row: $(tail -n 1 "$Ps5/.ai_context/tasks/demo/donelog")"
+grep -qF 'kebab-case' "$REPO/.claude/skills/task/SKILL.md" && ok "M7 the task skill recommends a kebab-case ASCII slug" || no "M7 task skill lacks the slug advice"
+# --- sync (H1-H3, M1-M6, LOW 3-6) ------------------------------------------------
+if [ ! -f "$REPO/sync-project.sh" ] || git -C "$REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
+  skp "C6/C7 sync regressions (template repo with full history only)"
+else
+  SP="$REPO/sync-project.sh"
+  # LOW 9: no development crumbs in the shipped scripts, hooks, skills and suite (MIGRATION's history aside)
+  pat="AD""R-0[0-9][0-9]|wor""kshop|codex""_desktop|starter""-dev|v""_trader"
+  h="$(cd "$REPO" && git ls-files -z scripts .claude sync-project.sh tests/run.sh tests/fake-herdr.sh | xargs -0 grep -nE "$pat" 2>/dev/null | grep -v 'ADR-001' | cut -c1-80)"
+  [ -z "$h" ] && ok "LOW 9 shipped scripts, hooks, skills and the suite name no decision numbers or development projects" || no "LOW 9 crumbs: $h"
+  s50() { "$SP" "$@" > "$WORK/s50.out" 2>&1; echo $?; }
+  h50() { git -C "$REPO" show "HEAD:$1"; }   # what sync ships (M1)
+  p50() { git -C "$REPO" show "$(git -C "$REPO" log --format=%H -- "$1" | sed -n 2p):$1"; }   # the version before HEAD's (a retired file: its last)
+  m50() { rm -rf "$1"; mkdir -p "$1"; git -C "$REPO" archive HEAD .ai_context/INDEX.md .claude scripts .pre-commit-config.yaml .gitignore NOTICE | tar -x -C "$1"
+          git -C "$1" init -q && git -C "$1" add -A && git -C "$1" commit -qm v4; }   # a v4 project: every shipped file at HEAD
+  c50() { local t="@$(( $(date +%s) - $2 * 86400 )) +0000"; git -C "$1" add -A && GIT_AUTHOR_DATE="$t" GIT_COMMITTER_DATE="$t" git -C "$1" commit -qm "$3"; }   # $1 dir, $2 days ago
+  # H1: mid-intake, paused and idle v3 tasks
+  P="$WORK/l150a"; m50 "$P"; mkdir -p "$P/.ai_context/tasks/login"; echo login > "$P/.ai_context/tasks/CURRENT"
+  printf '# Spec: login\n' > "$P/.ai_context/tasks/login/spec.md"; c50 "$P" 8 intake
+  rc=$(s50 --update-stock "$P")
+  { [ "$rc" = 1 ] && grep -qF "has an active v3 task 'login' (tasks/CURRENT → spec.md, no card.md; no plan.md yet: mid-intake)" "$WORK/s50.out" && [ -z "$(git -C "$P" status --porcelain)" ]; } \
+    && ok "H1 a v3 task mid-intake (CURRENT + spec.md, no plan.md, 8 days old) stops --update-stock before any write" || no "H1 mid-intake (rc=$rc): $(head -c 300 "$WORK/s50.out")"
+  rc=$(s50 "$P"); { [ "$rc" = 0 ] && grep -qF "active v3 task 'login' (no plan.md yet: mid-intake) — do not run --update-stock" "$WORK/s50.out"; } && ok "H1 ...a default sync warns" || no "H1 default-sync warning (rc=$rc)"
+  printf '# Plan: login\n## M1: a [done]\n## M2: b [in_progress]\n' > "$P/.ai_context/tasks/login/plan.md"; c50 "$P" 8 plan
+  rc=$(s50 --update-stock "$P"); { [ "$rc" = 1 ] && grep -qF 'plan.md has an [in_progress] or [pending] milestone' "$WORK/s50.out"; } \
+    && ok "H1 a paused v3 task (an [in_progress] milestone, last commit 8 days ago) is active" || no "H1 paused (rc=$rc)"
+  printf '# Plan: login\n<!-- statuses: [pending] [in_progress] [done] -->\n## M1: a [done]\n## M2: b [done]\n' > "$P/.ai_context/tasks/login/plan.md"
+  p50 .claude/hooks/stop-gate.sh > "$P/.claude/hooks/stop-gate.sh"; c50 "$P" 8 finished
+  rc=$(s50 --update-stock "$P")
+  { [ "$rc" = 0 ] && grep -qF "tasks/CURRENT names v3 task 'login' (spec.md, plan.md, no card.md) — v4 ignores it" "$WORK/s50.out" \
+      && grep -qF "first restore the v3 files this sync replaced or deleted: git -C \"$P\" checkout HEAD -- .claude/hooks/stop-gate.sh" "$WORK/s50.out"; } \
+    && ok "H1 an idle v3 task: the sync runs and says how to restore what it replaced (git checkout HEAD -- …)" || no "H1 idle (rc=$rc): $(grep -F 'v3 task' "$WORK/s50.out" | head -c 400)"
+  # H2 + H3: the core moves as one unit; the stamp says so
+  P="$WORK/l150b"; m50 "$P"
+  p50 .claude/hooks/stop-gate.sh > "$P/.claude/hooks/stop-gate.sh"
+  { p50 .claude/hooks/guard-patterns.sh; echo 'GUARD_LOCAL_DEPLOY=deploy.sh   # local'; } > "$P/.claude/hooks/guard-patterns.sh"
+  rm "$P/scripts/evidence.sh" "$P/.claude/skills/defect/SKILL.md"; p50 .claude/agents/planner.md > "$P/.claude/agents/planner.md"
+  printf 'spawned-by: claude-starter@aaa1111 on 2026-01-01\n' > "$P/.claude/.starter-version"; c50 "$P" 0 v3ish; cp "$P/.claude/hooks/stop-gate.sh" "$WORK/sg150"
+  rc=$(s50 --update-stock "$P"); o="$WORK/s50.out"
+  { [ "$rc" = 2 ] && grep -qxF 'MIGRATION INCOMPLETE — v4 /task is not safe until: .claude/hooks/guard-patterns.sh are merged by hand (diff against the template, then re-run)' "$o"; } \
+    && ok "H2 a customized core file: --update-stock ends MIGRATION INCOMPLETE naming it (exit 2)" || no "H2 MIGRATION INCOMPLETE (rc=$rc): $(tail -n 3 "$o")"
+  { cmp -s "$P/.claude/hooks/stop-gate.sh" "$WORK/sg150" && [ ! -e "$P/scripts/evidence.sh" ] && [ -f "$P/.claude/agents/planner.md" ]; } \
+    && ok "H2 ...and no core file moved: stock stop-gate.sh kept, evidence.sh not added, planner.md not retired" || no "H2 the core half-moved"
+  [ -f "$P/.claude/skills/defect/SKILL.md" ] && ok "H2 ...while files outside the core still sync (the defect skill is added)" || no "H2 non-core file not added"
+  grep -F 'guard-patterns.sh differs from every known template version (customized)' "$o" | grep -qF 'v4 rewrote this file' && ok "H2 guard-patterns.sh gets the 'v4 rewrote this file' note" || no "H2 note list lacks guard-patterns.sh"
+  { tail -n 1 "$P/.claude/.starter-version" | grep -qE '^partial-sync: [0-9a-f]+ on [0-9-]+ \([0-9]+ core files kept back\)$' && ! tail -n 1 "$P/.claude/.starter-version" | grep -qF 'claude-starter@'; } \
+    && ok "H3 a sync that held the core back stamps partial-sync, with no claude-starter@ ref" || no "H3 stamp: $(tail -n 1 "$P/.claude/.starter-version")"
+  rc=$(s50 "$P"); { [ ! -e "$P/scripts/evidence.sh" ] && grep -qF 'v4 /task core not installed:' "$WORK/s50.out"; } && ok "H2 a default sync never half-installs the core (evidence.sh not added beside an older core)" || no "H2 default sync added core files (rc=$rc)"
+  { h50 .claude/hooks/guard-patterns.sh; echo 'GUARD_LOCAL_DEPLOY=deploy.sh   # local'; } > "$P/.claude/hooks/guard-patterns.sh"; rc=$(s50 --update-stock "$P")
+  { [ "$rc" = 0 ] && h50 .claude/hooks/stop-gate.sh | cmp -s - "$P/.claude/hooks/stop-gate.sh" && [ -f "$P/scripts/evidence.sh" ] && [ ! -e "$P/.claude/agents/planner.md" ] \
+      && grep -q GUARD_LOCAL_DEPLOY "$P/.claude/hooks/guard-patterns.sh" && ! grep -q 'MIGRATION INCOMPLETE' "$WORK/s50.out"; } \
+    && ok "H2 after the hand merge (the v4 text plus a local line) the re-run moves the whole core and retires" || no "H2 re-run after merge (rc=$rc): $(tail -n 3 "$WORK/s50.out")"
+  tail -n 1 "$P/.claude/.starter-version" | grep -qE '^synced-to: claude-starter@[0-9a-f]+ on ' && ok "H3 ...and stamps synced-to" || no "H3 synced-to after the merge: $(tail -n 1 "$P/.claude/.starter-version")"
+  # M1: the template's last commit ships; history on any branch proves stock
+  C="$WORK/l150tpl"; rm -rf "$C"; git clone -q "$REPO" "$C" 2>/dev/null; cp "$SP" "$C/sync-project.sh"; git -C "$C" add -A; git -C "$C" commit -qm "the sync under test" --allow-empty
+  git -C "$C" checkout -qb side; echo '# side' >> "$C/.claude/hooks/post-edit.sh"; git -C "$C" commit -qam side; git -C "$C" show HEAD:.claude/hooks/post-edit.sh > "$WORK/pe150"; git -C "$C" checkout -q -
+  echo '# wip' >> "$C/.claude/hooks/stop-gate.sh"; mkdir -p "$C/tests/fixtures/raw"; echo '{"cwd":"/somewhere/else"}' > "$C/tests/fixtures/raw/untracked.json"
+  P="$WORK/l150m"; rm -rf "$P"; mkdir -p "$P/.ai_context" "$P/.claude/hooks" "$P/tests"; cp "$REPO/.ai_context/INDEX.md" "$P/.ai_context/"
+  git -C "$C" show HEAD:tests/run.sh > "$P/tests/run.sh"; cp "$WORK/pe150" "$P/.claude/hooks/post-edit.sh"
+  rc=$("$C/sync-project.sh" --update-stock "$P" > "$WORK/s50m.out" 2>&1; echo $?)
+  { [ "$rc" = 0 ] && git -C "$C" show HEAD:.claude/hooks/stop-gate.sh | cmp -s - "$P/.claude/hooks/stop-gate.sh" && grep -qF 'this template checkout has uncommitted changes — the sync shipped its last commit' "$WORK/s50m.out"; } \
+    && ok "M1 a dirty template ships its last commit, never the working tree, and says so" || no "M1 dirty template (rc=$rc)"
+  { [ -f "$P/tests/fixtures/cc-2.1.309/stop-background.json" ] && [ ! -e "$P/tests/fixtures/raw/untracked.json" ]; } && ok "M1 fixtures beside a stock tests/run.sh: committed ones only" || no "M1 fixtures from the working tree"
+  tail -n 1 "$P/.claude/.starter-version" | grep -qF "claude-starter@$(git -C "$C" rev-parse --short HEAD) " && ok "M1 the stamp names the commit that shipped" || no "M1 stamp: $(tail -n 1 "$P/.claude/.starter-version")"
+  git -C "$C" show HEAD:.claude/hooks/post-edit.sh | cmp -s - "$P/.claude/hooks/post-edit.sh" && ok "M1 a file equal to a version on another branch is stock (git log --all)" || no "M1 side-branch version not recognised"
+  # M2: never through a symlink; an abort says what it did
+  P="$WORK/l150la"; m50 "$P"; rm "$P/.claude/skills/defect/SKILL.md"; ln -s "$WORK/nowhere150/SKILL.md" "$P/.claude/skills/defect/SKILL.md"; rc=$(s50 --update-stock "$P")
+  { [ "$rc" = 0 ] && grep -q '^sync-project: ' "$WORK/s50.out" && grep -qF 'reached through a symlink, left alone (1): .claude/skills/defect/SKILL.md' "$WORK/s50.out" && [ -L "$P/.claude/skills/defect/SKILL.md" ] && [ ! -e "$WORK/nowhere150" ]; } \
+    && ok "M2 a dangling symlink where sync would add a file: left alone and named; the sync finishes" || no "M2 dangling link (rc=$rc): $(tail -n 4 "$WORK/s50.out")"
+  S="$WORK/l150sh"; rm -rf "$S"; mkdir -p "$S"; p50 .claude/agents/planner.md > "$S/planner.md"; p50 .claude/agents/executor.md > "$S/executor.md"; cp "$S/planner.md" "$WORK/pl150"; cp "$S/executor.md" "$WORK/ex150"
+  P="$WORK/l150lb"; m50 "$P"; rm -rf "$P/.claude/agents"; ln -s "$S" "$P/.claude/agents"; rc=$(s50 --update-stock "$P")
+  { cmp -s "$S/planner.md" "$WORK/pl150" && cmp -s "$S/executor.md" "$WORK/ex150" && [ ! -e "$S/checker.md" ]; } && ok "M2 .claude/agents linked to a shared directory: nothing in it deleted, replaced or added" || no "M2 shared agents dir written (rc=$rc): $(ls "$S" | tr '\n' ' ')"
+  S="$WORK/l150sh2"; rm -rf "$S"; mkdir -p "$S"; p50 .claude/hooks/stop-gate.sh > "$S/stop-gate.sh"; cp "$S/stop-gate.sh" "$WORK/sgs150"
+  P="$WORK/l150lc"; m50 "$P"; ln -sf "$S/stop-gate.sh" "$P/.claude/hooks/stop-gate.sh"; rc=$(s50 --update-stock "$P")
+  { [ "$rc" = 2 ] && cmp -s "$S/stop-gate.sh" "$WORK/sgs150"; } && ok "M2 a stock hook symlinked to a shared file: the shared file is not written (the core waits: exit 2)" || no "M2 shared hook written through (rc=$rc)"
+  P="$WORK/l150ld"; m50 "$P"; rm -rf "$P/.claude/skills/prove" "$P/.claude/hooks/lint.sh.example"; chmod 555 "$P/.claude/skills"
+  if [ -w "$P/.claude/skills" ]; then
+    chmod 755 "$P/.claude/skills"; skp "M2 abort summary (root: chmod cannot make a directory unwritable)"
+  else
+    rc=$(s50 "$P"); chmod 755 "$P/.claude/skills"
+    { [ "$rc" != 0 ] && grep -qF 'stopped by an error' "$WORK/s50.out" && grep -qxF '  + .claude/hooks/lint.sh.example' "$WORK/s50.out" && [ ! -e "$P/.claude/.starter-version" ]; } \
+      && ok "M2 a sync that aborts prints what it had done (EXIT trap) and stamps nothing" || no "M2 abort (rc=$rc): $(tail -n 4 "$WORK/s50.out")"
+  fi
+  # M3, M4, M5 (+ LOW 5: S5 every sync), LOW 3-6
+  P="$WORK/l150t"; m50 "$P"; mkdir -p "$P/tests"; printf '#!/usr/bin/env bash\necho project suite\n' > "$P/tests/run.sh"; chmod 644 "$P/tests/run.sh"; printf '# own\nnode_modules/\n' > "$P/.gitignore"
+  { echo 'Our own notices.'; h50 NOTICE; } > "$P/NOTICE"; p50 scripts/task-statusline.sh > "$P/scripts/task-statusline.sh"
+  printf '{"statusLine": {"type": "command", "command": "bash scripts/task-statusline.sh"}}\n' > "$P/.claude/settings.local.json"
+  rc=$(s50 --update-stock "$P"); rc2=$(s50 --update-stock "$P"); o="$WORK/s50.out"
+  { [ ! -x "$P/tests/run.sh" ] && ! grep -qF 'tests/run.sh' "$o"; } && ok "M3 a project's own tests/run.sh: no exec bit, no merge suggestion" || no "M3 tests/run.sh touched or named"
+  { [ "$(grep -cxF '__pycache__/' "$P/.gitignore")" = 1 ] && [ "$(grep -cxF 'node_modules/' "$P/.gitignore")" = 1 ] && grep -qxF '.pytest_cache/' "$P/.gitignore" && grep -qF '# Test and build caches' "$P/.gitignore"; } \
+    && ok "M4 sync appends the template's test and build caches (only the missing patterns, once)" || no "M4 caches block: $(tr '\n' '|' < "$P/.gitignore" | tail -c 300)"
+  ! grep -qF 'NOTICE differs' "$o" && ok "LOW 5 a NOTICE that appended the template's notices is not nagged as customized" || no "LOW 5 NOTICE nag"
+  { [ -f "$P/scripts/task-statusline.sh" ] && grep -qF 'still runs it — kept until that statusLine runs: bash scripts/evidence.sh status --line' "$o"; } && ok "LOW 3 task-statusline.sh stays while a statusLine runs it; the suggestion names evidence.sh status --line" || no "LOW 3 statusline"
+  grep -qF '/setup §4–§5 (lanes) only' "$o" && ok "M5 + LOW 5 the lanes suggestion says /setup §4–§5 (lanes) only, on every sync until lanes exist" || no "M5 S5 text/repeat"
+  f="$REPO/.claude/skills/setup/SKILL.md"; { grep -qF 'claude-starter: UNCONFIGURED' "$f" && grep -qF 'skip §1–§3' "$f" && grep -qF 'Do §4–§5 only' "$f"; } && ok "M5 /setup on a configured project skips §1–§3 and does the lanes" || no "M5 setup branch missing"
+  P="$WORK/l150r"; m50 "$P"; p50 .claude/agents/scout.md > "$P/.claude/agents/scout.md"; { p50 .claude/agents/planner.md; echo local; } > "$P/.claude/agents/planner.md"
+  printf '# p\n## Definition of done\n- x\n<!-- Task profile: mixed -->\n' > "$P/CLAUDE.md"; rc=$(s50 "$P"); o="$WORK/s50.out"
+  { grep -qF 'retired in v4, still present (1): .claude/agents/scout.md — re-run with --update-stock' "$o" && grep -qF '.claude/agents/planner.md is retired in v4 but differs from every template version (customized)' "$o"; } \
+    && ok "LOW 5 a default sync lists customized retired files apart from the stock ones it would delete" || no "LOW 5 retire lists: $(grep -F 'retired in v4' "$o" | head -c 300)"
+  grep -qF "CLAUDE.md still names a v3 task profile ('Task profile:' / task-profile.sh, commented out or not) — profiles are gone in v4; replace the '## Long-horizon tasks' body with the one in \"$REPO/templates/CLAUDE.md.<kind>\"" "$o" \
+    && ok "LOW 5 S6 names commented profile lines for what they are and points at the template checkout" || no "LOW 5 S6 text: $(grep -F 'task profile' "$o")"
+  ! grep -nE '(^|[^+])"\$\{[a-z_]+\[@\]\}"' "$SP" >/dev/null && ok "LOW 5 every array expansion in sync-project.sh is set -u safe on bash 3.2" || no "LOW 5 bare array expansion: $(grep -nE '(^|[^+])"\$\{[a-z_]+\[@\]\}"' "$SP" | head -3)"
+  P="$WORK/l150s3"; m50 "$P"; python3 -I - "$P/.claude/settings.json" <<'PY'
+import sys; p = sys.argv[1]; s = open(p).read()
+s = s.replace('      "Edit(./.ai_context/tasks/**/donelog)",\n', '').replace('spawn-log.sh\\" checker start', 'spawn-log.sh\\" checker begin')
+open(p, "w").write(s)
+PY
+  rc=$(s50 "$P"); o="$WORK/s50.out"
+  grep -qF 'settings.json lacks the v4 evidence denies — add to permissions.deny: "Edit(./.ai_context/tasks/**/donelog)" (keep' "$o" && ok "LOW 4 S3 names each template deny a settings.json lacks (read from the template)" || no "LOW 4 S3: $(grep -F 'evidence denies' "$o")"
+  grep -qF "SubagentStart/SubagentStop blocks lack the v4 spawn-log.sh calls: checker start" "$o" && ok "LOW 4 S2 checks the v4 spawn-log argv, not just the word SubagentStop" || no "LOW 4 S2: $(grep -F 'spawn-log' "$o")"
+  P="$WORK/l150 [g]"; rm -rf "$P"; mkdir -p "$P/.ai_context/tasks/x"; cp "$REPO/.ai_context/INDEX.md" "$P/.ai_context/"; echo view > "$P/.ai_context/tasks/x/STATUS.md"
+  git -C "$REPO" show "$(git -C "$REPO" log --format=%H -S'.ai_context/tasks/*/pair/.fp-*' -- .gitignore | tail -n 1):.gitignore" > "$P/.gitignore"
+  rc=$(s50 --update-stock "$P")
+  { grep -qxF '.ai_context/tasks/*/STATUS.md' "$P/.gitignore" && grep -qF 'v3 task-runtime files exist' "$WORK/s50.out"; } && ok "LOW 6 a target path with [ ] still finds its v3 runtime files (the ignores stay)" || no "LOW 6 glob in target path (rc=$rc)"
+  # M6: no git history, no --update-stock
+  N="$WORK/l150ng"; rm -rf "$N"; mkdir -p "$N"; git -C "$REPO" archive HEAD | tar -x -C "$N"; cp "$SP" "$N/sync-project.sh"
+  P="$WORK/l150n"; m50 "$P"; p50 .claude/hooks/stop-gate.sh > "$P/.claude/hooks/stop-gate.sh"; git -C "$P" commit -qam old
+  rc=$("$N/sync-project.sh" --update-stock "$P" > "$WORK/s50n.out" 2>&1; echo $?)
+  { [ "$rc" = 2 ] && grep -qF 'cannot prove stock without git history — run from a git checkout of the template' "$WORK/s50n.out" && [ -z "$(git -C "$P" status --porcelain)" ]; } \
+    && ok "M6 --update-stock from a template without git history refuses (exit 2) and writes nothing" || no "M6 (rc=$rc): $(head -c 200 "$WORK/s50n.out")"
+fi
 echo "=== L1-14 · pre-commit guards: append-only + S2 bulk"
 D="$WORK/l114"; mkdir -p "$D/.ai_context/journal" "$D/.ai_context/tasks/demo" "$D/.ai_context/knowledge/lessons"
 printf 'preamble\n' > "$D/.ai_context/decisions.md"
@@ -2003,7 +2250,7 @@ out=$(cd "$D" && bash "$HR" --defect demo S1 human major "x" - 2>&1); rc=$?
 ( cd "$D" && bash "$HR" --defect demo S1 checker major "x" check@5e6f7a8b ) >/dev/null 2>&1; rc2=$?
 { [ "$rc" = 1 ] && grep -qF 'needs ref check@<id>|codex@<id>' "$WORK/hr.err" && [ "$rc2" = 1 ]; } && ok "checker rows need a ledger record ref and severity unrated (R26)" || no "checker finder: rc=$rc/$rc2 $(head -c 200 "$WORK/hr.err")"
 out=$(bash "$HR" "$D")
-echo "$out" | grep -qF 'post-close: 1 (human 1,' && echo "$out" | grep -qF 'by severity: blocker 0 · major 1 · minor 0 · unrated 0' && ok "== defects counts phases and severities (the dismissed row counts nowhere)" || no "defect counts wrong: $(echo "$out" | grep -A2 '== defects' | tr '\n' '|')"
+echo "$out" | grep -qF 'post-close: 1 (human 1)' && echo "$out" | grep -qF 'by severity: blocker 0 · major 1 · minor 0 · unrated 0' && ok "== defects counts phases and severities (the dismissed row counts nowhere)" || no "defect counts wrong: $(echo "$out" | grep -A2 '== defects' | tr '\n' '|')"
 Pc="$WORK/l134c"; mkproj "$Pc"; mklanes "$Pc" "$LANE_SMOKE"; mkcard "$Pc" demo off '- [~] S1 first — lanes: smoke ; codex: no'
 rep S1 pass 'NOT VERIFIED (L2) a — b' | ev "$Pc" check S1 --agent fx --source human >/dev/null
 id=$(lastid "$Pc" checker.jsonl)
@@ -2227,7 +2474,7 @@ for f in "$AG"/*.md "$REPO"/.claude/skills/*/*.md; do
   [ -z "$h" ] || hits="$hits ${f#"$REPO"/}: $h"
 done
 [ -z "$hits" ] && ok "agents and every skill file name no v3 /task artefact" || no "v3 artefacts still named:$hits"
-n=$(wc -l < "$TK/SKILL.md"); [ "$n" -le 150 ] && ok "task SKILL.md within 150 lines ($n — U10, ADR-039)" || no "task SKILL.md is $n lines (> 150)"
+n=$(wc -l < "$TK/SKILL.md"); [ "$n" -le 150 ] && ok "task SKILL.md within 150 lines ($n — U10)" || no "task SKILL.md is $n lines (> 150)"
 n=$(wc -l < "$TK/reference.md"); [ "$n" -le 120 ] && ok "task reference.md within 120 lines ($n — read on demand)" || no "task reference.md is $n lines (> 120)"
 { [ "$(sed -n 1p "$TK/SKILL.md")" = '---' ] && grep -q '^name: task$' "$TK/SKILL.md" && grep -q '^description: .' "$TK/SKILL.md"; } && ok "task skill registers (name + description frontmatter)" || no "task SKILL.md frontmatter broken"
 miss=""
@@ -2318,7 +2565,7 @@ grep -qF 'claude-starter gate: evidence[demo]: slice -' "$WORK/g.out" && ok "the
 rc=$(gt "$D" tsuite-ck1); ck 0 "$rc" "the next stop still passes (the checkpoint is the human's, not the gate's)"
 
 
-echo "=== L1-23 · pair-codex transport: task-pair.sh over a fake herdr (ADR-028, v4)"
+echo "=== L1-23 · pair-codex transport: task-pair.sh over a fake herdr (v4)"
 # Every scenario asserts the same invariant from two sides: a run that did
 # not end in a checkable result never exits 0, and the script never prints
 # a verdict of its own. The fake herdr replays herdr 0.9.0 JSON shapes and the
@@ -2461,7 +2708,7 @@ grep -q 'state=completed (verdict=pass blocker=0 major=0 minor=0)' "$FK/out" && 
 no_verdict_printed && ok "script prints no PASS/FAIL of its own" || no "script printed a verdict"
 { grep -q "	001	start	.*	GPT-5.6-Sol high	0/0	" "$RL" && grep -q "	001	end:completed	.*	GPT-5.6-Sol high	1200/340	" "$RL"; } && ok "runlog rows record the observed model and token counters (0/0 after /new, 1200/340 after the turn)" || no "runlog model/tokens columns wrong: $(cat "$RL")"
 [ ! -e "$PKD/001-slice.screen.txt" ] && ok "completed run leaves no screen dump" || no "screen dump written for a completed run"
-# Fresh thread per packet (ADR-030): send itself sends /new right before the
+# Fresh thread per packet: send itself sends /new right before the
 # packet prompt, and the runlog shows the reset row before the start row.
 grep '^agent prompt' "$FK/herdr.log" | grep -B1 'Read and execute' | head -1 | grep -q ' /new$' \
   && ok "send: /new is the prompt right before the packet prompt" || no "send did not open a fresh thread: $(grep '^agent prompt' "$FK/herdr.log" | cut -c1-60 | tr '\n' '|')"
@@ -3108,7 +3355,7 @@ echo "=== L1-9 · seed purity (the template repo ships placeholders, never real 
 if [ -f "$REPO/.claude/.starter-version" ]; then
   skp "seed purity (this is a spawned project, not the template repo)"
 else
-  grep -q '{{DATE}}' "$REPO/.ai_context/state.md" && ok "seed state.md still a placeholder" || no "seed state.md polluted — real memory belongs in the dev workshop project, not the product"
+  grep -q '{{DATE}}' "$REPO/.ai_context/state.md" && ok "seed state.md still a placeholder" || no "seed state.md polluted — real memory belongs in the template's development project, not the product"
   grep -q '^## ADR-[0-9]' "$REPO/.ai_context/decisions.md" && no "seed decisions.md contains real ADRs" || ok "seed decisions.md clean"
   for sd in journal knowledge private tasks; do
     stray=$(find "$REPO/.ai_context/$sd" -type f ! -name '.gitkeep' 2>/dev/null | wc -l)

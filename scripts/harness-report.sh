@@ -21,15 +21,20 @@
 #                     file is missing or empty — /wrap appends stdout verbatim
 #   harness-report.sh --defect <slug|-> <S<n>|final|-> <finder> <severity> <summary> <ref|-> [--n N] [--fixed-in SHA]
 #   harness-report.sh --defect-dismiss <sha>     a fix-commit candidate is not a defect
+#   harness-report.sh --defect-retract <date> <slug> <slice> <ref> --reason <why>
+#                     a recorded row was wrong: a retraction row (severity
+#                     retracted, n 0, the retracted row's date/slug/slice/ref)
+#                     takes it, and itself, out of every count
 #   harness-report.sh --tripwire <slug> [ROOT]   one line for evidence.sh status
-# --defect and --defect-dismiss write .ai_context/defects.csv under the
-# current directory (the project root); ROOT defaults to it too.
+# --defect* write .ai_context/defects.csv under the current directory (the
+# project root); ROOT defaults to it too. A slug is what the hooks accept in
+# tasks/CURRENT: no /, no .., no whitespace.
 # Exit: 0 ok (even "no data") · 1 usage/validation · 2 malformed or foreign header ·
-#       3 --row/--tripwire cannot score this task (no card, outcome needed)
+#       3 --row/--tripwire cannot score this task (no card, a v3 task, outcome needed)
 #
-# Contracts: the --csv header (workshop fleet-report reads v2 by column name
-# and tells v1 from v2 by the first column, project vs csv_version) and the
-# `!! donelog STUCK rows:` line, which fleet-report parses too.
+# Contracts: the --csv header (the fleet report reads v2 by column name and
+# tells v1 from v2 by the first column, project vs csv_version) and the
+# `!! donelog STUCK rows:` line, which the fleet report parses too.
 
 set -euo pipefail
 
@@ -43,10 +48,13 @@ paths() { # $1 = project root
   SB="$AI/scoreboard.csv"; SB4="$AI/scoreboard-v4.csv"; DF="$AI/defects.csv"; FR="$AI/friction.csv"
 }
 # The harness version every row is scored under: the ref after
-# claude-starter@ on the last line of .claude/.starter-version.
+# claude-starter@ on the LAST spawned-by:/synced-to: line of
+# .claude/.starter-version (a partial-sync: line names no version — the
+# core stayed older).
 stamp() {
   local s
-  s="$(tail -n 1 "$ROOT/.claude/.starter-version" 2>/dev/null | sed -n 's/.*claude-starter@\([^ ]*\).*/\1/p')" || true
+  s="$(grep -E '^(spawned-by|synced-to): claude-starter@' "$ROOT/.claude/.starter-version" 2>/dev/null | tail -n 1 |
+       tr -d '\r' | sed -n 's/^[^@]*@\([^ ]*\).*/\1/p')" || true
   echo "${s:-unknown}"
 }
 # UTC YYYY-MM-DDTHH:MM:SSZ (donelog, R1) -> epoch seconds, in shell
@@ -59,7 +67,8 @@ epoch() {
   echo $(( (era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468) * 86400 \
            + 10#${BASH_REMATCH[4]} * 3600 + 10#${BASH_REMATCH[5]} * 60 + 10#${BASH_REMATCH[6]} ))
 }
-slug_ok() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] && case "$1" in *..*) false ;; esac; }
+# One slug rule: whatever guard-patterns.sh task_slug takes from tasks/CURRENT.
+slug_ok() { [ -n "$1" ] && case "$1" in */*|*..*|*[[:space:]]*) false ;; *) true ;; esac; }
 
 # Both scoreboards are validated before any output. An empty file counts as
 # absent (a failed `--row … >>` can leave one behind).
@@ -93,9 +102,17 @@ one_of() { # field value regex enum-text
 }
 clean_field() { printf '%s' "$1" | tr ',' ';' | tr -d '\t\r\n'; }
 
+# The live rows of defects.csv: a retraction row (severity retracted) takes
+# out every EARLIER row with its date, slug, slice and ref — and itself. One
+# awk program, read over the file twice (DF_LIVE: pass 1 finds the last
+# retraction per key, pass 2 sees the rows; live = not retracted).
+DF_LIVE='{ sub(/\r$/, "") } FNR == 1 { next }
+  FNR == NR { if ($6 == "retracted") rt[$1 FS $2 FS $3 FS $10] = FNR; next }
+  { live = ($6 != "retracted" && !((($1 FS $2 FS $3 FS $10) in rt) && FNR < rt[$1 FS $2 FS $3 FS $10])) }'
+
 do_defect() {
   [ $# -ge 6 ] || die 1 "--defect needs <slug> <slice> <finder> <severity> <summary> <ref> [--n N] [--fixed-in SHA]"
-  local slug="$1" sl="$2" fnd="$3" sev="$4" sum ref n=1 fx=- ph=- card id="" led="" row
+  local slug="$1" sl="$2" fnd="$3" sev="$4" sum ref n=1 fx=- ph=- card id="" led="" row cs
   sum="$(clean_field "$5")"; ref="$(clean_field "$6")"
   shift 6
   while [ $# -gt 0 ]; do
@@ -107,8 +124,7 @@ do_defect() {
     esac
     shift 2
   done
-  one_of slug "$slug" '[a-z0-9._-]+|-' '[a-z0-9._-]+|-'
-  case "$slug" in *..*) die 1 "--defect slug='$slug' is not one of [a-z0-9._-]+|-" ;; esac
+  slug_ok "$slug" || die 1 "--defect slug='$slug' is not a task slug (no /, .., whitespace) or -"
   one_of slice "$sl" 'S[0-9]+|final|-' 'S<n>|final|-'
   one_of finder "$fnd" 'checker|codex|human|production|post-close-review|fix-commit' 'checker|codex|human|production|post-close-review|fix-commit'
   one_of severity "$sev" 'blocker|major|minor|unrated' 'blocker|major|minor|unrated'
@@ -129,19 +145,59 @@ do_defect() {
     [[ "$id" =~ ^[0-9a-f]{8}$ ]] && grep -q "^{\"id\":\"$id\"," "$led" 2>/dev/null ||
       die 1 "finder $fnd needs ref check@<id>|codex@<id> of an existing ledger record (written by evidence.sh)" ;;
   esac
-  # The phase is derived, never typed: closed card -> post-close; a done
-  # slice, or the final check -> post-done; otherwise pre-done.
+  # A task's defect names a task that exists and, for a slice, a slice on its
+  # card. The phase is derived, never typed: closed card -> post-close; a
+  # done slice, or the final check -> post-done; otherwise pre-done.
   if [ "$slug" != - ]; then
     card="$T/$slug/card.md"
-    if grep -q '^Closed:' "$card" 2>/dev/null; then ph=post-close
-    elif [ "$sl" = final ] || grep -qE "^- \[x\] $sl([[:space:]]|\$)" "$card" 2>/dev/null; then ph=post-done
+    [ -f "$card" ] || die 1 "--defect: tasks/$slug/card.md not found — name the /task the defect escaped from (ls .ai_context/tasks/), or slug - outside any task"
+    case "$sl" in S*)
+      grep -qE "^- \[[ ~ox]\] $sl([[:space:]]|\$)" "$card" ||
+        die 1 "--defect: $sl is not a slice on tasks/$slug/card.md — give the slice it escaped from, final (the whole task) or -" ;;
+    esac
+    if grep -q '^Closed:' "$card"; then ph=post-close
+    elif [ "$sl" = final ] || grep -qE "^- \[x\] $sl([[:space:]]|\$)" "$card"; then ph=post-done
     else ph=pre-done
     fi
   fi
-  row="$(date -u +%F),$slug,$sl,$fnd,$ph,$sev,$n,$sum,$fx,$ref"
+  cs="$(clean_field "$slug")"
   df_open
+  # One row per finding: a ref already recorded with this severity (and not
+  # retracted) is refused — evidence.sh writes a Codex record's blocker and
+  # major rows under one ref, so the severity is part of the key.
+  if [ "$ref" != - ] && R="$ref" V="$sev" awk -F, "$DF_LIVE"'
+       live && $10 == ENVIRON["R"] && $6 == ENVIRON["V"] {f = 1} END {exit !f}' "$DF" "$DF"; then
+    die 1 "--defect: $ref is already recorded with severity $sev in .ai_context/defects.csv — one row per finding; a wrong row is retracted: --defect-retract <date> <slug> <slice> $ref --reason \"…\""
+  fi
+  row="$(date -u +%F),$cs,$sl,$fnd,$ph,$sev,$n,$sum,$fx,$ref"
   printf '%s\n' "$row" >> "$DF"
   echo "defect recorded: $row"
+}
+
+# A retraction row keeps defects.csv append-only and its 10 columns: the
+# retracted row's date, slug, slice, finder, phase and ref, severity
+# retracted, n 0, summary "retracted <today>: <reason>", fixed_in -. Every
+# earlier row with that date, slug, slice and ref is out of the counts (a
+# Codex record's blocker and major rows go together); a row recorded after
+# it counts again.
+do_retract() {
+  [ $# = 6 ] && [ "$5" = --reason ] || die 1 "--defect-retract needs <date> <slug> <slice> <ref> --reason \"<why>\""
+  local d="$1" slug sl="$3" ref why x
+  slug="$(clean_field "$2")"; ref="$(clean_field "$4")"; why="$(clean_field "$6")"
+  [ -n "$why" ] || die 1 "--defect-retract: the reason is empty"
+  [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die 1 "--defect-retract date='$d' is not YYYY-MM-DD (the date column of the row to retract)"
+  [ -s "$DF" ] || die 1 "--defect-retract: no .ai_context/defects.csv here"
+  df_open
+  x="$(K="$d,$slug,$sl,$ref" awk -F, "$DF_LIVE"'
+       $1 "," $2 "," $3 "," $10 == ENVIRON["K"] && $6 != "retracted" && $6 != "none" {
+         if (!live) r = 1; else { n++; if (f == "") f = $4 "," $5 } }
+       END { if (n) print n "," f; else if (r) print "retracted" }' "$DF" "$DF")"
+  case "$x" in
+    retracted) die 1 "--defect-retract: $d,$slug,$sl,…,$ref is already retracted" ;;
+    '') die 1 "--defect-retract: no defect row $d,$slug,$sl,…,$ref in .ai_context/defects.csv (date, slug, slice and ref as the row has them)" ;;
+  esac
+  printf '%s\n' "$d,$slug,$sl,${x#*,},retracted,0,retracted $(date -u +%F): $why,-,$ref" >> "$DF"
+  echo "defect retracted (${x%%,*} row(s)): $d,$slug,$sl,$ref"
 }
 
 do_dismiss() {
@@ -156,11 +212,16 @@ do_dismiss() {
 
 # --- --row: one scoreboard-v4.csv row from the card and the donelog only ---------
 # The evidence ledger is per machine (D10): scoring from it would make the
-# row depend on where /wrap ran. interventions is counted from transcripts
-# by the workshop's fleet-report, never here.
+# row depend on where /wrap ran. interventions is counted from session
+# transcripts by the fleet report, never here.
 do_row() {
   local card="$T/$SLUG/card.md" dl="$T/$SLUG/donelog" closed=0 x b s c first last cr d end t0 t1 dur=- slices
-  [ -f "$card" ] || die 3 "tasks/$SLUG/card.md not found — --row scores v4 tasks only"
+  if [ ! -f "$card" ]; then
+    for x in spec.md plan.md brief.md gatelog; do
+      [ ! -f "$T/$SLUG/$x" ] || die 3 "tasks/$SLUG is a v3 task ($x, no card.md) — v4 can neither score nor continue it: finish it with a v3-final checkout of claude-starter (its /wrap writes the v3 scoreboard.csv row), or abandon it: delete .ai_context/tasks/CURRENT (the directory stays as history)"
+    done
+    die 3 "tasks/$SLUG/card.md not found — --row scores v4 tasks only"
+  fi
   check_sb4
   grep -q '^Closed:' "$card" && closed=1
   [ -f "$dl" ] || dl=/dev/null
@@ -183,18 +244,19 @@ do_row() {
   if t0="$(epoch "$first")" && t1="$(epoch "$end")"; then dur=$(( (t1 - t0 + 30) / 60 )); fi
   if [ ! -s "$SB4" ]; then
     echo "$SB_V4"
-  elif awk -F, -v s="$SLUG" 'NR > 1 && $2 == s {f = 1} END {exit !f}' "$SB4"; then
+  elif S="$(clean_field "$SLUG")" awk -F, 'NR > 1 && $2 == ENVIRON["S"] {f = 1} END {exit !f}' "$SB4"; then
     echo "harness-report: scoreboard-v4.csv already has a row for $SLUG — this one is appended after it (corrections are appended)" >&2
   fi
-  echo "$d,$SLUG,$slices,$b,$s,$c,-,$dur,$OUTCOME,$(stamp)"
+  echo "$d,$(clean_field "$SLUG"),$slices,$b,$s,$c,-,$dur,$OUTCOME,$(stamp)"
 }
 
 # --- --tripwire (D7): scope creep, reported by evidence.sh status, never a block --
 # Lines added since the card's base (tracked diff + untracked files, outside
 # .ai_context/ and .claude/), split by the done-lanes @verify-paths prefixes,
-# and hours since the first APPROVE row, against the card's estimate.
+# and hours since the first APPROVE row, against the card's estimate. Binary
+# files count 0 lines, tracked or not; names are read raw (-z).
 do_tripwire() {
-  local card="$T/$SLUG/card.md" hdr base h L vp p v el=- ap
+  local card="$T/$SLUG/card.md" hdr base h L vp p v el=- ap a f r
   [ -f "$card" ] || die 3 "tasks/$SLUG/card.md not found — no tripwire"
   hdr="$(grep -m 1 '^<!-- card v4 ' "$card" || true)"
   [[ "$hdr" =~ base:\ ([0-9a-f]{7,40})\ .*estimate:\ ([0-9]+(\.[0-9]+)?)h\ ([0-9]+)L ]] ||
@@ -203,10 +265,16 @@ do_tripwire() {
   git -C "$ROOT" rev-parse -q --verify "$base^{commit}" >/dev/null 2>&1 || die 3 "base $base is not a commit here — no tripwire"
   vp="$(sed -nE 's/^@verify-paths[[:space:]]+//p' "$ROOT/.claude/done-lanes" 2>/dev/null | sed -E 's/[[:space:]]+#.*$//' | tr '\n' ' ')" || true
   read -r p v < <({
-    git -C "$ROOT" diff --numstat --no-renames "$base" -- . ':(exclude).ai_context' ':(exclude).claude' 2>/dev/null |
-      awk -F'\t' '{print ($1 ~ /^[0-9]+$/ ? $1 : 0) "\t" $3}'
+    git -C "$ROOT" diff --numstat -z --no-renames "$base" -- . ':(exclude).ai_context' ':(exclude).claude' 2>/dev/null |
+      while IFS= read -r -d '' r; do
+        a="${r%%$'\t'*}"; f="${r#*$'\t'*$'\t'}"; [[ "$a" =~ ^[0-9]+$ ]] || a=0
+        printf '%s\t%s\n' "$a" "${f//$'\n'/?}"
+      done
     git -C "$ROOT" ls-files -z --others --exclude-standard -- . ':(exclude).ai_context' ':(exclude).claude' 2>/dev/null |
-      while IFS= read -r -d '' f; do printf '%s\t%s\n' "$(wc -l < "$ROOT/$f" 2>/dev/null | tr -d ' ')" "$f"; done
+      while IFS= read -r -d '' f; do
+        a="$(grep -cI '' "$ROOT/$f" 2>/dev/null)" || a=0   # -I: a binary file has no lines
+        printf '%s\t%s\n' "${a:-0}" "${f//$'\n'/?}"
+      done
   } | awk -F'\t' -v vp="$vp" '
     BEGIN { n = split(vp, P, " "); for (i = 1; i <= n; i++) sub(/\/$/, "", P[i]) }
     { iv = 0; for (i = 1; i <= n; i++) if (P[i] == "." || $2 == P[i] || index($2, P[i] "/") == 1) iv = 1
@@ -230,7 +298,8 @@ do_tripwire() {
 # CUR|slug   DL|slug|block|stuck|escalate|gate_error|waiting|codex|approve|reject|unbound|none
 # CARD|slug|closed|close_row|[x] slices without evidence (space-separated)
 # RL|slug|runs|completed|not_started|blocked|record_failed     (v4 pair runlogs)
-# DF|date|slug|slice|finder|phase|severity|n|fixed_in
+# DF|date|slug|slice|finder|phase|severity|n|fixed_in   (retracted rows left out)
+# DR|n                                 (retraction rows)
 # FC|slug|sha7|date|subject|files      (fix-commit candidates)
 # FR|date|harness|area|severity|summary|ref
 normalize() {
@@ -240,6 +309,7 @@ normalize() {
   if [ ${#sbs[@]} -gt 0 ]; then
     awk -F, -v v4f="$SB4" '
       function f(k,   i, v) { i = col[k]; if (i == "" || i > NF) return ""; v = $i; gsub(/[| \r]/, "_", v); return v }
+      { sub(/\r$/, "") }
       FNR == 1 { split("", col); for (i = 1; i <= NF; i++) { k = $i; sub(/\r$/, "", k); col[k] = i }; v4 = (FILENAME == v4f); next }
       NF < 2 { next }
       { h = f("harness"); if (h == "") h = "unknown"
@@ -249,10 +319,12 @@ normalize() {
         s = f("slug"); if (!(s in last)) ord[++no] = s; last[s] = r }
       END { for (i = 1; i <= no; i++) print last[ord[i]] }' "${sbs[@]}"
   fi
-  printf 'CUR|%s\n' "$(tr -d '[:space:]' 2>/dev/null < "$T/CURRENT" || true)"
+  # A slug as the scoreboard spells it: clean_field's comma, never the stream's |.
+  s="$(tr -d '[:space:]' 2>/dev/null < "$T/CURRENT" || true)"; s="${s//,/;}"
+  printf 'CUR|%s\n' "${s//|/_}"
   for d in "$T"/*/; do
     [ -d "$d" ] || continue
-    s="$(basename "$d")"; dl="${d}donelog"
+    s="$(basename "$d")"; s="${s//,/;}"; s="${s//|/_}"; dl="${d}donelog"
     if [ -f "$dl" ]; then
       awk -F'\t' -v s="$s" '
         $2 == "BLOCK" {b++} $2 == "STUCK" {st++} $2 == "GATE-ERROR" {g++} $2 == "WAITING" {w++}
@@ -281,7 +353,10 @@ normalize() {
   done
   if [ -s "$DF" ]; then
     if [ "$(head -n 1 "$DF" | tr -d '\r')" = "$DF_HDR" ]; then
-      awk -F, 'NR > 1 && NF >= 10 { gsub(/[|\r]/, "_"); printf "DF|%s|%s|%s|%s|%s|%s|%s|%s\n", $1, $2, $3, $4, $5, $6, $7, $9 }' "$DF"
+      awk -F, "$DF_LIVE"'
+        $6 == "retracted" { nr++ }
+        live && NF >= 10 { gsub(/\|/, "_"); printf "DF|%s|%s|%s|%s|%s|%s|%s|%s\n", $1, $2, $3, $4, $5, $6, $7, $9 }
+        END { if (nr) printf "DR|%d\n", nr }' "$DF" "$DF"
     else
       echo "harness-report: $DF has a non-v4 header — its rows are skipped (migrate them to $DF_HDR)" >&2
     fi
@@ -289,6 +364,7 @@ normalize() {
   [ "$MODE" = csv ] || fix_candidates
   if [ -f "$FR" ]; then
     awk -F, '
+      { sub(/\r$/, "") }
       NR==1 && $1=="date" {next}
       NF>=4 {
         sum=""; for (i=5;i<NF;i++) sum = (sum=="" ? $i : sum " " $i)
@@ -303,25 +379,34 @@ normalize() {
 # Fix-commit candidates (D18): commits within 30 days after a card's last
 # CLOSE row that touch the files the task changed (base..Closed head:, minus
 # .ai_context/ and .claude/), with a fix-like subject. A sha already in
-# defects.csv fixed_in (confirmed or dismissed) is settled. No git -> none.
+# defects.csv fixed_in (confirmed or dismissed) is settled. The task's own
+# work landing later is no fix: a commit whose patch (outside .ai_context/
+# and .claude/) is the whole base..head diff — a squash merge — or one
+# commit of it — a rebase or cherry-pick — is left out. No git -> none.
+own_patches() { # $1 base, $2 head -> " <patch-id> …" of base..head as one diff and of each of its commits
+  { git -C "$ROOT" diff "$1" "$2" -- . ':(exclude).ai_context' ':(exclude).claude'
+    git -C "$ROOT" log -p --no-merges --format='commit %H' "$1..$2" -- . ':(exclude).ai_context' ':(exclude).claude'
+  } 2>/dev/null | git -C "$ROOT" patch-id --stable 2>/dev/null | awk '{printf " %s", $1} END {print " "}'
+}
 fix_candidates() {
   git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || return 0
-  local known="" card s base head ts t0 files fl f
+  local known="" card s base head ts t0 fl f own c pid
   if [ -s "$DF" ] && [ "$(head -n 1 "$DF" | tr -d '\r')" = "$DF_HDR" ]; then
     known=" $(awk -F, 'NR > 1 && $9 ~ /^[0-9a-f]+$/ {printf "%s ", substr($9, 1, 7)}' "$DF")"
   fi
   for card in "$T"/*/card.md; do
     [ -f "$card" ] || continue
-    s="$(basename "$(dirname "$card")")"
+    s="$(basename "$(dirname "$card")")"; s="${s//,/;}"; s="${s//|/_}"
     head="$(sed -nE 's/^Closed: tree:[0-9a-f]+ head:([0-9a-f]+) .*/\1/p' "$card" | tail -n 1)"
     base="$(sed -nE 's/^<!-- card v4 .* base: ([0-9a-f]{7,40}) .*/\1/p' "$card" | head -n 1)"
     ts="$(awk -F'\t' '$2 == "CLOSE" {t = $1} END {print t}' "${card%card.md}donelog" 2>/dev/null || true)"
     [ -n "$head" ] && [ -n "$base" ] && t0="$(epoch "$ts")" || continue
-    files="$(git -C "$ROOT" diff --name-only --no-renames "$base" "$head" -- . ':(exclude).ai_context' ':(exclude).claude' 2>/dev/null)" || continue
-    [ -n "$files" ] || continue
     fl=()
-    while IFS= read -r f; do fl+=("$f"); done <<<"$files"
-    GIT_LITERAL_PATHSPECS=1 git -C "$ROOT" log --since="@$t0" --until="@$((t0 + 30 * 86400))" \
+    while IFS= read -r -d '' f; do fl+=("$f"); done < <(git -C "$ROOT" -c core.quotePath=false diff --name-only -z --no-renames \
+      "$base" "$head" -- . ':(exclude).ai_context' ':(exclude).claude' 2>/dev/null)
+    [ "${#fl[@]}" -gt 0 ] || continue
+    own="$(own_patches "$base" "$head")"
+    GIT_LITERAL_PATHSPECS=1 git -C "$ROOT" -c core.quotePath=false log --since="@$t0" --until="@$((t0 + 30 * 86400))" \
         --format='%x01%H %cs %s' --name-only HEAD -- "${fl[@]}" 2>/dev/null |
       awk -v s="$s" -v known="$known" '
         function fixlike(t,   l) { l = tolower(t)
@@ -331,12 +416,18 @@ fix_candidates() {
         function flush() {
           if (sha != "" && fixlike(subj) && index(known, " " substr(sha, 1, 7) " ") == 0) {
             gsub(/\|/, "/", subj); if (length(subj) > 60) subj = substr(subj, 1, 57) "..."
-            printf "FC|%s|%s|%s|%s|%d\n", s, substr(sha, 1, 7), dt, subj, nf }
+            printf "%s FC|%s|%s|%s|%s|%d\n", sha, s, substr(sha, 1, 7), dt, subj, nf }
           sha = "" }
         /^\001/ { flush(); h = substr($0, 2); i = index(h, " "); sha = substr(h, 1, i - 1)
                   dt = substr(h, i + 1, 10); subj = substr(h, i + 12); nf = 0; next }
         NF { nf++ }
-        END { flush() }' || true
+        END { flush() }' |
+      while IFS=' ' read -r c f; do
+        pid="$(git -C "$ROOT" show --format= "$c" -- . ':(exclude).ai_context' ':(exclude).claude' 2>/dev/null |
+               git -C "$ROOT" patch-id --stable 2>/dev/null | cut -d' ' -f1)" || pid=""
+        case "$own" in *" ${pid:-none} "*) continue ;; esac
+        printf '%s\n' "$f"
+      done || true
   done
   return 0
 }
@@ -362,6 +453,13 @@ function vof(s) { return (s in slug2ver) ? slug2ver[s] : stamp }   # in-flight t
 function per_slug(a,   k, n, i, o) { n = sortkeys(a, k); o = ""
   for (i = 1; i <= n; i++) if (a[k[i]] > 0) o = o (o == "" ? "" : " ") k[i] ":" a[k[i]]
   return o }
+# A phase bucket: its total, then every finder that put rows in it (so the
+# parts always add up), the finder enum first.
+function bucket(b, tot,   i, n, o, k, f) {
+  o = ""; n = split("checker codex human production post-close-review fix-commit", F, " ")
+  for (i = 1; i <= n; i++) { f = F[i]; seen_f[f] = 1; if (by[b, f] > 0) o = o (o == "" ? "" : ", ") f " " by[b, f] }
+  for (k in by) { split(k, P, SUBSEP); if (P[1] == b && !(P[2] in seen_f) && by[k] > 0) o = o (o == "" ? "" : ", ") P[2] " " by[k] }
+  return tot (o == "" ? "" : " (" o ")") }
 
 $1=="SB" {
   n++; src=$2; slug=$4; sl=$5; bl=$6; st=$7; cx=$8; iv=$9; dur=$10; out=$11; h=$12
@@ -381,6 +479,7 @@ $1=="CARD" { s=$2; ncard++; card[s]=1
   m=split($5, X, " "); for (i=1;i<=m;i++) xev[++nxev]="tasks/" s "/ " X[i]
   if ($3==1 && $4==0) clw[++nclw]="tasks/" s "/" }
 $1=="RL" { nrl++; r_n+=$3; r_ok+=$4; r_ns+=$5; r_bl+=$6; r_rf+=$7 }
+$1=="DR" { ndr=$2 }
 $1=="DF" {
   ndf++; f_s[ndf]=$3; f_fi[ndf]=$5; f_ph[ndf]=$6; f_sev[ndf]=$7; f_n[ndf]=(isnum($8) ? $8+0 : 0)
   if ($5!="checker" && $5!="codex" && $5!="human" && $5!="production" && $5!="post-close-review" && $5!="fix-commit")
@@ -408,10 +507,10 @@ END {
   for (i=1;i<=ndf;i++) {
     if (f_sev[i]=="none") continue
     v=(f_s[i]=="-" ? stamp : vof(f_s[i])); ver_seen[v]=1; k=f_n[i]; sev_n[f_sev[i]]+=k
-    if (f_ph[i]=="pre-done") { pre_ver[v]+=k; pre+=k; pre_by[f_fi[i]]+=k }
-    else if (f_ph[i]=="post-done") { pd_ver[v]+=k; pd+=k }
-    else if (f_ph[i]=="post-close") { pc_ver[v]+=k; pc+=k; pc_by[f_fi[i]]+=k }
-    else notask+=k
+    if (f_ph[i]=="pre-done") { pre_ver[v]+=k; pre+=k; by["pre", f_fi[i]]+=k }
+    else if (f_ph[i]=="post-done") { pd_ver[v]+=k; pd+=k; by["pd", f_fi[i]]+=k }
+    else if (f_ph[i]=="post-close") { pc_ver[v]+=k; pc+=k; by["pc", f_fi[i]]+=k }
+    else { notask+=k; by["out", f_fi[i]]+=k }
   }
 
   if (mode=="csv") {
@@ -461,12 +560,12 @@ END {
     printf "duration_min median: %s · slices median: %s · codex runs median: %s · interventions median: %s\n", \
       median(du_all, du_n+0), median(sl_all, sl_n+0), median(cx_all, cx_n+0), median(iv_all, iv_n+0)
   }
-  if (ndf>0 || nfc>0) {
+  if (ndf>0 || nfc>0 || ndr>0) {
     print "== defects"
-    printf "pre-done: %d (checker %d, codex %d) · post-done: %d · post-close: %d (human %d, production %d, post-close-review %d, fix-commit %d)%s\n", \
-      pre, pre_by["checker"], pre_by["codex"], pd, pc, pc_by["human"], pc_by["production"], pc_by["post-close-review"], pc_by["fix-commit"], \
-      (notask>0 ? sprintf(" · outside a task: %d", notask) : "")
-    printf "by severity: blocker %d · major %d · minor %d · unrated %d\n", sev_n["blocker"], sev_n["major"], sev_n["minor"], sev_n["unrated"]
+    printf "pre-done: %s · post-done: %s · post-close: %s%s\n", bucket("pre", pre+0), bucket("pd", pd+0), bucket("pc", pc+0), \
+      (notask>0 ? " · outside a task: " bucket("out", notask+0) : "")
+    printf "by severity: blocker %d · major %d · minor %d · unrated %d%s\n", sev_n["blocker"], sev_n["major"], sev_n["minor"], sev_n["unrated"], \
+      (ndr>0 ? sprintf(" · retracted rows: %d (not counted)", ndr) : "")
     for (i=1;i<=nfc && i<=10;i++) print "defect candidate: " fc[i]
     if (nfc>10) print "(+" nfc-10 " more)"
   }
@@ -510,6 +609,7 @@ paths .
 case "${1:-}" in
   --defect) shift; do_defect "$@"; exit 0 ;;
   --defect-dismiss) shift; do_dismiss "$@"; exit 0 ;;
+  --defect-retract) shift; do_retract "$@"; exit 0 ;;
 esac
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -520,7 +620,7 @@ while [ $# -gt 0 ]; do
     --outcome)
       [ $# -ge 2 ] || die 1 "--outcome needs success|failed|abandoned"
       OUTCOME="$2"; shift ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
     -*) die 1 "unknown option $1" ;;
     *) ROOT="$1" ;;
   esac
@@ -528,7 +628,7 @@ while [ $# -gt 0 ]; do
 done
 [ -d "$ROOT" ] || die 1 "no such directory: $ROOT"
 paths "$ROOT"
-case "$MODE" in row|tripwire) slug_ok "$SLUG" || die 1 "--$MODE: '$SLUG' is not a task slug" ;; esac
+case "$MODE" in row|tripwire) slug_ok "$SLUG" || die 1 "--$MODE: '$SLUG' is not a task slug (no /, .., whitespace)" ;; esac
 [ -z "$OUTCOME" ] || [ "$MODE" = row ] || die 1 "--outcome goes with --row"
 [ -z "$OUTCOME" ] || [[ "$OUTCOME" =~ ^(success|failed|abandoned)$ ]] || die 1 "--outcome '$OUTCOME' is not one of success|failed|abandoned"
 case "$MODE" in

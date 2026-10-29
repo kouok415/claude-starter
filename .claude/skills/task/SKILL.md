@@ -43,8 +43,8 @@ and runs nothing. The checker never sees the executor's report.
    cost and cheaper options — unattended too.
 8. Tag each decision `[human]`, `[inferred]`, `[own]`, or `[ASSUMED]` (an
    intent call made without asking; `--auto` only).
-9. Clean tree first (commit, or ask whose changes they are); slug into
-   `tasks/CURRENT`; branch `task/<slug>` — never run a task on main.
+9. Clean tree first (commit, or ask whose changes they are); a kebab-case
+   ASCII slug into `tasks/CURRENT`; branch `task/<slug>` — never on main.
 
 ## 2 · Card (≤4 KB incl. room for ✓ suffixes) + notes.md
 

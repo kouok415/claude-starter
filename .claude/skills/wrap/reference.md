@@ -27,6 +27,10 @@ for it. Read the section your situation names.
   `bash scripts/harness-report.sh --row <slug> --outcome failed|abandoned`
   in step 2. Failed and dropped runs must reach the dataset too, or it is
   survivor-biased.
+- **A v3 task** (`CURRENT` names a task directory without `card.md`):
+  `--row` exits 3 and says so. Ask the human: finish it on
+  a `v3-final` checkout of the template, or abandon it (delete `CURRENT`).
+  Never write a v4 row for it.
 - **Task unfinished:** leave `CURRENT`; state.md Now/Next names the `[~]`
   slice and its last donelog row so the next session resumes cold. Card
   over 4 KB or `notes.md` over 16 KB → distill now: one line per entry,
@@ -65,6 +69,7 @@ One row per real mechanism incident (hooks, `/task` machinery, `/setup`,
 `setup|task|wrap|hooks|sync|skills|other`, `severity` one of
 `blocker|friction|papercut`, `summary` a single comma-free clause, `ref` a
 journal file / `tasks/<slug>/donelog` / `-`, `harness` the ref after
-`claude-starter@` on the last line of `.claude/.starter-version`. Never
+`claude-starter@` on the last `spawned-by:`/`synced-to:` line of
+`.claude/.starter-version` (`partial-sync:` lines name none). Never
 duplicate BLOCK, STUCK, ESCALATE or GATE-ERROR events — the donelog records
 those; the report joins them.
