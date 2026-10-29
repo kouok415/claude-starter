@@ -63,6 +63,8 @@
 ## Long-horizon tasks
 
 - Research sprints expected to exceed ~30 minutes of autonomous work go
-  through `/task <description>` — milestones gate on **artifact checks**
-  (`test -s reports/x.md`, section counts, source counts), not test suites.
-- Work happens on a `task/<slug>` branch; every passed gate is a commit.
+  through `/task <description>` — a lane is a wrapper that rebuilds or
+  re-checks the report and prints its source count as an `expect` marker;
+  its canary feeds a broken source and must go red (`test -s` is refused).
+- Work happens on a `task/<slug>` branch from a clean tree; a slice is done
+  only when `bash scripts/evidence.sh done S<n>` accepts it.

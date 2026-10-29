@@ -69,8 +69,11 @@ Verify and DoD; those two carry the intent everything downstream enforces.
    commit. Never add `disable-model-invocation`.
 4. Declare lanes in `.claude/done-lanes` (≤3; format and recipes:
    `.claude/skills/task/reference.md` §Lanes): `smoke` runs the Verify
-   command; each slow path (VM, full backtest, remote target) is its own
-   lane. Add `@pair codex|off` from the interview and
+   command on paths `.` (the whole repo, so doc and config edits are
+   proven too); each slow path (VM, full backtest, remote target) is its
+   own lane naming its own paths. A run must leave no untracked, unignored
+   file inside its paths: gitignore the caches it writes. Add
+   `@pair codex|off` from the interview and
    `@verify-paths <dirs holding test or probe code>`.
 5. Trust each lane: `bash scripts/evidence.sh trust <lane>` — the human
    approves the prompt and the canary must go red. A refusal (static

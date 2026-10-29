@@ -1,4 +1,4 @@
-<!-- schema: v3 -->
+<!-- schema: v4 -->
 <!-- Meta-registry only, ≤4 KB (injected every session). Per-file writing
      rules live in §Writing protocol below. -->
 
@@ -11,9 +11,10 @@ auto-injected at every session start (hooks); read the rest **on-demand**:
 |---|---|
 | Design choice, picking between options, dependency pick | `decisions.md` (check existing ADRs first) |
 | Domain reference needed (contracts, conventions, terms) | the matching `knowledge/*.md` (create on demand, add a row here) |
+| Starting work in an area | grep `knowledge/lessons/` for its symptoms |
 | Past event, debate, retro, specific date | search `journal/YYYY-MM-DD-*.md` |
 | Sensitive scratch, local-only notes | `private/` |
-| Active `/task` (`tasks/CURRENT` exists) | that task's `brief.md` + `plan.md` + `lessons.md` (auto-injected too) |
+| Active `/task` (`tasks/CURRENT` names it) | its `card.md` (injected); `notes.md` only at the § a slice cites; `bash scripts/evidence.sh status` |
 
 Don't warm up on `journal/` or `knowledge/` — they exist for retrieval.
 Procedural knowledge (runbooks, how-tos) belongs in a skill
@@ -26,17 +27,15 @@ Procedural knowledge (runbooks, how-tos) belongs in a skill
 | `state.md` | overwrite; reflects *now* only; ≤5 KB (S7) |
 | `decisions.md` | append-only ADRs; never edit existing entries |
 | `knowledge/*.md` | accumulate; create on demand (no empty stubs), add a row above |
+| `knowledge/lessons/*.md` | one lesson per file (symptom, cause, applies when); update the match, never add a twin |
 | `journal/*.md` | append-only; one file per event; first line = one-sentence summary |
-| `tasks/<slug>/spec.md` | frozen once the plan is approved (reframer rung-4 patches excepted — note in lessons); §Assumptions alone stays append-only during the run |
-| `tasks/<slug>/plan.md` | statuses updated at every transition; exactly one `[in_progress]` |
-| `tasks/<slug>/brief.md` | scout-written map; others append dated corrections; ≤4 KB |
-| `tasks/<slug>/lessons.md` | append-only; one line per lesson; ≤4 KB |
-| `tasks/<slug>/gatelog` | hook-written only, never hand-edited |
-| `tasks/<slug>/spawnlog` | hook-written only, never hand-edited |
-| `tasks/<slug>/pair/*` | pair-codex mailbox: packets + ledger by the orchestrator, results by the judge; `runlog` script-written only |
-| `tasks/<slug>/STATUS.md` | view, not memory: machine region hook-regenerated; model writes §Architecture only; gitignored |
-| `scoreboard.csv` | append-only (A/B dataset); corrections are appended, never edited |
+| `tasks/<slug>/card.md` | task contract, ≤4 KB; `[x]` and `Closed:` only by `scripts/evidence.sh`; other edits need `evidence.sh approve` again |
+| `tasks/<slug>/notes.md` | facts, not plans (`## Rulings`, `## Measured`, `## Tried`, `## Calls`, `## S<n>`); never injected; ≤16 KB |
+| `tasks/<slug>/donelog` | hook/script-written only; append-only |
+| `tasks/<slug>/pair/*` | pair-codex mailbox: packets + `runlog` by `task-pair.sh`, results by the judge; run state in `.claude/evidence/pair/<slug>/` |
+| `scoreboard-v4.csv`, `defects.csv` | append-only; rows from `harness-report.sh`, never recalled; corrections appended (v3 `scoreboard.csv`: read-only) |
 | `private/*` | free-form; gitignored |
+| `.claude/evidence/` (repo root) | run records + lane logs; per machine; gitignored; `scripts/evidence.sh` and hooks only |
 
 End significant sessions with `/wrap` — a reading protocol without
 write-back is half a loop. Teams with concurrent ADR writers: switch to
@@ -59,6 +58,6 @@ write-back is half a loop. Teams with concurrent ADR writers: switch to
 ## Mechanisms
 
 Every rule above is enforced mechanically where possible — session-start
-injection, Stop gates, pre-commit scans, permission denies. The mechanism
-map lives in **README.md §Prose → mechanism**. If you change a rule, change
-its mechanism too.
+injection, the evidence gate, pre-commit scans, permission denies. The
+mechanism map lives in **README.md §Prose → mechanism**. If you change a
+rule, change its mechanism too.

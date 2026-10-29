@@ -1,7 +1,5 @@
 # /task reference — formats and recipes
 
-Loaded on demand from SKILL.md pointers; never injected.
-
 ## Resume
 
 Last donelog row for the `[~]` slice → where to re-enter:
@@ -36,7 +34,7 @@ Over 16 KB: move narratives to `journal/`, keep the facts.
     # name | paths | min_secs | expect (; separated, all must match) | canary | cmd
     @pair codex
     @verify-paths tests/ probes/
-    smoke | scripts/ src/ | 4 | ^verify: [1-9][0-9]* passed, 0 failed$ | <cmd that must fail> | bash scripts/verify.sh
+    smoke | . | 4 | ^verify: [1-9][0-9]* passed, 0 failed$ | <cmd that must fail> | bash scripts/verify.sh
 
 1. A lane runs the product the way its user does. `trust` refuses static
    commands (`bash -n`, `--help`, `--list-*`, shellcheck, py_compile,
@@ -46,10 +44,12 @@ Over 16 KB: move narratives to `journal/`, keep the facts.
    count (rows, trades, files, requests) — never a bare exit 0.
 3. `canary` runs the check against a known-bad input or a reverted line
    and must fail; `skip:<reason>` needs a separate human yes.
-4. Idempotent: two runs, same verdict; leftovers (files, rows, caches)
-   read as stale to the next run. No push, deploy, paid call or order.
-5. The fast lane (minutes) is also the `verify` skill, which Claude Code
-   runs before each commit; slow lanes (VM, full backtest) stay separate.
+4. Idempotent; no push, deploy, paid call or order. A run leaves no untracked,
+   unignored file inside its paths (gitignore caches), or it is voided.
+5. `smoke` (minutes; paths `.`, so doc and config edits are proven too) is
+   also the `verify` skill Claude Code runs before each commit; slow lanes
+   (VM, full backtest) name their own paths. Every change in a task must lie
+   inside a cited lane's paths; after /wrap clears CURRENT nothing is checked.
 6. `@ext <lane> <cmd>` prints the external commit a lane ran against (a fork
    elsewhere); close compares it. A changed lane line, file its cmd/canary
    names, `@` line or `.claude/gitleaks.toml` → the human re-runs `trust`.

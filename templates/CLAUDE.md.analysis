@@ -54,6 +54,8 @@ metric). A number without a pinned definition is not a result.
 ## Long-horizon tasks
 
 - Multi-stage pipeline work (> ~30 min autonomous) goes through
-  `/task <description>` — milestone verify commands are pipeline slices
-  (one day / one symbol / one cohort) or output-schema checks.
-- Work happens on a `task/<slug>` branch; every passed gate is a commit.
+  `/task <description>` — lanes run a real pipeline slice (one day / one
+  symbol / one cohort), print its row count as an `expect` marker and go
+  red on a broken input (the canary); zero rows processed is unproven.
+- Work happens on a `task/<slug>` branch from a clean tree; a slice is done
+  only when `bash scripts/evidence.sh done S<n>` accepts it.
