@@ -25,6 +25,7 @@ ok()   { PASS=$((PASS+1)); echo "PASS: $*"; }
 no()   { FAIL=$((FAIL+1)); echo "FAIL: $*"; }
 skp()  { SKIP=$((SKIP+1)); echo "SKIP: $*"; }
 ck()   { local want="$1" got="$2"; shift 2; if [ "$want" = "$got" ]; then ok "$*"; else no "$* (want rc=$want got rc=$got)"; fi; }
+tick() { python3 -I -c 'import time; time.sleep(1.02 - time.time() % 1)'; }   # to just past the next wall-clock second: a later whole-second UTC stamp
 
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK" "/tmp/pair-${H8:-none}-pdemo" "${TMPDIR:-/tmp}"/claude-setup-nudge-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-red-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-stuck-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-line-tsuite-* "${TMPDIR:-/tmp}"/claude-gate-v3note-tsuite-* "$REPO/.secrets/l2-seeded-fake-cred.tmp" "$REPO/l2-seeded-untracked.tmp" ; }
@@ -43,19 +44,23 @@ mkproj() { # $1 = dir: git repo on task/demo, evidence.sh and what it reads, fix
   git -C "$d" init -q -b task/demo 2>/dev/null || { git -C "$d" init -q && git -C "$d" checkout -qb task/demo; }
   printf '# ok\n## Commands\n- Test: `true`\n' > "$d/CLAUDE.md"; echo a > "$d/src/a.txt"
   # src/mode picks the behaviour; absent = pass (with a coverage line for LANE_MULTI)
+  # tick: sleep to just past the next wall-clock second. evidence.sh counts whole
+  # seconds (bash SECONDS steps on the wall clock), so the run still counts >= 1 s
+  # (min_secs 1) without sleeping a full second.
   cat > "$d/scripts/verify.sh" <<'EOF'
 #!/usr/bin/env bash
+tick() { python3 -I -c 'import time; time.sleep(1.02 - time.time() % 1)'; }
 n="$(ls src | wc -l | tr -d ' ')"
 case "$(cat src/mode 2>/dev/null)" in
   broken) echo "verify: 0 passed, 1 failed"; exit 1 ;;
-  exit1) sleep 1; echo "verify: $n passed, 0 failed"; exit 1 ;;
-  zero) sleep 1; echo "verify: 0 passed, 0 failed"; echo "coverage: ok" ;;
-  partial) sleep 1; echo "verify: $n passed, 0 failed" ;;
-  mutate) sleep 1; echo x >> src/b.txt; echo "verify: $n passed, 0 failed" ;;
-  leak) sleep 1; cat src/emit.txt; echo "verify: $n passed, 0 failed" ;;
-  skips) sleep 1; echo "verify: $n passed, 0 failed"; echo "3 skipped" ;;
-  slow) sleep 3; echo "verify: $n passed, 0 failed" ;;
-  *) sleep 1; echo "verify: $n passed, 0 failed"; echo "coverage: ok" ;;
+  exit1) tick; echo "verify: $n passed, 0 failed"; exit 1 ;;
+  zero) tick; echo "verify: 0 passed, 0 failed"; echo "coverage: ok" ;;
+  partial) tick; echo "verify: $n passed, 0 failed" ;;
+  mutate) tick; echo x >> src/b.txt; echo "verify: $n passed, 0 failed" ;;
+  leak) tick; cat src/emit.txt; echo "verify: $n passed, 0 failed" ;;
+  skips) tick; echo "verify: $n passed, 0 failed"; echo "3 skipped" ;;
+  slow) sleep 2; echo "verify: $n passed, 0 failed" ;;
+  *) tick; echo "verify: $n passed, 0 failed"; echo "coverage: ok" ;;
 esac
 EOF
   printf '#!/usr/bin/env bash\necho "verify: 0 passed, 1 failed"; exit 1\n' > "$d/scripts/canary.sh"
@@ -73,7 +78,9 @@ mkcard() { # $1 dir, $2 slug, $3 pair (codex|off), then slice lines; also points
     echo 'Decisions: [human] use smoke ; [own] fixture only'; echo '## Slices'; printf '%s\n' "$@"; } > "$d/.ai_context/tasks/$s/card.md"
   echo "$s" > "$d/.ai_context/tasks/CURRENT"
 }
-ev() { local d="$1"; shift; ( cd "$d" && PATH="${EVPATH:-$PATH}" bash scripts/evidence.sh "$@" ) >"$WORK/ev.out" 2>"$WORK/ev.err"; echo $?; }
+# EVPATH: the PATH evidence.sh runs with — by default the fast fake gitleaks first (mkfakes);
+# EVPATH="$PATH" for the real scanner, "$WORK/nogl-bin" for none.
+ev() { local d="$1"; shift; ( cd "$d" && PATH="${EVPATH:-$WORK/fakebin:$PATH}" bash scripts/evidence.sh "$@" ) >"$WORK/ev.out" 2>"$WORK/ev.err"; echo $?; }
 rep() { # checker report (I-5): claim lines (default one VERIFIED), then the verdict line
   local u="$1" v="$2"; shift 2; [ $# -gt 0 ] || set -- 'VERIFIED (L4) fixture claim — bash scripts/verify.sh'
   printf '%s\n' "$@" "checker-verdict: $u $v"
@@ -83,14 +90,33 @@ dl7() { local f="$1/.ai_context/tasks/$2/donelog"; [ -s "$f" ] && awk -F'\t' 'NF
 lastid() { python3 -I -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["id"])' "$1/.claude/evidence/$2" 2>/dev/null; }
 cdig() { sed -e 's/^- \[[ ~ox]\] /- [ ] /' -e 's/ ✓ .*$//' -e '/^Closed:/d' "$1/.ai_context/tasks/$2/card.md" | sha256sum | cut -c1-12; }
 ready() { # $1 = dir: smoke trusted, card S1 [~] S2 [ ], approved, S1 started, run, checked and done
-  mkproj "$1"; mklanes "$1" "$LANE_SMOKE"; ev "$1" trust smoke >/dev/null
-  mkcard "$1" demo off '- [~] S1 first — lanes: smoke ; codex: no' '- [ ] S2 second — lanes: smoke ; codex: no'
-  ev "$1" approve >/dev/null; ev "$1" start S1 >/dev/null; ev "$1" run smoke >/dev/null
-  rep S1 pass | ev "$1" check S1 --agent fx --source human >/dev/null; ev "$1" "done" S1 >/dev/null
+  # Built once (the same steps every time), then copied with its times; nothing in it names its own path.
+  local r="$WORK/ready0"
+  if [ ! -d "$r" ]; then
+    mkproj "$r"; mklanes "$r" "$LANE_SMOKE"; ev "$r" trust smoke >/dev/null
+    mkcard "$r" demo off '- [~] S1 first — lanes: smoke ; codex: no' '- [ ] S2 second — lanes: smoke ; codex: no'
+    ev "$r" approve >/dev/null; ev "$r" start S1 >/dev/null; ev "$r" run smoke >/dev/null
+    rep S1 pass | ev "$r" check S1 --agent fx --source human >/dev/null; ev "$r" "done" S1 >/dev/null
+  fi
+  cp -Rp "$r" "$1"
 }
-mkfakes() { # a fake gitleaks (FAKE-LEAK-0123 fires rule fake-leak), a PATH without gitleaks, evidence.sh stubs for the gate's fail-open paths
+mkfakes() { # a fast fake gitleaks, a PATH without gitleaks, evidence.sh stubs for the gate's fail-open paths
   mkdir -p "$WORK/fakebin" "$WORK/nogl-bin"
-  printf '#!/usr/bin/env bash\n[ "$1" = help ] && exit 0\nf="$2"; [ "$1" = detect ] && f="$4"\ngrep -q FAKE-LEAK-0123 "$f" && { echo "RuleID:      fake-leak"; exit 1; }\nexit 0\n' > "$WORK/fakebin/gitleaks"
+  # The fake stands in where the scanner is not under test (a real gitleaks scan costs ~0.7 s;
+  # L1-25, L1-26, L1-47 M5 and L2-2 keep the real one where it is installed): FAKE-LEAK-0123
+  # fires rule fake-leak; the -c config's internal-ipv4 rule fires through the wrapper's own
+  # gitleaks-free path, whose agreement with gitleaks L1-25 asserts.
+  cat > "$WORK/fakebin/gitleaks" <<EOF
+#!/usr/bin/env bash
+case "\$1" in help) exit 0 ;; dir) f="\$2" ;; detect) f="\$4" ;; *) echo "fake gitleaks: \$1 unsupported" >&2; exit 2 ;; esac
+c=""; while [ \$# -gt 0 ]; do [ "\$1" = -c ] && c="\$2"; shift; done
+h=0; grep -q FAKE-LEAK-0123 "\$f" && { echo "RuleID:      fake-leak"; h=1; }
+if [ -n "\$c" ]; then
+  o="\$(PATH="$WORK/nogl-bin" bash "\${c%/.claude/gitleaks.toml}/scripts/precommit-gitleaks.sh" --scan-file "\$f" 2>/dev/null)"; r=\$?
+  case "\$r:\$o" in 3:) ;; 1:internal-ipv4) echo "RuleID:      internal-ipv4"; h=1 ;; *) exit 2 ;; esac
+fi
+exit \$h
+EOF
   chmod +x "$WORK/fakebin/gitleaks"
   for b in bash sh grep sed awk date tr cat rm mv mkdir wc head tail dirname env python3 sha256sum cut sort find stat touch ls kill ps timeout git mktemp chmod cmp cp sleep; do
     p="$(command -v "$b" 2>/dev/null)" && [ -n "$p" ] && ln -sf "$p" "$WORK/nogl-bin/$b" 2>/dev/null
@@ -238,7 +264,7 @@ mklanes "$P" "$LANE_SMOKE" "$LANE_MULTI" 'fork | src/ | 1 | ^verify: [0-9]+ pass
 { [ "$rc" = 3 ] && grep -qF 'RUN REFUSED — lane fork: never trusted' "$WORK/ev.err" && [ ! -e "$P/.claude/evidence/fork.jsonl" ]; } && ok "an untrusted lane never runs" || no "untrusted lane ran (rc=$rc)"
 mklanes "$P" "${LANE_SMOKE/%verify.sh/verify.sh --again}" "$LANE_MULTI"; rc=$(ev "$P" run smoke); mklanes "$P" "$LANE_SMOKE" "$LANE_MULTI"
 { [ "$rc" = 3 ] && grep -qF 'command changed since trust' "$WORK/ev.err"; } && ok "a changed command is refused until re-trusted" || no "changed command ran (rc=$rc)"
-rc=$(ev "$P" run smoke); { [ "$rc" = 0 ] && grep -q '^evidence: smoke PASS id=' "$WORK/ev.out"; } && ok "run smoke passes" || no "run smoke failed (rc=$rc): $(head -c 300 "$WORK/ev.out")"
+rc=$(EVPATH="$PATH" ev "$P" run smoke); { [ "$rc" = 0 ] && grep -q '^evidence: smoke PASS id=' "$WORK/ev.out"; } && ok "run smoke passes" || no "run smoke failed (rc=$rc): $(head -c 300 "$WORK/ev.out")"   # the real gitleaks, where installed
 python3 -I - "$PL" "$TS_RE" <<'PY' && ok "lane record: 20 keys in order (id first, markers last), UTC started" || no "lane record keys or started wrong"
 import json, re, sys
 r = json.loads(open(sys.argv[1]).read().splitlines()[-1])
@@ -273,8 +299,8 @@ echo leak > "$P/src/mode"; echo 'token FAKE-LEAK-0123' > "$P/src/emit.txt"; rc=$
 { [ "$(jf smoke.jsonl scan)" = hit:fake-leak ] && [ "$(jf smoke.jsonl why)" = leak:fake-leak ] && [ "$(jf smoke.jsonl markers)" = "['withheld: scan hit']" ]; } && ok "a secret in the log fails the run and withholds the markers" || no "secret scan not applied (rc=$rc, scan=$(jf smoke.jsonl scan))"
 printf 'connect 10.%s.30.40:443\n' 20 > "$P/src/emit.txt"; EVPATH="$WORK/nogl-bin" ev "$P" run smoke >/dev/null
 [ "$(jf smoke.jsonl scan)" = hit:internal-ipv4 ] && ok "without gitleaks an internal IP still fails the run" || no "ERE scan missed the IP: scan=$(jf smoke.jsonl scan)"
-echo slow > "$P/src/mode"; ( cd "$P" && bash scripts/evidence.sh run smoke >/dev/null 2>&1 ) & bgp=$!; sleep 1
-LK="$P/.claude/evidence/locks/run-smoke.lock"
+LK="$P/.claude/evidence/locks/run-smoke.lock"; echo slow > "$P/src/mode"; ( cd "$P" && PATH="$WORK/fakebin:$PATH" bash scripts/evidence.sh run smoke >/dev/null 2>&1 ) & bgp=$!
+for _ in $(seq 1 100); do [ -s "$LK" ] && break; sleep 0.05; done
 { [ -f "$LK" ] && kill -0 "$(cut -f1 "$LK")" 2>/dev/null && [ "$(cut -f2-3 "$LK")" = "run	smoke" ] && cut -f5 "$LK" | grep -Eq "$TS_RE"; } && ok "a running lane holds a pid lock (pid, run, lane, slice, UTC)" || no "run lock missing or malformed: $(cat "$LK" 2>/dev/null)"
 rc=$(ev "$P" run smoke); { [ "$rc" = 4 ] && grep -qF 'is already running (pid' "$WORK/ev.err"; } && ok "a second run of a running lane is refused (exit 4)" || no "concurrent run not refused (rc=$rc)"
 wait "$bgp"; [ ! -e "$LK" ] && ok "the lock goes when the run ends" || no "lock left behind"
@@ -1350,7 +1376,7 @@ rep S1 pass | ev "$P" check S1 --agent fx --source human >/dev/null; ev "$P" "do
 mkcard "$P" taskb off '- [~] S1 first — lanes: smoke ; codex: no'; ev "$P" approve >/dev/null; ev "$P" start S1 >/dev/null; ev "$P" run smoke >/dev/null; rc=$(ev "$P" "done" S1)
 { [ "$rc" = 1 ] && grep -qF 'no checker record for S1' "$WORK/ev.out"; } && ok "#4 task B cannot use task A's checker record for its own S1" || no "#4 cross-task check (rc=$rc): $(head -c 300 "$WORK/ev.out")"
 echo broken > "$P/src/mode"; for _ in 1 2 3; do ev "$P" run smoke >/dev/null; done; rc=$(ev "$P" run smoke)
-mkcard "$P" taskc off '- [~] S1 first — lanes: smoke ; codex: no'; sleep 1; ev "$P" approve >/dev/null; ev "$P" start S1 >/dev/null; rc2=$(ev "$P" run smoke); rm -f "$P/src/mode"
+mkcard "$P" taskc off '- [~] S1 first — lanes: smoke ; codex: no'; tick; ev "$P" approve >/dev/null; ev "$P" start S1 >/dev/null; rc2=$(ev "$P" run smoke); rm -f "$P/src/mode"
 { [ "$rc" = 5 ] && [ "$rc2" = 1 ] && [ "$(dl "$P" taskc ESCALATE)" = 0 ]; } && ok "#16 three fails on task B's S1 do not ESCALATE task C's S1" || no "#16 ESCALATE scope: B rc=$rc C rc=$rc2 rows=$(dl "$P" taskc ESCALATE)"
 
 # #5 E/E2/X, #18 RUNHDR — a codex record approves only what Codex was shown
@@ -2041,7 +2067,7 @@ CD="$PD/.ai_context/tasks/pdemo"; PKD="$CD/pair"; RL="$PKD/runlog"
 mkdir -p "$PD/scripts" "$PD/.claude/hooks" "$PKD" "$FK/bin" "$FK/codex-home" "$FK/empty-home" "$FK/state"
 cp "$REPO/scripts/task-pair.sh" "$REPO/scripts/precommit-gitleaks.sh" "$PD/scripts/"; cp "$REPO/.claude/hooks/guard-patterns.sh" "$REPO/.claude/gitleaks.toml" "$PD/.claude/hooks/"
 mv "$PD/.claude/hooks/gitleaks.toml" "$PD/.claude/"   # the real evidence.sh (L1-44) hashes it with the lane directives
-cp "$REPO/tests/fake-herdr.sh" "$FK/bin/herdr"; chmod +x "$FK/bin/herdr"
+cp "$REPO/tests/fake-herdr.sh" "$FK/bin/herdr"; chmod +x "$FK/bin/herdr"; cp "$WORK/fakebin/gitleaks" "$FK/bin/"   # task-pair.sh scans results and screens (M5 keeps the real gitleaks)
 cat > "$PD/scripts/evidence.sh" <<'EOF'
 #!/usr/bin/env bash
 # L1-23 stub of scripts/evidence.sh: logs each call; codex appends a record in
@@ -2097,14 +2123,17 @@ mkpkt() { printf 'stage: %s\nunit: %s\nbase: %s\nscratch: /tmp/x/%s\n\n# packet 
 # tp <ENV=val ...> -- <task-pair args>: runs inside the fixture with the fake
 # herdr on PATH; stdout/stderr land in $FK/out and $FK/err, rc is echoed.
 # tp adds --over-estimate to send/check (transport tests send one unit many
-# times; the quota has its own block, L1-43, which uses tpn).
+# times; the quota has its own block, L1-43, which uses tpn). The fake herdr
+# answers at once, so task-pair.sh's pauses between two looks at the judge
+# shrink (TASK_PAIR_POLL_S, TASK_PAIR_NEW_POLL_S; a test can pass its own).
 tpx() {
   local flag="$1" envs=(); shift
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
   if [ "$flag" = 1 ]; then case "${1:-}" in send|check) set -- "$@" --over-estimate ;; esac; fi
   ( cd "$PD" && env HERDR_ENV=1 PATH="$FK/bin:$PATH" CODEX_HOME="$FK/codex-home" \
       FAKE_HERDR_LOG="$FK/herdr.log" FAKE_HERDR_STATE="$FK/state" \
-      FAKE_EVIDENCE_LOG="$FK/evidence.log" FAKE_EVIDENCE_LANELOG="$FK/lane.log" TASK_PAIR_START_GRACE_S=1 TASK_PAIR_NEW_WAIT_S=3 "${envs[@]}" \
+      FAKE_EVIDENCE_LOG="$FK/evidence.log" FAKE_EVIDENCE_LANELOG="$FK/lane.log" TASK_PAIR_START_GRACE_S=1 TASK_PAIR_NEW_WAIT_S=3 \
+      TASK_PAIR_POLL_S=0.05 TASK_PAIR_NEW_POLL_S=0.05 "${envs[@]}" \
       bash scripts/task-pair.sh "$@" ) >"$FK/out${TPSFX:-}" 2>"$FK/err${TPSFX:-}"; echo $?
 }
 tp() { tpx 1 "$@"; }
@@ -2113,6 +2142,11 @@ prompts() { grep '^agent prompt' "$FK/herdr.log" 2>/dev/null | grep -vc ' /new$'
 no_verdict_printed() { ! grep -q 'PASS\|FAIL' "$FK/out" "$FK/err"; }
 recs() { grep -c "^codex [^ ]*/$1-" "$FK/evidence.log" 2>/dev/null; }   # records handed to evidence.sh for seq $1
 nfiles() { find "$PKD" -maxdepth 1 -name '*.md' | wc -l | tr -d ' '; }
+# pair/ is tracked: a real project commits it with the work. The fixture stages it between
+# scenarios (never before a commit that should not take it along), so fingerprint() reads the
+# old packets and results through git status/diff instead of hashing each untracked file in its
+# shell loop (hundreds by L1-47); what a run adds stays untracked.
+pstage() { git -C "$PD" add -A -- "$PKD"; }
 
 # --- refusals happen before any herdr call --------------------------------
 pcard off; plane off
@@ -2364,6 +2398,7 @@ rc=$(tp FAKE_EVIDENCE_FLAGGED=1 -- packet slice S2); pk="$(cat "$FK/out")"
 n0=$(nfiles); rc=$(tp FAKE_EVIDENCE_NOREC=1 -- packet slice S2)
 { [ "$rc" = 3 ] && [ "$(nfiles)" = "$n0" ]; } && ok "packet: a lane with no evidence record is refused (3), no file left" || no "no-record lane (rc=$rc)"
 git -C "$PD" checkout -qb side; git -C "$PD" commit -q --allow-empty -m side; SIDE="$(git -C "$PD" rev-parse HEAD)"; git -C "$PD" checkout -q -
+pstage   # after the side commit: it would take what is staged along
 rc=$(tp -- packet slice S2 --since "$SIDE"); ck 2 "$rc" "packet: --since that is not an ancestor of HEAD is refused"
 rc=$(tp -- packet slice S2 --since "$HD"); { [ "$rc" = 3 ] && grep -q 'binds the review only to that' "$FK/err"; } && ok "packet: --since other than the START head is refused — evidence.sh would not bind it" || no "foreign --since accepted (rc=$rc)"
 echo 'echo changed' >> "$PD/t.sh"; n0=$(nfiles); rc=$(tp -- packet slice S2); git -C "$PD" checkout -q t.sh
@@ -2437,6 +2472,7 @@ rc=$(tp -- ensure); { [ "$rc" = 0 ] && grep '^agent start' "$FK/herdr.log" | gre
 git -C "$PD" checkout -q CLAUDE.md; rm -f "$FK/state/agent" "$EVD/judge"; tp -- ensure >/dev/null
 
 echo "=== L1-40 · the six-line result contract (v4)"
+pstage
 vr() { local pk; pk=$(mkpkt "$1" slice S2 "$HD"); tp FAKE_HERDR_PROMPT="$2" -- send "$pk"; }   # $1 seq, $2 fake variant -> rc
 rc=$(vr 101 run_failed); ck 6 "$rc" "run: failed is no result (6), never exit 0"
 grep -q "	101	end:failed	.*	judge_run_failed$" "$RL" && ok "runlog: judge_run_failed" || no "judge_run_failed row missing: $(grep '	101	end' "$RL")"
@@ -2455,6 +2491,7 @@ done
 [ -z "$miss" ] && ok "every no-verdict run is recorded as failed with its reason" || no "no-verdict records missing or wrong for:$miss"
 
 echo "=== L1-41 · judge scratch stays out of the mailbox (v4)"
+pstage
 rc=$(vr 121 scratch_in_mailbox); ck 6 "$rc" "a judge that wrote scratch into pair/ voids its run (scratch_in_mailbox)"
 { grep -q "	121	end:failed	.*	scratch_in_mailbox$" "$RL" && grep -q 'tmp-scratch/f' "$FK/err"; } && ok "runlog reason scratch_in_mailbox; stderr lists the stray path" || no "scratch_in_mailbox report: $(cat "$FK/err")"
 [ -d "/tmp/pair-$H8-pdemo/121" ] && ok "a failed run keeps its scratch dir for inspection" || no "failed run's scratch removed"
@@ -2473,6 +2510,7 @@ pk=$(mkpkt 124 slice S2 "$HD"); rc=$(tp FAKE_HERDR_PROMPT=tree_changed FAKE_HERD
 { [ "$rc" = 0 ] && grep -q "	124	end:completed	" "$RL"; } && ok "a defects.csv row appended while the judge runs leaves the run completed, not tree_changed" || no "defects.csv append voided the run (rc=$rc): $(grep '	124	end' "$RL")"
 
 echo "=== L1-42 · one run per task: the pair lock (v4, D3)"
+pstage
 LK="$PD/.claude/evidence/locks"; pre=$(prompts); pk2=$(mkpkt 132 slice S2 "$HD")   # written before: a new file in pair/ would void 131
 pk=$(mkpkt 131 slice S2 "$HD"); TPSFX=.bg tp FAKE_HERDR_SLEEP=3 -- send "$pk" > "$FK/rc.bg" & bgp=$!
 for _ in $(seq 1 60); do [ -s "$LK/pair-131.lock" ] && [ "$(prompts)" -gt "$pre" ] && break; sleep 0.1; done
@@ -2491,6 +2529,7 @@ pk=$(mkpkt 134 slice S2 "$HD"); rc=$(tp FAKE_HERDR_PROMPT=blocked -- send "$pk")
 rc=$(tp -- wait 134); ck 0 "$rc" "...and wait 134 settles it once the human answered"
 
 echo "=== L1-43 · Codex quota: what the human consented to (v4, U1)"
+pstage
 mv "$RL" "$FK/runlog.saved"; mv "$PD/.claude/evidence/codex.jsonl" "$FK/codex.saved"; pcard codex; papprove; n0="$(grep -c '^codex ' "$FK/evidence.log")"
 # A prompt that never became a turn (live attempt 1, 2026-10-28: typed into
 # the /new picker): idle at once, no result, counters still 0/0, no transcript.
@@ -2513,6 +2552,7 @@ r1=$(tpn -- check final); r2=$(tpn -- check final); r3=$(tpn -- check final); r4
 pcard codex; rm -f "$RL"; mv "$FK/runlog.saved" "$RL"; mv "$FK/codex.saved" "$PD/.claude/evidence/codex.jsonl"
 
 echo "=== L1-44 · task-pair.sh → the real evidence.sh: records, binding, digest parity (v4)"
+pstage
 cp "$PD/scripts/evidence.sh" "$FK/evidence-stub.sh"; cp "$EV" "$PD/scripts/evidence.sh"; pcard codex; plane on; papprove
 lrec() { python3 -I -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); print(*[r.get(k) for k in sys.argv[2:]])' "$PD/.claude/evidence/codex.jsonl" "$@" 2>/dev/null; }
 rc=$(tp HOME="$WORK" -- check card)
@@ -2549,7 +2589,7 @@ echo "=== L1-47 · pair review regressions (independent review of task-pair.sh a
 # One assertion group per finding; the finding id leads each message. The real
 # evidence.sh where the record decides (C1, M6), the committed stub elsewhere.
 usereal() { cp "$EV" "$PD/scripts/evidence.sh"; }; usestub() { cp "$FK/evidence-stub.sh" "$PD/scripts/evidence.sh"; }
-goal() { pcedit "s/^Goal: .*/Goal: $1/"; }   # new card content: a card check binds to the digest
+goal() { pcedit "s/^Goal: .*/Goal: $1/"; pstage; }   # new card content: a card check binds to the digest
 lastseq() { awk -F'\t' '$3 == "start" {s = $2} END {print s}' "$RL"; }
 dlr() { awk -F'\t' '$2 == "CODEX" {r = $7} END {print r}' "$CD/donelog"; }   # the last CODEX donelog row's result
 usestub; pcard codex; papprove; echo idle > "$FK/state/agent"; rm -f "$FK/state/screen" "$FK/state/run-screen"; : > "$FK/herdr.log"
@@ -2645,7 +2685,7 @@ pk=$(mkpkt 952 card card "$(pdig)"); rc=$(tp FAKE_HERDR_SCREEN="$FK/h3.cur" FAKE
 
 # M1 — a slow /new: the packet waits until the fresh thread shows
 goal m1; echo 5 > "$FK/state/turns"
-rc=$(tp FAKE_HERDR_NEW_DELAY=2 TASK_PAIR_NEW_WAIT_S=8 -- check card); s=$(lastseq)
+rc=$(tp FAKE_HERDR_NEW_DELAY=2 TASK_PAIR_NEW_WAIT_S=8 TASK_PAIR_NEW_POLL_S=0.25 -- check card); s=$(lastseq)   # 32 reads 0.25 s apart span the 2 s
 { [ "$rc" = 0 ] && grep -q "	$s	end:completed	" "$RL" && grep -q "	$s	start	.*	0/0	" "$RL"; } \
   && ok "M1 a /new that shows 2 s late: the packet waits for the fresh thread (start row at 0/0) and the run completes" || no "M1 slow /new (rc=$rc): $(grep "	$s	" "$RL")"
 
@@ -2682,7 +2722,8 @@ printf '%s\n' "$JN" > "$FK/state/agent-name"; printf '%s\n' "$PD" > "$FK/state/a
 
 # M5 — secrets and home paths stay out of tracked pair/
 goal m5; IP="10.$((19 + 1)).30.40"
-rc=$(tp FAKE_HERDR_PROMPT=leaky -- check card); s=$(lastseq); r="$PKD/$s-card.result.md"; w="$PD/.claude/evidence/logs/pair-pdemo-$s-card.result.md"
+mv "$FK/bin/gitleaks" "$FK/gitleaks.fake"   # this one scans with the real gitleaks, where installed
+rc=$(tp FAKE_HERDR_PROMPT=leaky -- check card); s=$(lastseq); r="$PKD/$s-card.result.md"; w="$PD/.claude/evidence/logs/pair-pdemo-$s-card.result.md"; mv "$FK/gitleaks.fake" "$FK/bin/gitleaks"
 { [ "$rc" = 0 ] && grep -qF "$IP" "$w" && ! grep -qF "$IP" "$r" && grep -q 'withheld (secret scan hit: .*internal-ipv4' "$r" && [ "$(recs "$s")" = 1 ]; } \
   && ok "M5 a result the secret scan flags moves to .claude/evidence/logs/, a stub naming the rule stays in pair/; the run is still recorded" || no "M5 leaky result (rc=$rc): $(cat "$r" 2>/dev/null | head -n 3)"
 printf '› Read and execute the packet\n• Ran bash t.sh\n  └ connecting to db at %s:5432\n\n› Ask Codex to do anything\n\n  GPT-5.6-Sol high · /fixture · 9 in · 9 out\n' "$IP" > "$FK/m5.run"
@@ -2942,7 +2983,7 @@ else
   grep -q "What we don't know" "$R/CLAUDE.md" && grep -q 'An empty search is a finding' "$R/CLAUDE.md" && ok "research DoD requires a What-we-don't-know section + empty-search records" || no "research epistemics lines missing from the spawned CLAUDE.md"
   # A research lane proves the deliverable exists and prints its own work
   # marker (U8: executed=0 is unproven); trust reads only the top command.
-  printf '#!/usr/bin/env bash\nsleep 1\ntest -s reports/x.md || exit 1\necho "report: $(grep -c . reports/x.md) lines checked"\n' > "$R/scripts/check-report.sh"
+  printf '#!/usr/bin/env bash\npython3 -I -c "import time; time.sleep(1.02 - time.time() %% 1)"   # past the next wall second: min_secs 1\ntest -s reports/x.md || exit 1\necho "report: $(grep -c . reports/x.md) lines checked"\n' > "$R/scripts/check-report.sh"
   printf '#!/usr/bin/env bash\necho "report: 0 lines checked"\nexit 1\n' > "$R/scripts/canary.sh"
   chmod +x "$R/scripts/check-report.sh" "$R/scripts/canary.sh"
   mklanes "$R" 'report | reports/ scripts/ | 1 | ^report: [1-9][0-9]* lines checked$ | bash scripts/canary.sh | bash scripts/check-report.sh'

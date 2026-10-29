@@ -39,8 +39,15 @@ ROOT="$PWD"
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 DEFAULT_TIMEOUT_MS=7200000   # send runs in the background; this is herdr's own wait, not a tool-call cap
 START_TIMEOUT_MS=60000
-START_GRACE_S="${TASK_PAIR_START_GRACE_S:-10}"   # a turn that shows no sign of starting gets this long (tests shorten it)
+START_GRACE_S="${TASK_PAIR_START_GRACE_S:-10}"   # a turn that shows no sign of starting gets this many polls (tests shorten it)
 NEW_WAIT_S="${TASK_PAIR_NEW_WAIT_S:-15}"          # how long /new may take to show (tests shorten it)
+# The pauses between two looks at the judge. The defaults are what live
+# Codex/herdr need — a repaint, a dialog closing after esc, a judge settling
+# after its start, a turn that shows only after herdr reported a stall, /new
+# taking effect — and stay as they are; the overrides exist for the test
+# suite, whose fake herdr answers at once.
+POLL_S="${TASK_PAIR_POLL_S:-1}"             # blank-read retry, after esc, after the start, each not_started grace poll
+NEW_POLL_S="${TASK_PAIR_NEW_POLL_S:-0.25}"  # /new: NEW_WAIT_S*4 screen reads this far apart; 4 of them are "a full second"
 CODEX_LEDGER=.claude/evidence/codex.jsonl
 
 # Paths under $HOME are written as ~/…: pair/ is tracked, and a home path
@@ -282,7 +289,7 @@ dismiss_soft() { # $1 label -> the label still on screen afterwards, or nothing
     rate-limit|update)
       case "$(judge_status)" in idle|done) ;; *) echo "$1"; return 0 ;; esac
       herdr agent send-keys "$NAME" esc >/dev/null 2>&1 || true
-      sleep 1
+      sleep "$POLL_S"
       modal_on_screen || true ;;
     *) echo "$1" ;;
   esac
@@ -310,13 +317,13 @@ composer_ready() { # $1 screen
   grep -qE "^[[:space:]]*$EMPTY_COMPOSER" <<<"$last"
 }
 # One read can catch a repaint (a blank screen, seen live): three reads, a
-# second apart, before calling the judge not ready (L6).
+# second (POLL_S) apart, before calling the judge not ready (L6).
 wait_composer() { # -> the screen once the judge sits at an empty prompt; rc 1 otherwise
   local s _i
   for _i in 1 2 3; do
     s="$(screen 40)"
     if composer_ready "$s"; then printf '%s' "$s"; return 0; fi
-    [ "$_i" = 3 ] || sleep 1
+    [ "$_i" = 3 ] || sleep "$POLL_S"
   done
   return 1
 }
@@ -464,7 +471,7 @@ ensure() {
     echo "name=$NAME"; echo "pane_id=$pane_id"; echo "cwd=$ROOT"; echo "hooks_off=1"
     echo "doc_max_bytes=$DOC_MAX"; echo "started=$started"
   } > "$JUDGE_FILE"
-  sleep 1
+  sleep "$POLL_S"
   case "$(judge_status)" in
     idle|done) clear_modals ;;   # an update notice at startup is skipped (esc); anything else exits 4
     *) hand_over "judge '$NAME' in pane $pane_id is not ready — answer it there, then run ensure again" ;;
@@ -838,7 +845,7 @@ settle() { # seq stage unit base digest packet result herdr_response
   # is not_started — whatever herdr's code said (H1).
   if [ ! -s "$7" ] && ! turn_started "$1" "$6"; then
     for _ in $(seq 1 "$START_GRACE_S"); do
-      sleep 1
+      sleep "$POLL_S"
       case "$(judge_status)" in working) reattach "$@" ;; blocked) parked "$@" ;; esac
       turn_started "$1" "$6" && break
     done
@@ -1257,10 +1264,10 @@ fresh_thread() {
   if grep -qE '^(• |› )' <<<"$(grep -vE "^[[:space:]]*$EMPTY_COMPOSER" <<<"$s0" || true)" ||
      [[ "$(tokens_of "$s0")" =~ [1-9] ]]; then conv=1; fi
   herdr agent prompt "$NAME" "/new" >/dev/null 2>&1 || hand_over "sending /new to the judge failed — the packet was not sent"
-  # Looked at four times a second; a screen with no conversation on it cannot
-  # show the change, so it is taken only after a full second.
+  # Looked at four times a second (NEW_POLL_S); a screen with no conversation
+  # on it cannot show the change, so it is taken only after a full second.
   while [ "$n" -lt $((NEW_WAIT_S * 4)) ]; do
-    sleep 0.25; n=$((n + 1))
+    sleep "$NEW_POLL_S"; n=$((n + 1))
     s="$(screen 40)"
     if [ "$(modal_label "$s" || true)" = new-thread-picker ]; then
       if [ "$picked" = 0 ]; then   # once; then wait for it to close

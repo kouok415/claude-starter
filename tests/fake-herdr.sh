@@ -53,6 +53,8 @@
 # `fake-rollout <result> <out> [variant] [prompt]` writes one transcript
 # (tests that call evidence.sh codex directly).
 set -uo pipefail
+# Called dozens of times per task-pair.sh run: state files are read with $(<f), not cat,
+# and the agent JSON is built with printf -v — no fork where none is needed.
 LOG="${FAKE_HERDR_LOG:-/dev/null}"
 STATE="${FAKE_HERDR_STATE:-/tmp}"
 printf '%s\n' "$*" >> "$LOG"
@@ -72,18 +74,19 @@ new_effect() { # what /new does once it lands
   esac
 }
 # A /new sent with FAKE_HERDR_NEW_DELAY lands once its time has come.
-if [ -f "$STATE/new-at" ] && [ "$(date +%s)" -ge "$(cat "$STATE/new-at")" ]; then rm -f "$STATE/new-at"; new_effect; fi
+if [ -f "$STATE/new-at" ] && [ "$(date +%s)" -ge "$(<"$STATE/new-at")" ]; then rm -f "$STATE/new-at"; new_effect; fi
 
-turns="$(cat "$STATE/turns" 2>/dev/null || echo 0)"
+turns=0; [ ! -f "$STATE/turns" ] || turns="$(<"$STATE/turns")"
 status_line="  GPT-5.6-Sol high · /fixture · Approve for me · $((turns * 1200)) in · $((turns * 340)) out · Context 0% used · 5h 100% left · weekly 100% left"
 idle_screen() {
   printf '  >_ OpenAI Codex (v0.165.0)\n     /fixture\n\n› Ask Codex to do anything\n\n%s\n  ? for shortcuts\n' "$status_line"
 }
 turn() { echo $((turns + 1)) > "$STATE/turns"; }   # a model turn moves the token counters
-agent_cwd() { if [ -n "${FAKE_HERDR_CWD:-}" ]; then echo "$FAKE_HERDR_CWD"; elif [ -f "$STATE/agent-cwd" ]; then cat "$STATE/agent-cwd"; else echo "$PWD"; fi; }
-agent_json() { # $1 status
-  printf '{"agent":"codex","agent_status":"%s","cwd":"%s","focused":false,"interactive_ready":true,"name":"judge","pane_id":"%s","tab_id":"w9:t1","workspace_id":"w9"}' \
-    "$1" "$(agent_cwd)" "${FAKE_HERDR_PANE:-w9:p9}"
+agent_cwd() { if [ -n "${FAKE_HERDR_CWD:-}" ]; then CWD="$FAKE_HERDR_CWD"; elif [ -f "$STATE/agent-cwd" ]; then CWD="$(<"$STATE/agent-cwd")"; else CWD="$PWD"; fi; }
+agent_json() { # $1 status -> AJ
+  agent_cwd
+  printf -v AJ '{"agent":"codex","agent_status":"%s","cwd":"%s","focused":false,"interactive_ready":true,"name":"judge","pane_id":"%s","tab_id":"w9:t1","workspace_id":"w9"}' \
+    "$1" "$CWD" "${FAKE_HERDR_PANE:-w9:p9}"
 }
 err() { # $1 code
   printf '{"error":{"code":"%s","message":"fake %s"},"id":"cli:fake"}\n' "$1" "$1" >&2; exit 1
@@ -178,13 +181,13 @@ case "$1 ${2:-}" in
   "fake-rollout "*)
     rollout_file "$2" "$3" "${4:-apply_patch}" "${5:-Read and execute the packet}" ;;
   "agent get")
-    if [ -f "$STATE/agent-name" ] && [ "$(cat "$STATE/agent-name")" != "${3:-}" ] && [ -z "${FAKE_HERDR_AGENT:-}" ]; then err agent_not_found; fi
-    if [ -f "$STATE/agent" ]; then s="$(cat "$STATE/agent")"
+    if [ -f "$STATE/agent-name" ] && [ "$(<"$STATE/agent-name")" != "${3:-}" ] && [ -z "${FAKE_HERDR_AGENT:-}" ]; then err agent_not_found; fi
+    if [ -f "$STATE/agent" ]; then s="$(<"$STATE/agent")"
     elif [ -n "${FAKE_HERDR_AGENT:-}" ]; then s="$FAKE_HERDR_AGENT"
     else err agent_not_found; fi
-    printf '{"id":"cli:agent:get","result":{"agent":%s,"type":"agent_info"}}\n' "$(agent_json "$s")" ;;
+    agent_json "$s"; printf '{"id":"cli:agent:get","result":{"agent":%s,"type":"agent_info"}}\n' "$AJ" ;;
   "agent read")
-    n=$(( $(cat "$STATE/reads" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STATE/reads"
+    n=0; [ ! -f "$STATE/reads" ] || n="$(<"$STATE/reads")"; n=$((n + 1)); echo "$n" > "$STATE/reads"
     if [ -n "${FAKE_HERDR_BLANK_EVERY:-}" ] && [ $((n % FAKE_HERDR_BLANK_EVERY)) = 0 ]; then exit 0; fi
     if [ -n "${FAKE_HERDR_SCREEN:-}" ] && [ -f "$FAKE_HERDR_SCREEN" ]; then cat "$FAKE_HERDR_SCREEN"
     elif [ -f "$STATE/screen" ]; then cat "$STATE/screen"
@@ -205,17 +208,17 @@ case "$1 ${2:-}" in
   "agent start")
     [ "${FAKE_HERDR_START:-ok}" = not_ready ] && err agent_not_ready
     echo idle > "$STATE/agent"; printf '%s\n' "$3" > "$STATE/agent-name"
-    printf '{"id":"cli:agent:start","result":{"agent":%s,"argv":["codex"],"type":"agent_started"}}\n' "$(agent_json idle)" ;;
+    agent_json idle; printf '{"id":"cli:agent:start","result":{"agent":%s,"argv":["codex"],"type":"agent_started"}}\n' "$AJ" ;;
   "agent prompt")
     if [ "$4" = "/new" ]; then   # slash command: no turn, stays idle; a fresh thread's counters start at 0
       [ "${FAKE_HERDR_NEW_FAIL:-0}" != 1 ] || err fake_new_refused
       if [ -n "${FAKE_HERDR_NEW_DELAY:-}" ]; then echo $(( $(date +%s) + FAKE_HERDR_NEW_DELAY )) > "$STATE/new-at"; else new_effect; fi
-      printf '{"id":"cli:agent:prompt","result":{"agent":%s,"type":"agent_prompted"}}\n' "$(agent_json idle)"; exit 0
+      agent_json idle; printf '{"id":"cli:agent:prompt","result":{"agent":%s,"type":"agent_prompted"}}\n' "$AJ"; exit 0
     fi
     if [ -f "$STATE/screen" ] || [ -f "$STATE/new-at" ]; then   # typed into the picker, or while /new still opens it (attempt 1, 2026-10-28): its Enter picks, the text is lost
       if [ -f "$STATE/new-at" ]; then rm -f "$STATE/new-at"; new_effect; fi
       rm -f "$STATE/screen"
-      printf '{"id":"cli:agent:prompt","result":{"agent":%s,"type":"agent_prompted"}}\n' "$(agent_json idle)"; exit 0
+      agent_json idle; printf '{"id":"cli:agent:prompt","result":{"agent":%s,"type":"agent_prompted"}}\n' "$AJ"; exit 0
     fi
     sleep "${FAKE_HERDR_SLEEP:-0}"
     pk="$(packet_from "$4")"
@@ -245,12 +248,12 @@ case "$1 ${2:-}" in
       blocked) pending "$pk" "$4"; st=blocked; echo blocked > "$STATE/agent" ;;
       *) err fake_unknown_scenario ;;
     esac
-    printf '{"id":"cli:agent:prompt","result":{"agent":%s,"type":"agent_prompted"}}\n' "$(agent_json "$st")" ;;
+    agent_json "$st"; printf '{"id":"cli:agent:prompt","result":{"agent":%s,"type":"agent_prompted"}}\n' "$AJ" ;;
   "agent wait")
     case "${FAKE_HERDR_WAIT:-ok}" in
       timeout) err timeout ;;
       *) deferred; [ ! -f "$STATE/agent" ] || echo idle > "$STATE/agent"
-         printf '{"id":"cli:agent:wait","result":{"agent":%s,"type":"agent_wait"}}\n' "$(agent_json idle)" ;;
+         agent_json idle; printf '{"id":"cli:agent:wait","result":{"agent":%s,"type":"agent_wait"}}\n' "$AJ" ;;
     esac ;;
   *) err fake_unsupported ;;
 esac
